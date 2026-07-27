@@ -1,0 +1,29 @@
+commands:
+  allow:
+    - git
+    - python
+    - py
+    - pytest
+    - ruff
+    - mypy
+    - node
+    - npm.cmd
+  deny_tokens:
+    - rm
+    - del
+    - erase
+    - format
+    - shutdown
+    - reg
+    - runas
+    - Invoke-Expression
+    - Start-Process
+  timeout_seconds: 120
+  max_log_bytes: 65536
+environment_allow:
+  - PATH
+  - Path
+  - SystemRoot
+  - TEMP
+  - TMP
+  - PYTHONPATH

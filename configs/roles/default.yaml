@@ -1,0 +1,61 @@
+roles:
+  director:
+    provider: mock
+    model: deterministic-director
+    temperature: 0.2
+    context_limit: 8192
+    output_token_limit: 1800
+    timeout_seconds: 60
+    max_retries: 2
+    tools: []
+    allowed_directories: []
+    authority: planning
+    execution_budget: 3
+  technical_manager:
+    provider: mock
+    model: deterministic-manager
+    temperature: 0.1
+    context_limit: 8192
+    output_token_limit: 2400
+    timeout_seconds: 60
+    max_retries: 2
+    tools: []
+    allowed_directories: []
+    authority: task_assignment
+    execution_budget: 4
+  implementation_worker:
+    provider: mock
+    model: deterministic-worker
+    temperature: 0.1
+    context_limit: 8192
+    output_token_limit: 3000
+    timeout_seconds: 120
+    max_retries: 2
+    tools: [read_file, write_file, run_command]
+    allowed_directories: [workspaces]
+    authority: workspace_write
+    execution_budget: 6
+  tester:
+    provider: mock
+    model: deterministic-tester
+    temperature: 0
+    context_limit: 4096
+    output_token_limit: 1600
+    timeout_seconds: 90
+    max_retries: 1
+    tools: [read_file, run_command]
+    allowed_directories: [workspaces]
+    authority: test_execution
+    execution_budget: 3
+  critical_reviewer:
+    provider: mock
+    model: deterministic-reviewer
+    temperature: 0
+    context_limit: 4096
+    output_token_limit: 1600
+    timeout_seconds: 90
+    max_retries: 1
+    tools: [read_file]
+    allowed_directories: [workspaces]
+    authority: review
+    execution_budget: 3
