@@ -11,6 +11,19 @@ function Require-Command([string]$Name, [string]$InstallHint) {
     }
 }
 
+function Invoke-Checked {
+    param(
+        [Parameter(Mandatory = $true)]
+        [scriptblock]$Command,
+        [Parameter(Mandatory = $true)]
+        [string]$Description
+    )
+    & $Command
+    if ($LASTEXITCODE -ne 0) {
+        throw "$Description falló con código $LASTEXITCODE."
+    }
+}
+
 Require-Command "python" "Instala Python 3.11+ desde python.org."
 Require-Command "node" "Instala Node.js 22+ desde nodejs.org."
 Require-Command "npm.cmd" "Repara la instalación de Node.js/npm."
@@ -26,9 +39,12 @@ if (-not (Test-Path -LiteralPath ".venv\Scripts\python.exe")) {
     & python -m venv .venv
 }
 
-& .\.venv\Scripts\python.exe -m pip install --upgrade pip
-& .\.venv\Scripts\python.exe -m pip install -e ".[dev]"
-& npm.cmd ci --no-audit --no-fund
+Invoke-Checked { & .\.venv\Scripts\python.exe -m pip install --upgrade pip } `
+    "La actualización de pip"
+Invoke-Checked { & .\.venv\Scripts\python.exe -m pip install -e ".[dev]" } `
+    "La instalación de dependencias Python"
+Invoke-Checked { & npm.cmd ci --no-audit --no-fund } `
+    "La instalación de dependencias web"
 
 if (Get-Command ollama -ErrorAction SilentlyContinue) {
     Write-Host "Ollama detectado. No se descargó ningún modelo."
