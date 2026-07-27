@@ -17,6 +17,7 @@ from agentarium.services import ApplicationService, build_application
 from .schemas import (
     CreateApprovalRequest,
     CreateProjectRequest,
+    EscalateRequest,
     PriorityRequest,
     ResolveApprovalRequest,
 )
@@ -148,6 +149,12 @@ def create_app(service: ApplicationService | None = None) -> FastAPI:
     @api.patch("/api/work-items/{work_item_id}/priority")
     async def update_priority(work_item_id: str, body: PriorityRequest) -> dict[str, Any]:
         return resolved_service.repository.update_priority(work_item_id, body.priority).model_dump(
+            mode="json"
+        )
+
+    @api.post("/api/work-items/{work_item_id}/escalate")
+    async def escalate_work_item(work_item_id: str, body: EscalateRequest) -> dict[str, Any]:
+        return resolved_service.escalate_work_item(work_item_id, body.reason).model_dump(
             mode="json"
         )
 

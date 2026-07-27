@@ -149,6 +149,32 @@ class ApplicationService:
         self.repository.add_approval(approval)
         return approval
 
+    def escalate_work_item(self, work_item_id: str, reason: str) -> ApprovalRequest:
+        item = self.repository.get_work_item(work_item_id)
+        if item.status in {
+            WorkItemStatus.COMPLETED,
+            WorkItemStatus.CANCELLED,
+        }:
+            raise ValueError("A terminal task cannot be escalated")
+        approval = self.request_approval(
+            item.project_id,
+            f"Escalar tarea: {item.title}",
+            reason,
+            work_item_id=item.id,
+            affected_resources=item.authorized_files,
+        )
+        self.repository.update_project_status(item.project_id, ProjectStatus.AWAITING_APPROVAL)
+        self.repository.add_event(
+            ExecutionEvent(
+                project_id=item.project_id,
+                work_item_id=item.id,
+                action="task_escalated",
+                message=reason,
+                new_state=ProjectStatus.AWAITING_APPROVAL.value,
+            )
+        )
+        return approval
+
     def project_detail(self, project_id: str) -> dict[str, Any]:
         project = self.repository.get_project(project_id)
         return {

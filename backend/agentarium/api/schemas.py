@@ -26,3 +26,11 @@ class CreateApprovalRequest(BaseModel):
 
 class PriorityRequest(BaseModel):
     priority: int = Field(ge=0, le=100)
+
+
+class EscalateRequest(BaseModel):
+    reason: str = Field(
+        default="La tarea necesita una decisión o intervención de autoridad superior.",
+        min_length=3,
+        max_length=4000,
+    )

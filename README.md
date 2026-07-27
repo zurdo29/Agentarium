@@ -39,7 +39,7 @@ ejecuta `npm.cmd ci`. No requiere permisos administrativos.
 
 Después abre:
 
-- Interfaz: http://127.0.0.1:3000
+- Interfaz: http://localhost:3000
 - API y documentación: http://127.0.0.1:8000/docs
 
 Para detener ambos procesos:

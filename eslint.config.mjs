@@ -9,6 +9,17 @@ const eslintConfig = defineConfig([
   globalIgnores([
     // Default ignores of eslint-config-next:
     ".next/**",
+    ".venv/**",
+    ".pytest_cache/**",
+    ".mypy_cache/**",
+    ".ruff_cache/**",
+    ".vinext/**",
+    ".wrangler/**",
+    "backend/**",
+    "runtime/**",
+    "workspaces/**",
+    "node_modules/**",
+    "dist/**",
     "out/**",
     "build/**",
     "next-env.d.ts",
