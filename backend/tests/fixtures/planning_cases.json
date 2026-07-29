@@ -1,0 +1,23 @@
+[
+  {
+    "name": "small_game_prototype",
+    "goal": "Crear un pequeño ARPG con progresión de objetos y alcance de prototipo",
+    "expected_task_keys": ["scope", "implementation", "integration"],
+    "expected_root_keys": ["scope"],
+    "expected_terminal_keys": ["integration"]
+  },
+  {
+    "name": "local_inventory_tool",
+    "goal": "Construir una herramienta local para inventariar una carpeta sin subir datos",
+    "expected_task_keys": ["scope", "implementation", "integration"],
+    "expected_root_keys": ["scope"],
+    "expected_terminal_keys": ["integration"]
+  },
+  {
+    "name": "auditable_report",
+    "goal": "Generar un informe auditable a partir de entradas locales de ejemplo",
+    "expected_task_keys": ["scope", "implementation", "integration"],
+    "expected_root_keys": ["scope"],
+    "expected_terminal_keys": ["integration"]
+  }
+]

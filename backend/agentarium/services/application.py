@@ -15,8 +15,16 @@ from agentarium.domain.models import (
     WorkItem,
     new_id,
 )
+from agentarium.execution import (
+    ValidationProfileExecutor,
+    WorkArtifactProposal,
+    WorkspaceFileProposal,
+    WorkspaceMaterializer,
+    WorkspacePreview,
+)
 from agentarium.execution.scheduler import ResourceScheduler
-from agentarium.llm import ProviderRegistry
+from agentarium.isolation import GitWorktreeIsolation
+from agentarium.llm import ProviderRegistry, ProviderSelection, ProviderSelectionStore
 from agentarium.memory import ContextBuilder
 from agentarium.orchestration import Orchestrator
 from agentarium.repositories import Database, Repository
@@ -31,6 +39,9 @@ class ApplicationService:
         orchestrator: Orchestrator,
         scheduler: ResourceScheduler,
         roles: RoleCatalog,
+        providers: ProviderRegistry,
+        provider_selection: ProviderSelectionStore,
+        preview: WorkspacePreview,
     ) -> None:
         self.settings = settings
         self.database = database
@@ -38,6 +49,9 @@ class ApplicationService:
         self.orchestrator = orchestrator
         self.scheduler = scheduler
         self.roles = roles
+        self.providers = providers
+        self.provider_selection = provider_selection
+        self.preview = preview
         self.approval_policy = ApprovalPolicy()
 
     def initialize(self) -> int:
@@ -118,14 +132,198 @@ class ApplicationService:
 
     def retry_work_item(self, work_item_id: str) -> WorkItem:
         item = self.repository.get_work_item(work_item_id)
-        if item.attempt_count >= item.max_attempts:
-            raise ValueError("Task attempt budget is exhausted")
+        recovered_exhausted_item = (
+            item.status is WorkItemStatus.READY
+            and item.attempt_count >= item.max_attempts
+        )
         if item.status not in {
             WorkItemStatus.FAILED,
             WorkItemStatus.CHANGES_REQUESTED,
-        }:
+        } and not recovered_exhausted_item:
             raise ValueError("Only failed or rejected tasks can be retried")
+        if item.attempt_count >= item.max_attempts:
+            item = self.repository.extend_attempt_budget(item.id)
+            self.repository.add_event(
+                ExecutionEvent(
+                    project_id=item.project_id,
+                    work_item_id=item.id,
+                    action="attempt_budget_extended",
+                    message=(
+                        "El usuario autorizó un intento adicional "
+                        f"({item.max_attempts} máximo)."
+                    ),
+                    new_state=item.status.value,
+                )
+            )
+        if item.status is WorkItemStatus.READY:
+            return item
         return self.repository.transition_work_item(work_item_id, WorkItemStatus.READY)
+
+    async def recover_artifact(
+        self,
+        work_item_id: str,
+        artifact_id: str,
+    ) -> WorkItem:
+        item = self.repository.get_work_item(work_item_id)
+        if item.status in {
+            WorkItemStatus.FAILED,
+            WorkItemStatus.CHANGES_REQUESTED,
+        } or (
+            item.status is WorkItemStatus.READY
+            and item.attempt_count >= item.max_attempts
+        ):
+            item = self.retry_work_item(work_item_id)
+        if item.status is not WorkItemStatus.READY:
+            raise ValueError("Only a ready, failed or rejected task can recover an artifact")
+        project = self.repository.get_project(item.project_id)
+        if project.status is ProjectStatus.FAILED:
+            self.repository.update_project_status(item.project_id, ProjectStatus.READY)
+        return await self.orchestrator.re_evaluate_artifact(
+            work_item_id,
+            artifact_id,
+        )
+
+    async def submit_candidate(
+        self,
+        work_item_id: str,
+        *,
+        title: str,
+        summary: str,
+        files: list[dict[str, Any]],
+    ) -> WorkItem:
+        item = self.repository.get_work_item(work_item_id)
+        if item.status in {
+            WorkItemStatus.FAILED,
+            WorkItemStatus.CHANGES_REQUESTED,
+        } or (
+            item.status is WorkItemStatus.READY
+            and item.attempt_count >= item.max_attempts
+        ):
+            item = self.retry_work_item(work_item_id)
+        if item.status is not WorkItemStatus.READY:
+            raise ValueError("Only a ready, failed or rejected task accepts a candidate")
+        project = self.repository.get_project(item.project_id)
+        if project.status is ProjectStatus.FAILED:
+            self.repository.update_project_status(item.project_id, ProjectStatus.READY)
+        proposal = WorkArtifactProposal(
+            artifact_type="Code",
+            title=title,
+            summary=summary,
+            quality="verified",
+            acceptance_criteria_addressed=item.acceptance_criteria,
+            files=[
+                WorkspaceFileProposal.model_validate(file)
+                for file in files
+            ],
+        )
+        return await self.orchestrator.evaluate_operator_candidate(
+            work_item_id,
+            proposal,
+        )
+
+    def rework_work_item(
+        self,
+        work_item_id: str,
+        reason: str,
+        acceptance_criteria: list[str] | None = None,
+    ) -> WorkItem:
+        source = self.repository.get_work_item(work_item_id)
+        if source.status is not WorkItemStatus.COMPLETED:
+            raise ValueError("Only completed tasks can start a rework revision")
+        cleaned_reason = reason.strip()
+        if not cleaned_reason:
+            raise ValueError("Rework reason cannot be empty")
+        extended_criteria = list(source.acceptance_criteria)
+        for criterion in acceptance_criteria or []:
+            cleaned_criterion = criterion.strip()
+            if cleaned_criterion and cleaned_criterion not in extended_criteria:
+                extended_criteria.append(cleaned_criterion)
+        revision = WorkItem(
+            project_id=source.project_id,
+            milestone_id=source.milestone_id,
+            title=f"Revisión: {source.title}",
+            description=(
+                f"{source.description}\n\nCorrección solicitada: {cleaned_reason}"
+            ),
+            inputs=[*source.inputs, f"Corrección solicitada: {cleaned_reason}"],
+            expected_outputs=source.expected_outputs,
+            dependency_ids=[source.id],
+            acceptance_criteria=extended_criteria,
+            allowed_tools=source.allowed_tools,
+            authorized_files=source.authorized_files,
+            max_attempts=3,
+            risk=source.risk,
+            requires_approval=source.requires_approval,
+            priority=min(100, source.priority + 5),
+            status=WorkItemStatus.READY,
+        )
+        self.repository.add_work_item(revision)
+        items = self.repository.list_work_items(source.project_id)
+        completed = sum(
+            item.status is WorkItemStatus.COMPLETED
+            for item in items
+        )
+        self.repository.update_project_progress(
+            source.project_id,
+            completed / len(items) * 100,
+        )
+        self.repository.update_project_status(source.project_id, ProjectStatus.READY)
+        self.repository.add_event(
+            ExecutionEvent(
+                project_id=source.project_id,
+                work_item_id=revision.id,
+                action="task_rework_created",
+                message=(
+                    "Se abrió una revisión auditable de una entrega completada: "
+                    f"{cleaned_reason}"
+                ),
+                previous_state=ProjectStatus.COMPLETED.value,
+                new_state=ProjectStatus.READY.value,
+            )
+        )
+        return revision
+
+    async def provider_status(self, *, force: bool = False) -> dict[str, Any]:
+        active_provider = self.roles.active_provider()
+        active_model = self.roles.active_model()
+        diagnostics = await self.providers.diagnostics(force=force)
+        return {
+            "active_provider": active_provider,
+            "active_model": active_model,
+            "providers": [
+                {
+                    **diagnostic.model_dump(mode="json"),
+                    "selected": diagnostic.name == active_provider,
+                    "selected_model": (
+                        active_model if diagnostic.name == active_provider else None
+                    ),
+                }
+                for diagnostic in diagnostics
+            ],
+        }
+
+    async def select_provider(self, provider: str, model: str | None = None) -> dict[str, Any]:
+        if self.scheduler.active:
+            raise ValueError("No se puede cambiar el modelo mientras hay agentes activos")
+        diagnostic = await self.providers.diagnostic(provider, force=True)
+        if not diagnostic.ready:
+            raise ValueError(diagnostic.message)
+        if provider == "mock":
+            selection = ProviderSelection(provider="mock")
+            self.provider_selection.save(selection)
+            self.roles.select_provider("mock")
+        else:
+            selected_model = (model or "").strip()
+            if not selected_model:
+                raise ValueError("Selecciona un modelo antes de activar el proveedor")
+            if selected_model not in diagnostic.models:
+                raise ValueError(
+                    f"El modelo {selected_model!r} no está disponible en {diagnostic.label}"
+                )
+            selection = ProviderSelection(provider=provider, model=selected_model)
+            self.provider_selection.save(selection)
+            self.roles.select_provider(provider, selected_model)
+        return await self.provider_status()
 
     def request_approval(
         self,
@@ -230,11 +428,38 @@ def build_application(
     repository = Repository(resolved_database)
     scheduler = ResourceScheduler(resolved_settings.model_concurrency)
     catalog = RoleCatalog(Path(resolved_settings.config_root) / "roles" / "default.yaml")
+    provider_selection = ProviderSelectionStore(resolved_settings.provider_state_path)
+    saved_selection = provider_selection.load()
+    catalog.select_provider(
+        saved_selection.provider if saved_selection else resolved_settings.provider,
+        saved_selection.model if saved_selection else resolved_settings.model or None,
+    )
     providers = ProviderRegistry(resolved_settings)
     runner = RoleRunner(catalog, providers, scheduler)
     memory = ContextBuilder(repository)
     artifact_store = ArtifactStore(resolved_settings.workspace_root)
-    orchestrator = Orchestrator(repository, runner, artifact_store, memory)
+    workspace = WorkspaceMaterializer(
+        resolved_settings.workspace_root,
+        Path(resolved_settings.config_root) / "policies" / "security.yaml",
+    )
+    preview = WorkspacePreview(resolved_settings.workspace_root)
+    validations = ValidationProfileExecutor(
+        resolved_settings.workspace_root,
+        Path(resolved_settings.config_root) / "policies" / "security.yaml",
+    )
+    isolation = GitWorktreeIsolation(
+        resolved_settings.workspace_root,
+        Path(resolved_settings.config_root) / "policies" / "security.yaml",
+    )
+    orchestrator = Orchestrator(
+        repository,
+        runner,
+        artifact_store,
+        workspace,
+        validations,
+        isolation,
+        memory,
+    )
     return ApplicationService(
         resolved_settings,
         resolved_database,
@@ -242,4 +467,7 @@ def build_application(
         orchestrator,
         scheduler,
         catalog,
+        providers,
+        provider_selection,
+        preview,
     )

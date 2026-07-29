@@ -16,6 +16,8 @@ from .enums import (
     WorkItemStatus,
 )
 
+MAX_WORK_ITEM_ATTEMPTS = 25
+
 
 def new_id() -> str:
     return str(uuid4())
@@ -85,7 +87,11 @@ class WorkItem(DomainModel):
     acceptance_criteria: list[str]
     allowed_tools: list[str] = Field(default_factory=list)
     authorized_files: list[str] = Field(default_factory=list)
-    max_attempts: int = Field(default=3, ge=1, le=10)
+    max_attempts: int = Field(
+        default=3,
+        ge=1,
+        le=MAX_WORK_ITEM_ATTEMPTS,
+    )
     attempt_count: int = Field(default=0, ge=0)
     risk: RiskLevel = RiskLevel.LOW
     requires_approval: bool = False

@@ -15,6 +15,7 @@ def service(tmp_path: Path) -> Iterator[ApplicationService]:
         database_url=f"sqlite:///{(tmp_path / 'agentarium.db').as_posix()}",
         workspace_root=tmp_path / "workspaces",
         config_root=project_root() / "configs",
+        provider_state_path=tmp_path / "provider-selection.json",
         model_concurrency=1,
     )
     database = Database(settings.resolved_database_url())

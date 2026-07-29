@@ -2,6 +2,7 @@ commands:
   allow:
     - git
     - python
+    - python.exe
     - py
     - pytest
     - ruff
@@ -20,6 +21,9 @@ commands:
     - Start-Process
   timeout_seconds: 120
   max_log_bytes: 65536
+workspace:
+  max_files_per_artifact: 12
+  max_file_bytes: 200000
 environment_allow:
   - PATH
   - Path

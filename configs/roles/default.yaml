@@ -27,10 +27,10 @@ roles:
     provider: mock
     model: deterministic-worker
     temperature: 0.1
-    context_limit: 8192
-    output_token_limit: 3000
-    timeout_seconds: 120
-    max_retries: 2
+    context_limit: 16384
+    output_token_limit: 6000
+    timeout_seconds: 300
+    max_retries: 0
     tools: [read_file, write_file, run_command]
     allowed_directories: [workspaces]
     authority: workspace_write
@@ -39,8 +39,8 @@ roles:
     provider: mock
     model: deterministic-tester
     temperature: 0
-    context_limit: 4096
-    output_token_limit: 1600
+    context_limit: 8192
+    output_token_limit: 2400
     timeout_seconds: 90
     max_retries: 1
     tools: [read_file, run_command]
@@ -51,8 +51,8 @@ roles:
     provider: mock
     model: deterministic-reviewer
     temperature: 0
-    context_limit: 4096
-    output_token_limit: 1600
+    context_limit: 8192
+    output_token_limit: 2400
     timeout_seconds: 90
     max_retries: 1
     tools: [read_file]

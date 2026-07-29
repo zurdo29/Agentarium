@@ -4,13 +4,15 @@ import asyncio
 import json
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, RedirectResponse, StreamingResponse
 
 from agentarium.domain.enums import ApprovalStatus
+from agentarium.execution import PreviewUnavailable, WorkspacePreview
 from agentarium.repositories.repository import NotFoundError
 from agentarium.services import ApplicationService, build_application
 
@@ -19,7 +21,12 @@ from .schemas import (
     CreateProjectRequest,
     EscalateRequest,
     PriorityRequest,
+    ProviderSelectionRequest,
     ResolveApprovalRequest,
+    ReworkRequest,
+    RuntimeCapabilities,
+    RuntimeStatus,
+    SubmitCandidateRequest,
 )
 
 
@@ -62,17 +69,24 @@ def create_app(service: ApplicationService | None = None) -> FastAPI:
     async def value_error_handler(_: Request, exc: ValueError) -> Any:
         return _error_response(409, str(exc))
 
+    @api.exception_handler(PreviewUnavailable)
+    async def preview_unavailable_handler(_: Request, exc: PreviewUnavailable) -> Any:
+        return _error_response(404, str(exc))
+
     @api.get("/api/health")
     async def health() -> dict[str, Any]:
+        runtime = _runtime_status(resolved_service)
         return {
             "status": "ok",
-            "provider": resolved_service.settings.provider,
+            "provider": runtime.providers[0] if len(runtime.providers) == 1 else "mixed",
+            "runtime": runtime.model_dump(mode="json"),
             "scheduler": resolved_service.scheduler.snapshot(),
             "database": resolved_service.database.engine.dialect.name,
         }
 
     @api.get("/api/dashboard")
     async def dashboard() -> dict[str, Any]:
+        runtime = _runtime_status(resolved_service)
         projects = resolved_service.repository.list_projects()
         pending = resolved_service.repository.list_approvals(status=ApprovalStatus.PENDING)
         details = []
@@ -91,6 +105,7 @@ def create_app(service: ApplicationService | None = None) -> FastAPI:
                 }
             )
         return {
+            "runtime": runtime.model_dump(mode="json"),
             "projects": details,
             "active_agents": resolved_service.scheduler.active,
             "blocked_tasks": blocked,
@@ -115,6 +130,29 @@ def create_app(service: ApplicationService | None = None) -> FastAPI:
     @api.get("/api/projects/{project_id}")
     async def get_project(project_id: str) -> dict[str, Any]:
         return resolved_service.project_detail(project_id)
+
+    @api.get("/api/projects/{project_id}/preview", include_in_schema=False)
+    async def redirect_project_preview(project_id: str) -> RedirectResponse:
+        resolved_service.repository.get_project(project_id)
+        return RedirectResponse(
+            url=f"/api/projects/{project_id}/preview/",
+            status_code=307,
+        )
+
+    @api.get("/api/projects/{project_id}/preview/", include_in_schema=False)
+    async def project_preview_entry(project_id: str) -> FileResponse:
+        resolved_service.repository.get_project(project_id)
+        return _preview_response(resolved_service.preview.resolve(project_id))
+
+    @api.get(
+        "/api/projects/{project_id}/preview/{file_path:path}",
+        include_in_schema=False,
+    )
+    async def project_preview_file(project_id: str, file_path: str) -> FileResponse:
+        resolved_service.repository.get_project(project_id)
+        return _preview_response(
+            resolved_service.preview.resolve(project_id, file_path)
+        )
 
     @api.post("/api/projects/{project_id}/plan")
     async def plan_project(project_id: str) -> dict[str, Any]:
@@ -145,6 +183,43 @@ def create_app(service: ApplicationService | None = None) -> FastAPI:
     @api.post("/api/work-items/{work_item_id}/retry")
     async def retry_work_item(work_item_id: str) -> dict[str, Any]:
         return resolved_service.retry_work_item(work_item_id).model_dump(mode="json")
+
+    @api.post("/api/work-items/{work_item_id}/recover/{artifact_id}")
+    async def recover_work_item_artifact(
+        work_item_id: str,
+        artifact_id: str,
+    ) -> dict[str, Any]:
+        return (
+            await resolved_service.recover_artifact(work_item_id, artifact_id)
+        ).model_dump(mode="json")
+
+    @api.post("/api/work-items/{work_item_id}/candidate")
+    async def submit_work_item_candidate(
+        work_item_id: str,
+        body: SubmitCandidateRequest,
+    ) -> dict[str, Any]:
+        return (
+            await resolved_service.submit_candidate(
+                work_item_id,
+                title=body.title,
+                summary=body.summary,
+                files=[
+                    file.model_dump(mode="json")
+                    for file in body.files
+                ],
+            )
+        ).model_dump(mode="json")
+
+    @api.post("/api/work-items/{work_item_id}/rework", status_code=201)
+    async def rework_work_item(
+        work_item_id: str,
+        body: ReworkRequest,
+    ) -> dict[str, Any]:
+        return resolved_service.rework_work_item(
+            work_item_id,
+            body.reason,
+            body.acceptance_criteria,
+        ).model_dump(mode="json")
 
     @api.patch("/api/work-items/{work_item_id}/priority")
     async def update_priority(work_item_id: str, body: PriorityRequest) -> dict[str, Any]:
@@ -236,13 +311,60 @@ def create_app(service: ApplicationService | None = None) -> FastAPI:
             "scheduler": resolved_service.scheduler.snapshot(),
         }
 
+    @api.get("/api/providers")
+    async def providers() -> dict[str, Any]:
+        return await resolved_service.provider_status()
+
+    @api.put("/api/runtime/provider")
+    async def select_provider(body: ProviderSelectionRequest) -> dict[str, Any]:
+        return await resolved_service.select_provider(body.provider, body.model)
+
     return api
+
+
+def _runtime_status(service: ApplicationService) -> RuntimeStatus:
+    providers = sorted({definition.provider for definition in service.roles.all()})
+    model_inference = any(provider != "mock" for provider in providers)
+    return RuntimeStatus(
+        mode="workspace",
+        providers=providers,
+        active_model=service.roles.active_model(),
+        capabilities=RuntimeCapabilities(
+            model_inference=model_inference,
+            project_files=True,
+            command_execution=True,
+            change_isolation=True,
+        ),
+    )
 
 
 def _error_response(status: int, detail: str) -> Any:
     from fastapi.responses import JSONResponse
 
     return JSONResponse(status_code=status, content={"detail": detail})
+
+
+def _preview_response(path: Path) -> FileResponse:
+    return FileResponse(
+        path,
+        media_type=WorkspacePreview.media_type(path),
+        headers={
+            "Cache-Control": "no-store",
+            "Content-Security-Policy": (
+                "sandbox allow-scripts allow-same-origin; "
+                "default-src 'self' data: blob:; "
+                "script-src 'self' 'unsafe-inline'; "
+                "style-src 'self' 'unsafe-inline'; "
+                "img-src 'self' data: blob:; "
+                "font-src 'self' data:; "
+                "media-src 'self' data: blob:; "
+                "connect-src 'none'; object-src 'none'; "
+                "base-uri 'none'; form-action 'none'"
+            ),
+            "Referrer-Policy": "no-referrer",
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
 
 
 def _recovery_event(project_id: str, recovered: int) -> Any:

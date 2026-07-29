@@ -17,10 +17,43 @@ from agentarium.llm import ModelRequest, ProviderRegistry, ProviderResponse
 class RoleCatalog:
     def __init__(self, path: Path) -> None:
         raw = yaml.safe_load(path.read_text(encoding="utf-8"))
-        self._roles: dict[AgentRole, AgentDefinition] = {}
+        self._defaults: dict[AgentRole, AgentDefinition] = {}
         for role_name, config in raw["roles"].items():
             role = AgentRole(role_name)
-            self._roles[role] = AgentDefinition(role=role, **config)
+            self._defaults[role] = AgentDefinition(role=role, **config)
+        self._roles = {
+            role: definition.model_copy(deep=True)
+            for role, definition in self._defaults.items()
+        }
+
+    def select_provider(self, provider: str, model: str | None = None) -> None:
+        if provider == "mock":
+            self._roles = {
+                role: definition.model_copy(
+                    update={"provider": "mock"},
+                    deep=True,
+                )
+                for role, definition in self._defaults.items()
+            }
+            return
+        cleaned_model = (model or "").strip()
+        if not cleaned_model:
+            raise ValueError(f"Provider {provider} requires an explicit model")
+        self._roles = {
+            role: definition.model_copy(
+                update={"provider": provider, "model": cleaned_model},
+                deep=True,
+            )
+            for role, definition in self._defaults.items()
+        }
+
+    def active_provider(self) -> str:
+        providers = {definition.provider for definition in self._roles.values()}
+        return next(iter(providers)) if len(providers) == 1 else "mixed"
+
+    def active_model(self) -> str | None:
+        models = {definition.model for definition in self._roles.values()}
+        return next(iter(models)) if len(models) == 1 else None
 
     def get(self, role: AgentRole) -> AgentDefinition:
         return self._roles[role]
@@ -92,7 +125,13 @@ class RoleRunner:
                 if retry < definition.max_retries:
                     await asyncio.sleep(min(0.1 * (2**retry), 1))
         duration_ms = int((perf_counter() - clock) * 1000)
-        error_message = str(last_error) if last_error else "Unknown provider error"
+        error_message = str(last_error).strip() if last_error else ""
+        if not error_message:
+            error_message = (
+                type(last_error).__name__
+                if last_error is not None
+                else "Unknown provider error"
+            )
         failed_run = AgentRun(
             project_id=request.project_id,
             work_item_id=request.work_item_id,

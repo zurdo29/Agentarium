@@ -26,13 +26,17 @@ class SafeCommandExecutor:
     def __init__(self, workspace_root: Path, policy_path: Path) -> None:
         self.workspace_root = workspace_root.resolve()
         policy = yaml.safe_load(policy_path.read_text(encoding="utf-8"))
-        self.allowed: set[str] = set(policy["commands"]["allow"])
+        self.allowed: set[str] = {
+            str(executable).casefold() for executable in policy["commands"]["allow"]
+        }
         self.denied_tokens: set[str] = {
             token.casefold() for token in policy["commands"]["deny_tokens"]
         }
         self.default_timeout = int(policy["commands"]["timeout_seconds"])
         self.max_log_bytes = int(policy["commands"]["max_log_bytes"])
-        self.environment_allow = set(policy["environment_allow"])
+        self.environment_allow = {
+            str(key).casefold() for key in policy["environment_allow"]
+        }
 
     async def execute(
         self,
@@ -43,7 +47,7 @@ class SafeCommandExecutor:
     ) -> CommandResult:
         if not command:
             raise CommandRejected("Command cannot be empty")
-        executable = Path(command[0]).name
+        executable = Path(command[0]).name.casefold()
         if executable not in self.allowed:
             raise CommandRejected(f"Executable is not allowed: {executable}")
         flattened = " ".join(command).casefold()
@@ -53,15 +57,24 @@ class SafeCommandExecutor:
         if resolved_cwd != self.workspace_root and self.workspace_root not in resolved_cwd.parents:
             raise CommandRejected("Working directory must be inside the configured workspace")
 
-        environment = {
-            key: value
-            for key, value in os.environ.items()
-            if key in self.environment_allow and "secret" not in key.casefold()
-        }
+        environment: dict[str, str] = {}
+        included: set[str] = set()
+        for key, value in os.environ.items():
+            normalized = key.casefold()
+            if (
+                normalized not in self.environment_allow
+                or normalized in included
+                or "secret" in normalized
+            ):
+                continue
+            canonical = "PATH" if normalized == "path" else key
+            environment[canonical] = value
+            included.add(normalized)
         process = await asyncio.create_subprocess_exec(
             *command,
             cwd=resolved_cwd,
             env=environment,
+            stdin=asyncio.subprocess.DEVNULL,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )

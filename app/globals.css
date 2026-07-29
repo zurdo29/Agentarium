@@ -1,19 +1,20 @@
 @import "tailwindcss";
 
 :root {
-  --ink: #15241f;
-  --ink-soft: #394b44;
-  --paper: #f2f0e9;
-  --paper-deep: #e8e5dc;
-  --panel: #faf9f5;
-  --line: #d7d3c8;
-  --green: #2d6b4f;
-  --green-bright: #9ed6b9;
-  --blue: #345f86;
-  --orange: #b9683d;
-  --red: #a3483f;
-  --muted: #7c857f;
-  --shadow: 0 18px 50px rgb(26 42 35 / 8%);
+  --ink: #17251f;
+  --ink-soft: #41534b;
+  --paper: #eef2ef;
+  --paper-deep: #e5ebe7;
+  --panel: #ffffff;
+  --line: #d8e1dc;
+  --green: #286348;
+  --green-bright: #a8dec0;
+  --blue: #376b91;
+  --orange: #b86a3e;
+  --red: #a94d45;
+  --muted: #718079;
+  --shadow: 0 16px 42px rgb(28 50 40 / 9%);
+  --shadow-soft: 0 8px 24px rgb(28 50 40 / 6%);
 }
 
 * {
@@ -27,12 +28,13 @@ html {
 body {
   margin: 0;
   background:
-    linear-gradient(90deg, rgb(21 36 31 / 2%) 1px, transparent 1px) 0 0 / 80px
-      80px,
+    radial-gradient(circle at 78% 2%, rgb(107 170 137 / 12%), transparent 28rem),
+    radial-gradient(circle at 35% 100%, rgb(77 120 151 / 7%), transparent 32rem),
     var(--paper);
   color: var(--ink);
   font-family:
     "Aptos", "Segoe UI Variable", "Segoe UI", system-ui, -apple-system, sans-serif;
+  min-width: 320px;
 }
 
 button,
@@ -58,12 +60,16 @@ textarea:focus-visible {
 
 .app-shell {
   display: grid;
-  grid-template-columns: 248px minmax(0, 1fr);
+  grid-template-columns: 260px minmax(0, 1fr);
   min-height: 100vh;
 }
 
 .sidebar {
-  background: var(--ink);
+  background:
+    radial-gradient(circle at 15% 8%, rgb(99 163 130 / 22%), transparent 15rem),
+    linear-gradient(180deg, #1b2e26 0%, #13231d 100%);
+  border-right: 1px solid rgb(255 255 255 / 7%);
+  box-shadow: 12px 0 35px rgb(20 39 31 / 10%);
   color: #f6f3e9;
   display: flex;
   flex-direction: column;
@@ -86,8 +92,9 @@ textarea:focus-visible {
 
 .brand-mark {
   align-items: center;
-  background: #e2b668;
-  border-radius: 6px 6px 16px 6px;
+  background: linear-gradient(145deg, #efca83, #dba654);
+  border-radius: 11px 11px 18px 11px;
+  box-shadow: 0 8px 22px rgb(0 0 0 / 18%);
   color: var(--ink);
   display: flex;
   font-family: Georgia, serif;
@@ -127,13 +134,13 @@ textarea:focus-visible {
   align-items: center;
   background: transparent;
   border: 1px solid transparent;
-  border-radius: 8px;
+  border-radius: 11px;
   color: #aeb9b2;
   display: flex;
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 650;
   gap: 12px;
-  padding: 12px;
+  padding: 13px 12px;
   text-align: left;
   transition:
     background 160ms ease,
@@ -146,7 +153,8 @@ textarea:focus-visible {
 }
 
 .nav-item.active {
-  background: #f3f0e5;
+  background: #f8faf8;
+  box-shadow: 0 8px 20px rgb(0 0 0 / 14%);
   color: var(--ink);
 }
 
@@ -177,10 +185,10 @@ textarea:focus-visible {
 }
 
 .system-card {
-  background: rgb(255 255 255 / 5%);
-  border: 1px solid rgb(255 255 255 / 8%);
-  border-radius: 10px;
-  padding: 15px;
+  background: rgb(255 255 255 / 7%);
+  border: 1px solid rgb(255 255 255 / 10%);
+  border-radius: 14px;
+  padding: 16px;
 }
 
 .system-card .eyebrow {
@@ -256,10 +264,11 @@ textarea:focus-visible {
 .topbar {
   align-items: center;
   backdrop-filter: blur(16px);
-  background: rgb(242 240 233 / 88%);
+  background: rgb(248 250 249 / 88%);
   border-bottom: 1px solid var(--line);
+  box-shadow: 0 5px 22px rgb(28 50 40 / 5%);
   display: flex;
-  height: 72px;
+  height: 76px;
   justify-content: space-between;
   padding: 0 42px;
   position: sticky;
@@ -297,7 +306,7 @@ textarea:focus-visible {
   align-items: center;
   background: var(--panel);
   border: 1px solid var(--line);
-  border-radius: 99px;
+  border-radius: 12px;
   display: flex;
   font-size: 10px;
   font-weight: 700;
@@ -310,6 +319,7 @@ textarea:focus-visible {
   background: var(--panel);
   border: 1px solid var(--line);
   border-radius: 50%;
+  box-shadow: var(--shadow-soft);
   display: flex;
   font-size: 18px;
   height: 34px;
@@ -317,10 +327,256 @@ textarea:focus-visible {
   width: 34px;
 }
 
+.runtime-banner {
+  align-items: center;
+  background: #fff7df;
+  border-bottom: 1px solid #e4d19c;
+  color: #5f4a1d;
+  display: flex;
+  gap: 13px;
+  min-height: 54px;
+  padding: 9px 42px;
+}
+
+.runtime-banner.artifact_only {
+  background: #edf4fa;
+  border-bottom-color: #bfd1df;
+  color: #294d68;
+}
+
+.runtime-banner.workspace {
+  background: #edf7f0;
+  border-bottom-color: #b9d8c2;
+  color: #1f5631;
+}
+
+.runtime-banner.workspace .runtime-mark,
+.execution-notice.workspace-ready .execution-result-mark {
+  background: #b8dfc2;
+  color: #173d24;
+}
+
+.runtime-banner.workspace .runtime-copy small {
+  color: rgb(31 86 49 / 72%);
+}
+
+.runtime-mark,
+.execution-result-mark {
+  align-items: center;
+  background: #e2b668;
+  border-radius: 8px;
+  color: #342810;
+  display: flex;
+  flex: 0 0 auto;
+  font-family: ui-monospace, "Cascadia Code", monospace;
+  font-size: 9px;
+  font-weight: 900;
+  height: 30px;
+  justify-content: center;
+  letter-spacing: 0.05em;
+  width: 38px;
+}
+
+.runtime-copy {
+  min-width: 0;
+}
+
+.runtime-copy strong,
+.runtime-copy small {
+  display: block;
+}
+
+.runtime-copy strong {
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.runtime-copy small {
+  color: rgb(95 74 29 / 72%);
+  font-size: 9px;
+  margin-top: 3px;
+}
+
+.runtime-next {
+  border: 1px solid currentColor;
+  border-radius: 99px;
+  font-size: 8px;
+  font-weight: 850;
+  letter-spacing: 0.09em;
+  margin-left: auto;
+  padding: 6px 9px;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.provider-console {
+  background:
+    radial-gradient(circle at 92% 8%, rgb(226 182 104 / 14%), transparent 24%),
+    #18231e;
+  border: 1px solid #2e3a34;
+  border-radius: 16px;
+  box-shadow: 0 14px 32px rgb(18 29 24 / 12%);
+  color: white;
+  margin: 28px 0;
+  overflow: hidden;
+  padding: 22px 24px 24px;
+}
+
+.provider-console-heading {
+  align-items: flex-end;
+  display: flex;
+  gap: 20px;
+  justify-content: space-between;
+  margin-bottom: 17px;
+}
+
+.provider-console-heading .eyebrow {
+  color: #8ac9aa;
+}
+
+.provider-console-heading h2 {
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: 20px;
+  margin: 5px 0 0;
+}
+
+.provider-session-note {
+  border: 1px solid rgb(255 255 255 / 14%);
+  border-radius: 99px;
+  color: #aab6af;
+  font-size: 8px;
+  font-weight: 800;
+  letter-spacing: 0.09em;
+  padding: 6px 9px;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.provider-options {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.provider-option {
+  background: rgb(255 255 255 / 4%);
+  border: 1px solid rgb(255 255 255 / 10%);
+  border-radius: 12px;
+  display: flex;
+  flex-direction: column;
+  min-height: 170px;
+  padding: 15px;
+}
+
+.provider-option.selected {
+  background: rgb(82 160 116 / 13%);
+  border-color: rgb(126 207 161 / 48%);
+  box-shadow: inset 0 0 0 1px rgb(126 207 161 / 7%);
+}
+
+.provider-option.ready {
+  border-color: rgb(226 182 104 / 32%);
+}
+
+.provider-option-top {
+  align-items: center;
+  display: flex;
+  gap: 10px;
+}
+
+.provider-option-top strong,
+.provider-option-top small {
+  display: block;
+}
+
+.provider-option-top strong {
+  font-size: 12px;
+}
+
+.provider-option-top small {
+  color: #8f9d95;
+  font-size: 7px;
+  font-weight: 900;
+  letter-spacing: 0.12em;
+  margin-top: 3px;
+}
+
+.provider-state-dot {
+  background: #6b7770;
+  border-radius: 50%;
+  box-shadow: 0 0 0 4px rgb(255 255 255 / 4%);
+  height: 8px;
+  width: 8px;
+}
+
+.provider-state-dot.selected {
+  background: #7ecfa1;
+  box-shadow: 0 0 0 4px rgb(126 207 161 / 10%);
+}
+
+.provider-state-dot.ready {
+  background: #e2b668;
+}
+
+.provider-option p {
+  color: #aab6af;
+  font-size: 10px;
+  line-height: 1.45;
+  margin: 13px 0 7px;
+}
+
+.provider-option code {
+  color: #718078;
+  display: block;
+  font-family: ui-monospace, "Cascadia Code", monospace;
+  font-size: 8px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.provider-option-actions {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+  margin-top: auto;
+  padding-top: 14px;
+}
+
+.provider-option-actions select,
+.provider-activate {
+  border: 1px solid rgb(255 255 255 / 13%);
+  border-radius: 8px;
+  font-size: 9px;
+  font-weight: 750;
+  height: 31px;
+}
+
+.provider-option-actions select {
+  background: #222f29;
+  color: #dce6e0;
+  min-width: 0;
+  padding: 0 8px;
+  width: 100%;
+}
+
+.provider-activate {
+  background: #e2b668;
+  color: #1c261f;
+  margin-left: auto;
+  padding: 0 11px;
+}
+
+.provider-activate:disabled {
+  background: rgb(255 255 255 / 7%);
+  color: #7f8b84;
+  cursor: not-allowed;
+}
+
 .page {
   margin: 0 auto;
-  max-width: 1520px;
-  padding: 46px 42px 72px;
+  max-width: 1480px;
+  padding: 42px 44px 72px;
 }
 
 .page-heading {
@@ -333,7 +589,8 @@ textarea:focus-visible {
 .page-heading h1,
 .project-heading h1 {
   font-family: Georgia, "Times New Roman", serif;
-  font-size: clamp(34px, 4vw, 54px);
+  font-size: clamp(36px, 4vw, 52px);
+  font-weight: 650;
   letter-spacing: -0.045em;
   line-height: 1.02;
   margin: 7px 0 12px;
@@ -343,7 +600,7 @@ textarea:focus-visible {
 .project-heading p {
   color: var(--ink-soft);
   font-family: Georgia, "Times New Roman", serif;
-  font-size: 15px;
+  font-size: 16px;
   line-height: 1.55;
   margin: 0;
   max-width: 650px;
@@ -353,7 +610,7 @@ textarea:focus-visible {
 .eyebrow,
 .micro-label {
   color: var(--green);
-  font-size: 9px;
+  font-size: 10px;
   font-weight: 850;
   letter-spacing: 0.17em;
   text-transform: uppercase;
@@ -369,32 +626,35 @@ textarea:focus-visible {
 }
 
 .metric-grid {
-  border-bottom: 1px solid var(--line);
-  border-top: 1px solid var(--line);
   display: grid;
+  gap: 14px;
   grid-template-columns: repeat(4, 1fr);
   margin-bottom: 38px;
 }
 
 .metric-card {
-  border-right: 1px solid var(--line);
-  min-height: 130px;
-  padding: 22px 25px;
+  background: rgb(255 255 255 / 82%);
+  border: 1px solid var(--line);
+  border-radius: 15px;
+  box-shadow: var(--shadow-soft);
+  min-height: 138px;
+  padding: 24px;
   position: relative;
 }
 
 .metric-card:last-child {
-  border-right: 0;
+  border-right: 1px solid var(--line);
 }
 
 .metric-card::before {
   background: var(--ink);
+  border-radius: 0 0 6px 6px;
   content: "";
-  height: 3px;
-  left: 25px;
+  height: 4px;
+  left: 23px;
   position: absolute;
-  top: -2px;
-  width: 28px;
+  top: -1px;
+  width: 34px;
 }
 
 .metric-card.green::before {
@@ -412,7 +672,7 @@ textarea:focus-visible {
 .metric-label {
   color: var(--muted);
   display: block;
-  font-size: 9px;
+  font-size: 10px;
   font-weight: 800;
   letter-spacing: 0.12em;
   text-transform: uppercase;
@@ -432,7 +692,7 @@ textarea:focus-visible {
   align-items: center;
   color: var(--muted);
   display: flex;
-  font-size: 10px;
+  font-size: 11px;
   gap: 7px;
 }
 
@@ -450,8 +710,12 @@ textarea:focus-visible {
 }
 
 .goal-composer {
-  background: var(--ink);
-  border-radius: 5px 5px 24px 5px;
+  background:
+    radial-gradient(circle at 90% 0%, rgb(112 176 144 / 20%), transparent 17rem),
+    linear-gradient(145deg, #1d3329, #14251e);
+  border: 1px solid rgb(255 255 255 / 8%);
+  border-radius: 18px;
+  box-shadow: 0 20px 45px rgb(24 44 35 / 16%);
   color: #f6f3e9;
   display: grid;
   grid-template-columns: 58px minmax(0, 1fr);
@@ -497,11 +761,11 @@ textarea:focus-visible {
 .composer-copy textarea {
   background: rgb(255 255 255 / 5%);
   border: 1px solid rgb(255 255 255 / 11%);
-  border-radius: 7px;
+  border-radius: 11px;
   color: white;
   line-height: 1.55;
-  min-height: 92px;
-  padding: 15px;
+  min-height: 100px;
+  padding: 16px;
   resize: vertical;
   width: 100%;
 }
@@ -520,15 +784,15 @@ textarea:focus-visible {
 
 .composer-footer > span {
   color: #8e9a93;
-  font-size: 10px;
+  font-size: 11px;
 }
 
 .primary-button,
 .control-button {
   align-items: center;
-  border-radius: 5px;
+  border-radius: 10px;
   display: inline-flex;
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 800;
   gap: 18px;
   justify-content: center;
@@ -540,6 +804,7 @@ textarea:focus-visible {
 .primary-button {
   background: #e2b668;
   border: 1px solid #e2b668;
+  box-shadow: 0 7px 16px rgb(54 40 12 / 13%);
   color: var(--ink);
 }
 
@@ -565,7 +830,7 @@ textarea:focus-visible {
   border-bottom: 1px solid var(--line);
   display: flex;
   justify-content: space-between;
-  margin-bottom: 4px;
+  margin-bottom: 12px;
   padding-bottom: 13px;
 }
 
@@ -587,24 +852,32 @@ textarea:focus-visible {
 
 .project-list {
   display: grid;
+  gap: 10px;
 }
 
 .project-row {
   align-items: center;
-  background: transparent;
-  border: 0;
-  border-bottom: 1px solid var(--line);
+  background: rgb(255 255 255 / 76%);
+  border: 1px solid var(--line);
+  border-radius: 13px;
   display: grid;
   gap: 18px;
   grid-template-columns: 34px minmax(0, 1fr) 80px 24px;
-  padding: 20px 5px;
+  padding: 18px 18px;
   text-align: left;
-  transition: background 160ms ease;
+  transition:
+    background 160ms ease,
+    border-color 160ms ease,
+    box-shadow 160ms ease,
+    transform 160ms ease;
   width: 100%;
 }
 
 .project-row:hover {
-  background: rgb(255 255 255 / 45%);
+  background: white;
+  border-color: #b8c8bf;
+  box-shadow: var(--shadow-soft);
+  transform: translateY(-1px);
 }
 
 .project-index {
@@ -621,13 +894,13 @@ textarea:focus-visible {
 
 .project-title-line > strong {
   font-family: Georgia, "Times New Roman", serif;
-  font-size: 16px;
+  font-size: 17px;
 }
 
 .project-goal {
   color: var(--muted);
   display: block;
-  font-size: 10px;
+  font-size: 12px;
   margin: 6px 0 12px;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -636,6 +909,7 @@ textarea:focus-visible {
 
 .progress-track {
   background: #dcd9d0;
+  border-radius: 99px;
   display: block;
   height: 3px;
   overflow: hidden;
@@ -675,8 +949,11 @@ textarea:focus-visible {
 }
 
 .activity-panel {
-  border-left: 1px solid var(--line);
-  padding-left: 28px;
+  background: rgb(255 255 255 / 76%);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  box-shadow: var(--shadow-soft);
+  padding: 24px;
 }
 
 .pulse-ring {
@@ -725,20 +1002,20 @@ textarea:focus-visible {
 }
 
 .activity-item strong {
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 650;
   line-height: 1.45;
 }
 
 .activity-item span {
   color: var(--muted);
-  font-size: 9px;
+  font-size: 10px;
   margin-top: 5px;
 }
 
 .quiet-note {
   background: var(--paper-deep);
-  border-radius: 5px;
+  border-radius: 11px;
   margin-top: 22px;
   padding: 18px;
 }
@@ -763,7 +1040,7 @@ textarea:focus-visible {
   border-radius: 99px;
   color: var(--ink-soft);
   display: inline-flex;
-  font-size: 8px;
+  font-size: 9px;
   font-weight: 850;
   gap: 6px;
   letter-spacing: 0.06em;
@@ -895,6 +1172,163 @@ textarea:focus-visible {
   font-size: 20px;
 }
 
+.execution-notice {
+  align-items: center;
+  border: 1px solid var(--line);
+  border-radius: 13px;
+  display: grid;
+  gap: 13px;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  margin-bottom: 24px;
+  padding: 14px 16px;
+}
+
+.execution-notice.running {
+  background: #edf4fa;
+  border-color: #bdd2e2;
+}
+
+.execution-notice.simulated {
+  background: #fff8e7;
+  border-color: #e4d3a7;
+}
+
+.execution-notice.workspace-ready {
+  background: #edf7f0;
+  border-color: #b9d8c2;
+}
+
+.execution-notice.ready-to-run {
+  background: #f3efe4;
+  border-color: #d5c59b;
+}
+
+.execution-notice.ready-to-run .execution-result-mark {
+  background: #e2b668;
+  color: #342810;
+}
+
+.execution-notice strong,
+.execution-notice small {
+  display: block;
+}
+
+.execution-notice strong {
+  font-size: 12px;
+}
+
+.execution-notice small {
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.45;
+  margin-top: 4px;
+}
+
+.execution-stage {
+  color: var(--muted);
+  font-family: ui-monospace, "Cascadia Code", monospace;
+  font-size: 9px;
+  text-transform: uppercase;
+}
+
+.execution-spinner {
+  animation: execution-spin 900ms linear infinite;
+  border: 3px solid #bdd2e2;
+  border-radius: 50%;
+  border-top-color: var(--blue);
+  height: 28px;
+  width: 28px;
+}
+
+@keyframes execution-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.product-preview {
+  background: #17221d;
+  border: 1px solid #2b3a32;
+  border-radius: 16px;
+  box-shadow: 0 18px 40px rgb(19 33 26 / 16%);
+  color: white;
+  margin-bottom: 28px;
+  overflow: hidden;
+  padding: 20px;
+}
+
+.product-preview-heading {
+  align-items: center;
+  display: flex;
+  gap: 24px;
+  justify-content: space-between;
+  padding: 2px 2px 17px;
+}
+
+.product-preview-heading .eyebrow {
+  color: #8ac9aa;
+}
+
+.product-preview-heading h2 {
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: 22px;
+  margin: 5px 0 3px;
+}
+
+.product-preview-heading p {
+  color: #96a49c;
+  font-size: 10px;
+  line-height: 1.45;
+  margin: 0;
+}
+
+.product-preview-heading .control-button {
+  background: rgb(255 255 255 / 7%);
+  border-color: rgb(255 255 255 / 16%);
+  color: white;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.product-preview-frame {
+  background:
+    linear-gradient(45deg, #d9ddd9 25%, transparent 25%) 0 0 / 16px 16px,
+    linear-gradient(-45deg, #d9ddd9 25%, transparent 25%) 0 8px / 16px 16px,
+    linear-gradient(45deg, transparent 75%, #d9ddd9 75%) 8px -8px / 16px 16px,
+    linear-gradient(-45deg, transparent 75%, #d9ddd9 75%) -8px 0 / 16px 16px,
+    #f1f3f1;
+  border: 1px solid rgb(255 255 255 / 12%);
+  border-radius: 10px;
+  height: min(620px, 62vh);
+  min-height: 420px;
+  overflow: hidden;
+}
+
+.product-preview-frame iframe {
+  background: white;
+  border: 0;
+  height: 100%;
+  width: 100%;
+}
+
+.product-preview-footer {
+  align-items: center;
+  color: #84928a;
+  display: flex;
+  font-family: ui-monospace, "Cascadia Code", monospace;
+  font-size: 8px;
+  gap: 8px;
+  padding: 13px 2px 0;
+}
+
+.product-preview-footer strong {
+  color: #aab6af;
+  font-size: 8px;
+  font-weight: 700;
+  margin-left: auto;
+  text-transform: uppercase;
+}
+
 .progress-track.large {
   height: 5px;
 }
@@ -903,7 +1337,7 @@ textarea:focus-visible {
   align-items: center;
   background: #f2e1cc;
   border: 1px solid #dab991;
-  border-radius: 6px;
+  border-radius: 12px;
   display: flex;
   gap: 13px;
   margin-bottom: 24px;
@@ -951,7 +1385,7 @@ textarea:focus-visible {
 .project-grid {
   align-items: start;
   display: grid;
-  gap: 24px;
+  gap: 26px;
   grid-template-columns: minmax(0, 1.65fr) minmax(285px, 0.72fr);
 }
 
@@ -962,10 +1396,11 @@ textarea:focus-visible {
 }
 
 .panel {
-  background: rgb(250 249 245 / 86%);
+  background: rgb(255 255 255 / 88%);
   border: 1px solid var(--line);
-  box-shadow: 0 8px 30px rgb(24 38 32 / 3%);
-  padding: 25px;
+  border-radius: 16px;
+  box-shadow: var(--shadow-soft);
+  padding: 26px;
 }
 
 .panel-heading {
@@ -981,19 +1416,19 @@ textarea:focus-visible {
 .panel-index {
   color: var(--muted);
   font-family: ui-monospace, monospace;
-  font-size: 9px;
+  font-size: 10px;
   padding-top: 2px;
 }
 
 .panel-heading h2 {
   font-family: Georgia, serif;
-  font-size: 20px;
+  font-size: 21px;
   margin: 4px 0 0;
 }
 
 .panel-trailing {
   color: var(--muted);
-  font-size: 9px;
+  font-size: 10px;
   padding-top: 10px;
   text-transform: uppercase;
 }
@@ -1023,7 +1458,7 @@ textarea:focus-visible {
 .check-list li {
   align-items: flex-start;
   display: flex;
-  font-size: 11px;
+  font-size: 12px;
   gap: 9px;
   line-height: 1.5;
   margin: 8px 0;
@@ -1037,7 +1472,7 @@ textarea:focus-visible {
 .plain-list li {
   border-left: 2px solid #d2a867;
   color: var(--ink-soft);
-  font-size: 10px;
+  font-size: 11px;
   line-height: 1.5;
   margin: 9px 0;
   padding-left: 10px;
@@ -1062,8 +1497,9 @@ textarea:focus-visible {
 
 .task-card {
   align-items: center;
-  background: transparent;
+  background: #fbfdfc;
   border: 1px solid var(--line);
+  border-radius: 12px;
   display: grid;
   gap: 14px;
   grid-template-columns: 36px minmax(0, 1fr) 20px;
@@ -1078,6 +1514,7 @@ textarea:focus-visible {
 
 .task-card:hover {
   border-color: #8e9c95;
+  box-shadow: 0 8px 18px rgb(34 60 48 / 7%);
   transform: translateX(2px);
 }
 
@@ -1112,13 +1549,13 @@ textarea:focus-visible {
 
 .task-topline > strong {
   font-family: Georgia, serif;
-  font-size: 14px;
+  font-size: 15px;
 }
 
 .task-copy > span:nth-child(2) {
   color: var(--muted);
   display: block;
-  font-size: 10px;
+  font-size: 11px;
   margin: 5px 0 8px;
 }
 
@@ -1189,14 +1626,14 @@ textarea:focus-visible {
 }
 
 .timeline-event strong {
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 650;
   line-height: 1.45;
 }
 
 .timeline-event span {
   color: var(--muted);
-  font-size: 8px;
+  font-size: 9px;
   margin-top: 4px;
 }
 
@@ -1222,7 +1659,7 @@ textarea:focus-visible {
 .agent-avatar {
   align-items: center;
   background: var(--paper-deep);
-  border-radius: 5px 5px 11px 5px;
+  border-radius: 9px 9px 13px 9px;
   display: flex;
   font-family: Georgia, serif;
   font-size: 11px;
@@ -1237,7 +1674,7 @@ textarea:focus-visible {
 }
 
 .agent-row strong {
-  font-size: 10px;
+  font-size: 11px;
 }
 
 .agent-row small {
@@ -1275,7 +1712,7 @@ textarea:focus-visible {
 
 .decision-item p {
   color: var(--muted);
-  font-size: 9px;
+  font-size: 10px;
   line-height: 1.45;
   margin: 5px 0 0;
 }
@@ -1362,6 +1799,7 @@ textarea:focus-visible {
   align-items: center;
   background: var(--paper-deep);
   border: 1px solid var(--line);
+  border-radius: 14px;
   display: flex;
   gap: 15px;
   margin-bottom: 24px;
@@ -1386,6 +1824,7 @@ textarea:focus-visible {
 .approval-card {
   background: var(--panel);
   border: 1px solid var(--line);
+  border-radius: 16px;
   box-shadow: var(--shadow);
   padding: 28px;
 }
@@ -1420,6 +1859,7 @@ textarea:focus-visible {
 
 .approval-details {
   background: var(--paper);
+  border-radius: 12px;
   display: grid;
   gap: 30px;
   grid-template-columns: 1fr 1fr;
@@ -1460,7 +1900,7 @@ textarea:focus-visible {
 .approval-resolution input {
   background: var(--paper);
   border: 1px solid var(--line);
-  border-radius: 4px;
+  border-radius: 10px;
   display: block;
   font-size: 10px;
   letter-spacing: 0;
@@ -1472,6 +1912,7 @@ textarea:focus-visible {
 
 .empty-state {
   border: 1px dashed #aeb8b1;
+  border-radius: 16px;
   padding: 60px 30px;
   text-align: center;
 }
@@ -1608,6 +2049,7 @@ textarea:focus-visible {
 .review-result {
   align-items: center;
   background: var(--paper);
+  border-radius: 10px;
   display: flex;
   gap: 12px;
   margin-top: 10px;
@@ -1655,6 +2097,14 @@ textarea:focus-visible {
   color: var(--muted);
   font-size: 9px;
   margin: 3px 0 0;
+}
+
+.review-result small {
+  color: var(--green);
+  display: block;
+  font-family: ui-monospace, monospace;
+  font-size: 7px;
+  margin-top: 5px;
 }
 
 .drawer-error {
@@ -1812,8 +2262,24 @@ textarea:focus-visible {
     display: none;
   }
 
+  .runtime-banner {
+    padding-inline: 20px;
+  }
+
+  .runtime-next {
+    display: none;
+  }
+
   .page {
     padding: 34px 20px 100px;
+  }
+
+  .provider-options {
+    grid-template-columns: 1fr;
+  }
+
+  .provider-option {
+    min-height: 150px;
   }
 
   .page-heading {
@@ -1831,7 +2297,7 @@ textarea:focus-visible {
   }
 
   .metric-card:nth-child(2) {
-    border-right: 0;
+    border-right: 1px solid var(--line);
   }
 
   .metric-card:nth-child(-n + 2) {
@@ -1843,8 +2309,8 @@ textarea:focus-visible {
   }
 
   .activity-panel {
-    border-left: 0;
-    padding-left: 0;
+    border-left: 1px solid var(--line);
+    padding-left: 24px;
   }
 
   .project-header {
@@ -1922,12 +2388,66 @@ textarea:focus-visible {
   .metric-card,
   .metric-card:nth-child(2) {
     border-bottom: 1px solid var(--line);
-    border-right: 0;
+    border-right: 1px solid var(--line);
   }
 
   .goal-composer {
     grid-template-columns: 1fr;
     padding: 22px;
+  }
+
+  .runtime-banner {
+    align-items: flex-start;
+  }
+
+  .runtime-copy small {
+    line-height: 1.4;
+  }
+
+  .provider-console {
+    padding: 19px;
+  }
+
+  .provider-console-heading {
+    align-items: flex-start;
+    display: block;
+  }
+
+  .provider-session-note {
+    display: inline-block;
+    margin-top: 12px;
+  }
+
+  .execution-notice {
+    align-items: flex-start;
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .execution-stage {
+    grid-column: 2;
+  }
+
+  .product-preview {
+    padding: 15px;
+  }
+
+  .product-preview-heading {
+    align-items: stretch;
+    flex-direction: column;
+    gap: 13px;
+  }
+
+  .product-preview-heading .control-button {
+    align-self: flex-start;
+  }
+
+  .product-preview-frame {
+    height: 68vh;
+    min-height: 360px;
+  }
+
+  .product-preview-footer strong {
+    display: none;
   }
 
   .composer-number {
@@ -1987,6 +2507,8 @@ textarea:focus-visible {
   *,
   *::before,
   *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
     scroll-behavior: auto !important;
     transition-duration: 0.01ms !important;
   }

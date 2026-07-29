@@ -34,6 +34,10 @@ test("server-renders the Agentarium command center", async () => {
   assert.match(html, /Centro de mando/);
   assert.match(html, /La empresa, en una mirada/);
   assert.match(html, /Nueva directiva/);
+  assert.match(html, /Vista de demostración/);
+  assert.match(html, /no archivos ejecutables/);
+  assert.match(html, /26 jul · 21:04/);
+  assert.doesNotMatch(html, /p\.(?:&nbsp;|\u00a0)?\s*m\./i);
   assert.doesNotMatch(html, /codex-preview|react-loading-skeleton/i);
 });
 
@@ -49,4 +53,12 @@ test("removes all temporary starter UI markers", async () => {
   assert.doesNotMatch(packageJson, /react-loading-skeleton/);
   assert.match(page, /events\/stream/);
   assert.match(page, /Aprobaciones/);
+  assert.match(page, /Simulación completada/);
+  assert.match(page, /Ejecutando agentes/);
+  assert.match(page, /Workspace materializado correctamente/);
+  assert.match(page, /Comandos desactivados/);
+  assert.match(page, /Perfiles controlados/);
+  assert.match(page, /perfiles registrados/);
+  assert.match(page, /Worktrees activos/);
+  assert.match(page, /worktree verificado/);
 });

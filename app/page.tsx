@@ -3,6 +3,7 @@
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 
 type View = "dashboard" | "project" | "approvals";
+type ProjectAction = "run" | "pause" | "resume" | "cancel";
 
 type Project = {
   id: string;
@@ -105,6 +106,17 @@ type ProjectDetail = {
     passed: boolean;
     summary: string;
     checks: Array<{ name: string; passed: boolean; evidence: string }>;
+    command_evidence?: Array<{
+      check: string;
+      profile?: string;
+      backend?: string;
+      branch?: string;
+      commit?: string;
+      return_code?: number;
+      timed_out?: boolean;
+      passed?: boolean;
+      verified?: boolean;
+    }>;
   }>;
   decisions: Array<{
     id: string;
@@ -118,11 +130,44 @@ type ProjectDetail = {
 };
 
 type DashboardData = {
+  runtime: RuntimeStatus;
   projects: Project[];
   active_agents: number;
   blocked_tasks: number;
   pending_approvals: number;
   latest_errors: EventRecord[];
+};
+
+type RuntimeStatus = {
+  mode: "simulation" | "artifact_only" | "workspace";
+  providers: string[];
+  active_model: string | null;
+  capabilities: {
+    model_inference: boolean;
+    project_files: boolean;
+    command_execution: boolean;
+    change_isolation: boolean;
+  };
+};
+
+type ProviderName = "mock" | "ollama" | "openai_compatible";
+
+type ProviderDiagnostic = {
+  name: ProviderName;
+  label: string;
+  endpoint: string | null;
+  reachable: boolean;
+  ready: boolean;
+  models: string[];
+  message: string;
+  selected: boolean;
+  selected_model: string | null;
+};
+
+type ProviderOverview = {
+  active_provider: string;
+  active_model: string | null;
+  providers: ProviderDiagnostic[];
 };
 
 const API =
@@ -337,11 +382,62 @@ const SAMPLE_EVENTS: EventRecord[] = [
 ];
 
 const SAMPLE_DASHBOARD: DashboardData = {
+  runtime: {
+    mode: "simulation",
+    providers: ["mock"],
+    active_model: null,
+    capabilities: {
+      model_inference: false,
+      project_files: false,
+      command_execution: false,
+      change_isolation: false,
+    },
+  },
   projects: [SAMPLE_PROJECT],
   active_agents: 1,
   blocked_tasks: 0,
   pending_approvals: 0,
   latest_errors: [],
+};
+
+const SAMPLE_PROVIDERS: ProviderOverview = {
+  active_provider: "mock",
+  active_model: null,
+  providers: [
+    {
+      name: "mock",
+      label: "Motor determinista",
+      endpoint: null,
+      reachable: true,
+      ready: true,
+      models: [],
+      message: "Respaldo local estable; no realiza inferencia con un modelo.",
+      selected: true,
+      selected_model: null,
+    },
+    {
+      name: "ollama",
+      label: "Ollama local",
+      endpoint: "http://127.0.0.1:11434",
+      reachable: false,
+      ready: false,
+      models: [],
+      message: "Esperando diagnóstico del backend.",
+      selected: false,
+      selected_model: null,
+    },
+    {
+      name: "openai_compatible",
+      label: "Servidor compatible",
+      endpoint: "http://127.0.0.1:1234/v1",
+      reachable: false,
+      ready: false,
+      models: [],
+      message: "Esperando diagnóstico del backend.",
+      selected: false,
+      selected_model: null,
+    },
+  ],
 };
 
 const ROLE_LABELS: Record<string, string> = {
@@ -376,13 +472,33 @@ function statusLabel(status: string): string {
   return STATUS_LABELS[status] ?? status.replaceAll("_", " ");
 }
 
+const MONTH_LABELS = [
+  "ene",
+  "feb",
+  "mar",
+  "abr",
+  "may",
+  "jun",
+  "jul",
+  "ago",
+  "sep",
+  "oct",
+  "nov",
+  "dic",
+] as const;
+
 function dateLabel(value: string): string {
-  return new Intl.DateTimeFormat("es-UY", {
-    hour: "2-digit",
-    minute: "2-digit",
-    day: "2-digit",
-    month: "short",
-  }).format(new Date(value));
+  const instant = new Date(value);
+  if (Number.isNaN(instant.getTime())) return value;
+
+  // Uruguay uses UTC-03:00. Formatting the shifted instant from UTC fields
+  // avoids ICU punctuation and whitespace differences during hydration.
+  const montevideo = new Date(instant.getTime() - 3 * 60 * 60 * 1000);
+  const day = montevideo.getUTCDate().toString().padStart(2, "0");
+  const month = MONTH_LABELS[montevideo.getUTCMonth()];
+  const hour = montevideo.getUTCHours().toString().padStart(2, "0");
+  const minute = montevideo.getUTCMinutes().toString().padStart(2, "0");
+  return `${day} ${month} · ${hour}:${minute}`;
 }
 
 function percent(value: number | undefined): string {
@@ -393,12 +509,16 @@ export default function Home() {
   const [view, setView] = useState<View>("dashboard");
   const [dashboard, setDashboard] =
     useState<DashboardData>(SAMPLE_DASHBOARD);
+  const [providerOverview, setProviderOverview] =
+    useState<ProviderOverview>(SAMPLE_PROVIDERS);
   const [detail, setDetail] = useState<ProjectDetail>(SAMPLE_DETAIL);
   const [events, setEvents] = useState<EventRecord[]>(SAMPLE_EVENTS);
   const [approvals, setApprovals] = useState<Approval[]>([]);
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [connected, setConnected] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [providerLoading, setProviderLoading] = useState(false);
+  const [activeAction, setActiveAction] = useState<ProjectAction | null>(null);
   const [goal, setGoal] = useState("");
   const [error, setError] = useState<string | null>(null);
 
@@ -430,12 +550,14 @@ export default function Home() {
 
   const refreshDashboard = useCallback(async () => {
     try {
-      const [dashboardResult, approvalResult] = await Promise.all([
+      const [dashboardResult, approvalResult, providerResult] = await Promise.all([
         request<DashboardData>("/dashboard"),
         request<Approval[]>("/approvals"),
+        request<ProviderOverview>("/providers").catch(() => null),
       ]);
       setDashboard(dashboardResult);
       setApprovals(approvalResult);
+      if (providerResult) setProviderOverview(providerResult);
       setConnected(true);
     } catch {
       setConnected(false);
@@ -518,12 +640,13 @@ export default function Home() {
     }
   }
 
-  async function controlProject(action: "run" | "pause" | "resume" | "cancel") {
+  async function controlProject(action: ProjectAction) {
     if (detail.project.id === DEMO_ID) {
       setError("Inicia la API para ejecutar controles reales.");
       return;
     }
     setLoading(true);
+    setActiveAction(action);
     setError(null);
     try {
       await request(`/projects/${detail.project.id}/${action}`, {
@@ -534,6 +657,7 @@ export default function Home() {
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "La acción falló.");
     } finally {
+      setActiveAction(null);
       setLoading(false);
     }
   }
@@ -581,6 +705,30 @@ export default function Home() {
     }
   }
 
+  async function reworkTask(taskId: string) {
+    setLoading(true);
+    setError(null);
+    try {
+      await request(`/work-items/${taskId}/rework`, {
+        method: "POST",
+        body: JSON.stringify({
+          reason:
+            "La verificación independiente encontró comportamiento incompleto; corregirlo contra todos los criterios.",
+        }),
+      });
+      await openProject(detail.project.id);
+      await refreshDashboard();
+    } catch (reason) {
+      setError(
+        reason instanceof Error
+          ? reason.message
+          : "No se pudo abrir la revisión.",
+      );
+    } finally {
+      setLoading(false);
+    }
+  }
+
   async function escalateTask(taskId: string) {
     setLoading(true);
     setError(null);
@@ -617,6 +765,27 @@ export default function Home() {
       );
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function selectProvider(provider: ProviderName, model: string | null) {
+    setProviderLoading(true);
+    setError(null);
+    try {
+      const selected = await request<ProviderOverview>("/runtime/provider", {
+        method: "PUT",
+        body: JSON.stringify({ provider, model }),
+      });
+      setProviderOverview(selected);
+      await refreshDashboard();
+    } catch (reason) {
+      setError(
+        reason instanceof Error
+          ? reason.message
+          : "No se pudo activar el proveedor.",
+      );
+    } finally {
+      setProviderLoading(false);
     }
   }
 
@@ -679,9 +848,22 @@ export default function Home() {
             <span className="eyebrow">Inferencia local</span>
             <div className="system-row">
               <span className={connected ? "live-dot" : "live-dot idle"} />
-              <strong>{connected ? "API conectada" : "Modo demostración"}</strong>
+              <strong>
+                {connected
+                  ? dashboard.runtime.mode === "workspace"
+                    ? "Workspace activo"
+                    : "Simulación activa"
+                  : "Modo demostración"}
+              </strong>
             </div>
-            <small>Mock determinista · 1 llamada simultánea</small>
+            <small>
+              {dashboard.runtime.providers.join(" + ")} ·{" "}
+              {dashboard.runtime.capabilities.project_files
+                ? dashboard.runtime.capabilities.change_isolation
+                  ? "worktrees + archivos"
+                  : "genera archivos"
+                : "sin archivos de producto"}
+            </small>
           </div>
           <div className="owner">
             <span className="owner-avatar">R</span>
@@ -708,7 +890,15 @@ export default function Home() {
           <div className="topbar-actions">
             <span className="provider-chip">
               <span className={connected ? "live-dot" : "live-dot idle"} />
-              {connected ? "Backend activo" : "Vista offline"}
+              {connected
+                ? dashboard.runtime.mode === "workspace"
+                  ? `${dashboard.runtime.providers.join(" + ")}${
+                      dashboard.runtime.active_model
+                        ? ` / ${dashboard.runtime.active_model}`
+                        : ""
+                    } · workspace`
+                  : `${dashboard.runtime.providers.join(" + ")} · simulación`
+                : "Vista offline"}
             </span>
             <button
               className="compact-button"
@@ -720,6 +910,8 @@ export default function Home() {
             </button>
           </div>
         </header>
+
+        <RuntimeBanner runtime={dashboard.runtime} connected={connected} />
 
         {error && (
           <div className="error-banner" role="alert">
@@ -742,6 +934,9 @@ export default function Home() {
             openProject={openProject}
             loading={loading}
             connected={connected}
+            providerOverview={providerOverview}
+            providerLoading={providerLoading}
+            selectProvider={selectProvider}
           />
         )}
 
@@ -749,6 +944,8 @@ export default function Home() {
           <ProjectView
             detail={detail}
             events={events}
+            runtime={dashboard.runtime}
+            activeAction={activeAction}
             loading={loading}
             onControl={controlProject}
             onSelectTask={setSelectedTaskId}
@@ -773,12 +970,62 @@ export default function Home() {
           events={events}
           onClose={() => setSelectedTaskId(null)}
           onRetry={retryTask}
+          onRework={reworkTask}
           onEscalate={escalateTask}
           onPriority={updateTaskPriority}
           loading={loading}
         />
       )}
     </main>
+  );
+}
+
+function RuntimeBanner({
+  runtime,
+  connected,
+}: {
+  runtime: RuntimeStatus;
+  connected: boolean;
+}) {
+  return (
+    <div className={`runtime-banner ${runtime.mode}`} role="status">
+      <span className="runtime-mark">
+        {runtime.mode === "workspace"
+          ? "FILE"
+          : runtime.mode === "simulation"
+            ? "SIM"
+            : "JSON"}
+      </span>
+      <span className="runtime-copy">
+        <strong>
+          {connected
+            ? runtime.mode === "workspace"
+              ? "Workspace activo: las tareas ya materializan archivos reales."
+              : runtime.mode === "simulation"
+                ? "Modo simulación: el flujo funciona, pero aún no construye el producto."
+                : "Modo artefactos: el modelo responde, pero aún no escribe el producto."
+            : "Vista de demostración: conecta la API para trabajar con proyectos reales."}
+        </strong>
+        <small>
+          {runtime.mode === "workspace" && !runtime.capabilities.model_inference
+            ? runtime.capabilities.change_isolation
+              ? "El proveedor mock escribe contenido determinista; cada intento sí usa un worktree y validaciones locales reales."
+              : runtime.capabilities.command_execution
+                ? "El proveedor mock escribe contenido determinista; los perfiles fijos sí ejecutan validaciones locales reales."
+              : "El proveedor mock escribe contenido determinista; todavía no genera una aplicación específica mediante un modelo."
+            : runtime.capabilities.project_files
+              ? "Los archivos del proyecto quedan materializados en un workspace."
+            : "Los resultados actuales son registros JSON verificables, no archivos ejecutables."}
+        </small>
+      </span>
+      <span className="runtime-next">
+        {runtime.capabilities.change_isolation
+          ? "Worktrees activos"
+          : runtime.capabilities.command_execution
+            ? "Perfiles controlados"
+            : "Comandos desactivados"}
+      </span>
+    </div>
   );
 }
 
@@ -792,6 +1039,9 @@ function Dashboard({
   openProject,
   loading,
   connected,
+  providerOverview,
+  providerLoading,
+  selectProvider,
 }: {
   dashboard: DashboardData;
   totalTasks: number;
@@ -802,6 +1052,9 @@ function Dashboard({
   openProject: (id: string) => Promise<void>;
   loading: boolean;
   connected: boolean;
+  providerOverview: ProviderOverview;
+  providerLoading: boolean;
+  selectProvider: (provider: ProviderName, model: string | null) => Promise<void>;
 }) {
   return (
     <div className="page dashboard-page">
@@ -847,6 +1100,13 @@ function Dashboard({
           tone="orange"
         />
       </section>
+
+      <ProviderConsole
+        overview={providerOverview}
+        connected={connected}
+        loading={providerLoading}
+        onSelect={selectProvider}
+      />
 
       <section className="dashboard-columns">
         <div className="main-column">
@@ -964,6 +1224,112 @@ function Dashboard({
   );
 }
 
+function ProviderConsole({
+  overview,
+  connected,
+  loading,
+  onSelect,
+}: {
+  overview: ProviderOverview;
+  connected: boolean;
+  loading: boolean;
+  onSelect: (provider: ProviderName, model: string | null) => Promise<void>;
+}) {
+  const [models, setModels] = useState<Record<string, string>>({});
+
+  return (
+    <section className="provider-console" aria-label="Motor de inferencia">
+      <div className="provider-console-heading">
+        <div>
+          <span className="eyebrow">Motor de inferencia</span>
+          <h2>Proveedor y modelo para nuevas ejecuciones</h2>
+        </div>
+        <span className="provider-session-note">guardado en este equipo</span>
+      </div>
+      <div className="provider-options">
+        {overview.providers.map((provider) => {
+          const chosenModel =
+            models[provider.name] ??
+            provider.selected_model ??
+            provider.models[0] ??
+            "";
+          const state = provider.selected
+            ? "selected"
+            : provider.ready
+              ? "ready"
+              : "offline";
+          return (
+            <article className={`provider-option ${state}`} key={provider.name}>
+              <div className="provider-option-top">
+                <span
+                  className={`provider-state-dot ${state}`}
+                  aria-hidden="true"
+                />
+                <div>
+                  <strong>{provider.label}</strong>
+                  <small>
+                    {provider.selected
+                      ? "ACTIVO"
+                      : provider.ready
+                        ? "LISTO"
+                        : provider.reachable
+                          ? "SIN MODELOS"
+                          : "SIN CONEXIÓN"}
+                  </small>
+                </div>
+              </div>
+              <p>{provider.message}</p>
+              {provider.endpoint && <code>{provider.endpoint}</code>}
+              <div className="provider-option-actions">
+                {provider.models.length > 0 && (
+                  <select
+                    aria-label={`Modelo para ${provider.label}`}
+                    value={chosenModel}
+                    onChange={(event) =>
+                      setModels((current) => ({
+                        ...current,
+                        [provider.name]: event.target.value,
+                      }))
+                    }
+                  >
+                    {provider.models.map((model) => (
+                      <option value={model} key={model}>
+                        {model}
+                      </option>
+                    ))}
+                  </select>
+                )}
+                <button
+                  className="provider-activate"
+                  disabled={
+                    loading ||
+                    !connected ||
+                    !provider.ready ||
+                    provider.selected ||
+                    (provider.name !== "mock" && !chosenModel)
+                  }
+                  onClick={() =>
+                    void onSelect(
+                      provider.name,
+                      provider.name === "mock" ? null : chosenModel,
+                    )
+                  }
+                >
+                  {provider.selected
+                    ? provider.selected_model ?? "En uso"
+                    : loading
+                      ? "Comprobando…"
+                      : "Activar"}
+                </button>
+              </div>
+            </article>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
 function Metric({
   label,
   value,
@@ -990,6 +1356,8 @@ function Metric({
 function ProjectView({
   detail,
   events,
+  runtime,
+  activeAction,
   loading,
   onControl,
   onSelectTask,
@@ -997,8 +1365,10 @@ function ProjectView({
 }: {
   detail: ProjectDetail;
   events: EventRecord[];
+  runtime: RuntimeStatus;
+  activeAction: ProjectAction | null;
   loading: boolean;
-  onControl: (action: "run" | "pause" | "resume" | "cancel") => Promise<void>;
+  onControl: (action: ProjectAction) => Promise<void>;
   onSelectTask: (id: string) => void;
   onOpenApprovals: () => void;
 }) {
@@ -1006,6 +1376,29 @@ function ProjectView({
   const pending = detail.approvals.filter(
     (approval) => approval.status === "pending",
   );
+  const latestEvent = events.at(-1);
+  const productFiles = Array.from(
+    new Set(
+      detail.artifacts.flatMap((artifact) =>
+        artifact.file_paths.filter((path) =>
+          path.replaceAll("\\", "/").includes("/project/"),
+        ),
+      ),
+    ),
+  );
+  const htmlFiles = productFiles
+    .map((path) => path.replaceAll("\\", "/"))
+    .filter((path) => path.toLowerCase().endsWith(".html"));
+  const previewFile =
+    htmlFiles.find((path) => path.toLowerCase().endsWith("/index.html")) ??
+    htmlFiles[0];
+  const previewRelativePath = previewFile?.split("/project/")[1];
+  const previewUrl = previewRelativePath
+    ? `${API}/projects/${project.id}/preview/${previewRelativePath
+        .split("/")
+        .map(encodeURIComponent)
+        .join("/")}`
+    : null;
   return (
     <div className="page project-page">
       <section className="project-header">
@@ -1040,7 +1433,7 @@ function ProjectView({
               onClick={() => void onControl("run")}
               disabled={loading || project.status === "completed"}
             >
-              ▶ Ejecutar
+              {activeAction === "run" ? "Ejecutando agentes…" : "▶ Ejecutar"}
             </button>
           )}
           <button
@@ -1065,6 +1458,117 @@ function ProjectView({
           <span style={{ width: `${project.progress_percent}%` }} />
         </span>
       </section>
+
+      {activeAction !== "run" && project.status === "ready" && (
+        <section className="execution-notice ready-to-run">
+          <span className="execution-result-mark">GO</span>
+          <span>
+            <strong>El plan está listo para convertirse en archivos reales.</strong>
+            <small>
+              Hay {detail.work_items.filter((item) => item.status === "ready").length}{" "}
+              tarea inicial disponible; pulsa Ejecutar y deja que los agentes recorran
+              el grafo completo.
+            </small>
+          </span>
+          <span className="execution-stage">{detail.work_items.length} tareas</span>
+        </section>
+      )}
+
+      {activeAction === "run" && (
+        <section className="execution-notice running" aria-live="polite">
+          <span className="execution-spinner" aria-hidden="true" />
+          <span>
+            <strong>La ejecución está en curso.</strong>
+            <small>
+              {latestEvent?.message ??
+                "Preparando las tareas y recopilando evidencia…"}
+            </small>
+          </span>
+          <span className="execution-stage">{events.length} eventos</span>
+        </section>
+      )}
+
+      {activeAction !== "run" &&
+        project.status === "completed" &&
+        runtime.mode !== "workspace" && (
+          <section className="execution-notice simulated">
+            <span className="execution-result-mark">SIM</span>
+            <span>
+              <strong>Simulación completada; el producto aún no fue construido.</strong>
+              <small>
+                Se verificaron {detail.artifacts.length} artefactos de control en
+                formato JSON. El próximo incremento materializará archivos y
+                comandos dentro del workspace.
+              </small>
+            </span>
+            <span className="execution-stage">
+              {runtime.providers.join(" + ")}
+            </span>
+          </section>
+        )}
+
+      {activeAction !== "run" &&
+        project.status === "completed" &&
+        runtime.mode === "workspace" && (
+          <section className="execution-notice workspace-ready">
+            <span className="execution-result-mark">FILE</span>
+            <span>
+              <strong>
+                {productFiles.length > 0
+                  ? "Workspace materializado correctamente."
+                  : "Este proyecto terminó antes de activar el workspace."}
+              </strong>
+              <small>
+                {productFiles.length > 0
+                  ? `Agentarium integró ${productFiles.length} archivo${
+                      productFiles.length === 1 ? "" : "s"
+                    } de proyecto con checksum, perfiles y worktrees verificables${
+                      runtime.capabilities.model_inference
+                        ? "."
+                        : "; el contenido actual sigue siendo determinista por usar mock."
+                    }`
+                  : "Crea y ejecuta un proyecto nuevo para generar sus archivos confinados."}
+              </small>
+            </span>
+            <span className="execution-stage">{productFiles.length} archivos</span>
+          </section>
+        )}
+
+      {project.status === "completed" && previewUrl && (
+        <section className="product-preview">
+          <div className="product-preview-heading">
+            <div>
+              <span className="eyebrow">Producto ejecutable</span>
+              <h2>Vista previa aislada</h2>
+              <p>
+                El contenido se ejecuta con red bloqueada y separado del centro de
+                control.
+              </p>
+            </div>
+            <a
+              className="control-button"
+              href={previewUrl}
+              target="_blank"
+              rel="noreferrer"
+            >
+              Abrir en grande ↗
+            </a>
+          </div>
+          <div className="product-preview-frame">
+            <iframe
+              src={previewUrl}
+              title={`Vista previa de ${project.title}`}
+              sandbox="allow-scripts allow-same-origin"
+              referrerPolicy="no-referrer"
+            />
+          </div>
+          <div className="product-preview-footer">
+            <span className="live-dot" />
+            <span>{previewRelativePath}</span>
+            <strong>{productFiles.length} archivos verificados</strong>
+          </div>
+        </section>
+      )}
 
       {pending.length > 0 && (
         <button className="approval-alert" onClick={onOpenApprovals}>
@@ -1233,10 +1737,20 @@ function ProjectView({
             <div className="artifact-list">
               {detail.artifacts.slice(-5).map((artifact) => (
                 <div className="artifact-item" key={artifact.id}>
-                  <span className="file-mark">JSON</span>
+                  <span className="file-mark">
+                    {artifact.file_paths.some((path) =>
+                      path.replaceAll("\\", "/").includes("/project/"),
+                    )
+                      ? "FILE"
+                      : "JSON"}
+                  </span>
                   <span>
                     <strong>{artifact.title}</strong>
-                    <small>{artifact.artifact_type}</small>
+                    <small>
+                      {artifact.file_paths.find((path) =>
+                        path.replaceAll("\\", "/").includes("/project/"),
+                      ) ?? artifact.artifact_type}
+                    </small>
                   </span>
                   <span>✓</span>
                 </div>
@@ -1446,6 +1960,7 @@ function TaskDrawer({
   events,
   onClose,
   onRetry,
+  onRework,
   onEscalate,
   onPriority,
   loading,
@@ -1455,6 +1970,7 @@ function TaskDrawer({
   events: EventRecord[];
   onClose: () => void;
   onRetry: (id: string) => Promise<void>;
+  onRework: (id: string) => Promise<void>;
   onEscalate: (id: string) => Promise<void>;
   onPriority: (id: string, priority: number) => Promise<void>;
   loading: boolean;
@@ -1539,10 +2055,20 @@ function TaskDrawer({
           <span className="micro-label">Artefactos y evidencia</span>
           {artifacts.map((artifact) => (
             <div className="drawer-evidence" key={artifact.id}>
-              <span className="file-mark">JSON</span>
+              <span className="file-mark">
+                {artifact.file_paths.some((path) =>
+                  path.replaceAll("\\", "/").includes("/project/"),
+                )
+                  ? "FILE"
+                  : "JSON"}
+              </span>
               <div>
                 <strong>{artifact.title}</strong>
-                <small>{artifact.file_paths[0]}</small>
+                <small>
+                  {artifact.file_paths.find((path) =>
+                    path.replaceAll("\\", "/").includes("/project/"),
+                  ) ?? artifact.file_paths[0]}
+                </small>
               </div>
             </div>
           ))}
@@ -1563,6 +2089,19 @@ function TaskDrawer({
                   <div>
                     <strong>Tester</strong>
                     <p>{result.summary}</p>
+                    <small>
+                      {result.command_evidence?.filter(
+                        (evidence) => evidence.check === "validation_profile",
+                      ).length ?? 0}{" "}
+                      perfiles registrados ·{" "}
+                      {result.command_evidence?.some(
+                        (evidence) =>
+                          evidence.check === "isolated_change_set" &&
+                          evidence.verified,
+                      )
+                        ? "worktree verificado"
+                        : "sin aislamiento registrado"}
+                    </small>
                   </div>
                 </>
               ) : (
@@ -1641,6 +2180,15 @@ function TaskDrawer({
               disabled={loading}
             >
               ↻ Reintentar
+            </button>
+          )}
+          {item.status === "completed" && (
+            <button
+              className="primary-button"
+              onClick={() => void onRework(item.id)}
+              disabled={loading}
+            >
+              ↻ Revisar de nuevo
             </button>
           )}
         </div>

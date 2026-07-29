@@ -23,6 +23,46 @@ async def test_complete_vertical_flow_with_mock_correction(
     )
     assert corrected["attempt_count"] == 2
     assert len(detail["artifacts"]) == 4
+    assert sorted(len(artifact["file_paths"]) for artifact in detail["artifacts"]) == [
+        1,
+        2,
+        2,
+        2,
+    ]
+    product_root = service.settings.workspace_root / project.id / "project"
+    assert (product_root / ".git").is_dir()
+    assert (product_root / "docs" / "specification.md").is_file()
+    assert (product_root / "src" / "implementation.md").is_file()
+    assert (product_root / "README.md").is_file()
+    assert project.goal in (product_root / "README.md").read_text(encoding="utf-8")
+    assert all(
+        any(
+            evidence["check"] == "workspace_file_checksum" and evidence["verified"]
+            for evidence in report["command_evidence"]
+        )
+        for report in detail["test_reports"]
+    )
+    assert all(
+        any(
+            evidence["check"] == "validation_profile"
+            and evidence["profile"] == "workspace_inventory"
+            and evidence["passed"]
+            and evidence["return_code"] == 0
+            for evidence in report["command_evidence"]
+        )
+        for report in detail["test_reports"]
+    )
+    assert all(
+        any(
+            evidence["check"] == "isolated_change_set"
+            and evidence["backend"] == "git_worktree"
+            and evidence["verified"]
+            for evidence in report["command_evidence"]
+        )
+        for report in detail["test_reports"]
+    )
+    worktrees_root = service.settings.workspace_root / project.id / "worktrees"
+    assert not any(worktrees_root.rglob(".git"))
     assert any(
         review["verdict"] == ReviewVerdict.CHANGES_REQUESTED.value for review in detail["reviews"]
     )
@@ -37,6 +77,9 @@ async def test_complete_vertical_flow_with_mock_correction(
     assert {
         "project_created",
         "planning_completed",
+        "workspace_files_materialized",
+        "validation_profiles_completed",
+        "change_set_integrated",
         "review_rejected",
         "project_completed",
     }.issubset(event_actions)

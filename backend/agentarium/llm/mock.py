@@ -7,6 +7,7 @@ from typing import Any
 from agentarium.domain.models import AgentDefinition
 
 from .base import LLMProvider, ModelRequest, ProviderResponse
+from .prompts import render_prompt
 
 
 class MockProvider(LLMProvider):
@@ -20,7 +21,7 @@ class MockProvider(LLMProvider):
         await asyncio.sleep(0)
         content = self._content_for(request)
         raw = json.dumps(content, ensure_ascii=False, sort_keys=True)
-        prompt = json.dumps(request.model_dump(mode="json"), ensure_ascii=False)
+        prompt = render_prompt(request, agent)
         return ProviderResponse(
             content=content,
             raw_text=raw,
@@ -64,6 +65,7 @@ class MockProvider(LLMProvider):
                 "approvals_required": [],
             }
         if operation == "plan":
+            brief = request.payload["brief"]
             return {
                 "milestone": {
                     "title": "MVP verificable",
@@ -105,10 +107,13 @@ class MockProvider(LLMProvider):
                             "Integrar artefactos previos y documentar el resultado final."
                         ),
                         "dependencies": ["implementation"],
-                        "expected_outputs": ["integrated_result"],
+                        "expected_outputs": [
+                            "integrated_result",
+                            *brief["deliverables"],
+                        ],
                         "acceptance_criteria": [
-                            "Referencia los artefactos dependientes",
-                            "Resume validaciones y límites",
+                            *brief["scope"],
+                            *brief["success_criteria"],
                         ],
                         "risk": "low",
                         "priority": 70,
@@ -119,6 +124,12 @@ class MockProvider(LLMProvider):
             task = request.payload["task"]
             is_draft = task["risk"] == "medium" and request.attempt == 1
             dependency_artifacts = request.payload.get("dependency_artifacts", [])
+            workspace_file = self._workspace_file(
+                request,
+                task,
+                dependency_artifacts,
+                is_draft=is_draft,
+            )
             return {
                 "artifact_type": task["expected_outputs"][0],
                 "title": task["title"],
@@ -137,11 +148,16 @@ class MockProvider(LLMProvider):
                     if is_draft
                     else ["Proveedor mock: no representa calidad de un modelo real"]
                 ),
+                "files": [workspace_file],
             }
         if operation == "test":
             artifact = request.payload["artifact"]
             file_verified = bool(request.payload.get("file_verified"))
-            passed = file_verified and bool(artifact.get("summary"))
+            validation_profiles = request.payload.get("validation_profiles", [])
+            profiles_passed = bool(validation_profiles) and all(
+                profile.get("passed") for profile in validation_profiles
+            )
+            passed = file_verified and profiles_passed and bool(artifact.get("summary"))
             return {
                 "passed": passed,
                 "checks": [
@@ -155,6 +171,14 @@ class MockProvider(LLMProvider):
                         "passed": file_verified,
                         "evidence": "El archivo materializado existe y su checksum coincide.",
                     },
+                    {
+                        "name": "validation_profiles",
+                        "passed": profiles_passed,
+                        "evidence": (
+                            f"{len(validation_profiles)} perfiles fijos registraron "
+                            "salida y código de retorno."
+                        ),
+                    },
                 ],
                 "summary": (
                     "Comprobaciones automáticas superadas."
@@ -165,7 +189,7 @@ class MockProvider(LLMProvider):
         if operation == "review":
             artifact = request.payload["artifact"]
             criteria = request.payload["acceptance_criteria"]
-            approved = artifact.get("quality") == "verified" and bool(artifact.get("evidence"))
+            approved = artifact.get("quality") == "verified"
             return {
                 "verdict": "approved" if approved else "changes_requested",
                 "reasons": (
@@ -176,3 +200,61 @@ class MockProvider(LLMProvider):
                 "acceptance_results": {criterion: approved for criterion in criteria},
             }
         raise ValueError(f"Unsupported mock operation: {operation}")
+
+    @staticmethod
+    def _workspace_file(
+        request: ModelRequest,
+        task: dict[str, Any],
+        dependency_artifacts: list[dict[str, Any]],
+        *,
+        is_draft: bool,
+    ) -> dict[str, str]:
+        artifact_type = str(task["expected_outputs"][0])
+        file_names = {
+            "specification": "docs/specification.md",
+            "implementation_artifact": "src/implementation.md",
+            "integrated_result": "README.md",
+        }
+        path = file_names.get(artifact_type, f"deliverables/{artifact_type}.md")
+        project = request.payload.get("project", {})
+        brief = project.get("brief") or {}
+        goal = str(brief.get("summary", "Objetivo local no especificado"))
+        criteria = "\n".join(
+            f"- {criterion}" for criterion in task.get("acceptance_criteria", [])
+        )
+        dependencies = "\n".join(
+            f"- {artifact['title']} ({artifact['id']})"
+            for artifact in dependency_artifacts
+        )
+        content = "\n".join(
+            [
+                f"# {task['title']}",
+                "",
+                "## Objetivo",
+                goal,
+                "",
+                "## Entregable",
+                str(task["description"]),
+                "",
+                "## Criterios de aceptación",
+                criteria or "- Sin criterios declarados",
+                "",
+                "## Dependencias verificadas",
+                dependencies or "- Ninguna",
+                "",
+                "## Estado",
+                (
+                    "Borrador: requiere corrección."
+                    if is_draft
+                    else "Verificado por el flujo local de Agentarium."
+                ),
+                "",
+                "> Contenido determinista del proveedor mock; no sustituye inferencia real.",
+                "",
+            ]
+        )
+        return {
+            "path": path,
+            "content": content,
+            "purpose": f"Materializar el entregable {artifact_type}",
+        }

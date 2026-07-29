@@ -15,6 +15,7 @@ from agentarium.domain.enums import (
     WorkItemStatus,
 )
 from agentarium.domain.models import (
+    MAX_WORK_ITEM_ATTEMPTS,
     AgentRun,
     ApprovalRequest,
     Artifact,
@@ -260,6 +261,22 @@ class Repository:
             row.updated_at = utc_now()
         return self.get_work_item(item_id)
 
+    def extend_attempt_budget(self, item_id: str, *, extra_attempts: int = 1) -> WorkItem:
+        if extra_attempts < 1:
+            raise ValueError("Attempt budget extension must be positive")
+        with self.database.session() as session:
+            row = session.get(WorkItemRow, item_id)
+            if row is None:
+                raise NotFoundError(f"Work item {item_id} not found")
+            if row.max_attempts + extra_attempts > MAX_WORK_ITEM_ATTEMPTS:
+                raise ValueError(
+                    "Task attempt budget cannot exceed "
+                    f"{MAX_WORK_ITEM_ATTEMPTS}"
+                )
+            row.max_attempts += extra_attempts
+            row.updated_at = utc_now()
+        return self.get_work_item(item_id)
+
     def update_priority(self, item_id: str, priority: int) -> WorkItem:
         with self.database.session() as session:
             row = session.get(WorkItemRow, item_id)
@@ -308,6 +325,17 @@ class Repository:
                     created_at=artifact.created_at,
                 )
             )
+
+    def update_artifact_file_paths(
+        self,
+        artifact_id: str,
+        file_paths: list[str],
+    ) -> None:
+        with self.database.session() as session:
+            row = session.get(ArtifactRow, artifact_id)
+            if row is None:
+                raise NotFoundError(f"Artifact not found: {artifact_id}")
+            row.file_paths_json = file_paths
 
     def list_artifacts(self, project_id: str) -> list[Artifact]:
         with self.database.session() as session:
@@ -555,7 +583,11 @@ class Repository:
             rows = session.scalars(
                 select(WorkItemRow).where(
                     WorkItemRow.status.in_(
-                        [WorkItemStatus.ASSIGNED.value, WorkItemStatus.RUNNING.value]
+                        [
+                            WorkItemStatus.ASSIGNED.value,
+                            WorkItemStatus.RUNNING.value,
+                            WorkItemStatus.AWAITING_REVIEW.value,
+                        ]
                     )
                 )
             ).all()

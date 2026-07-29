@@ -3,6 +3,8 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
+from pydantic import ValidationError
+
 from agentarium.agents.roles import RoleExecutionError, RoleRunner
 from agentarium.artifacts import ArtifactStore
 from agentarium.domain.enums import (
@@ -11,22 +13,42 @@ from agentarium.domain.enums import (
     ProjectStatus,
     ReviewVerdict,
     RiskLevel,
+    RunOutcome,
     WorkItemStatus,
 )
 from agentarium.domain.models import (
+    AgentRun,
     Artifact,
     Decision,
     ExecutionEvent,
     Milestone,
     Project,
     ProjectBrief,
+    ResourceUsage,
     Review,
     TestReport,
     WorkItem,
     new_id,
 )
+from agentarium.execution import (
+    CommandRejected,
+    ReviewEvaluationProposal,
+    TestEvaluationProposal,
+    ValidationProfileExecutor,
+    WorkArtifactProposal,
+    WorkspaceFileEvidence,
+    WorkspaceMaterializer,
+    WorkspaceRejected,
+)
+from agentarium.isolation import (
+    GitChangeSet,
+    GitWorktreeIsolation,
+    IsolationError,
+    WorktreeSession,
+)
 from agentarium.llm import ModelRequest, ProviderResponse
 from agentarium.memory import ContextBuilder
+from agentarium.planning import BriefProposal, PlanProposal, TaskProposal
 from agentarium.repositories import Repository
 
 TERMINAL_TASK_STATES = {
@@ -46,6 +68,9 @@ class Orchestrator:
         repository: Repository,
         roles: RoleRunner,
         artifacts: ArtifactStore,
+        workspace: WorkspaceMaterializer,
+        validations: ValidationProfileExecutor,
+        isolation: GitWorktreeIsolation,
         memory: ContextBuilder,
         *,
         max_cycles: int = 100,
@@ -53,6 +78,9 @@ class Orchestrator:
         self.repository = repository
         self.roles = roles
         self.artifacts = artifacts
+        self.workspace = workspace
+        self.validations = validations
+        self.isolation = isolation
         self.memory = memory
         self.max_cycles = max_cycles
 
@@ -73,54 +101,84 @@ class Orchestrator:
             correlation_id=correlation_id,
         )
 
-        brief_response, _ = await self._call_role(
-            AgentRole.DIRECTOR,
-            ModelRequest(
-                operation="brief",
-                project_id=project_id,
-                payload={"goal": project.goal, "title": project.title},
-            ),
-            correlation_id,
+        try:
+            brief_response, _ = await self._call_role(
+                AgentRole.DIRECTOR,
+                ModelRequest(
+                    operation="brief",
+                    project_id=project_id,
+                    payload={"goal": project.goal, "title": project.title},
+                ),
+                correlation_id,
+            )
+        except RoleExecutionError as exc:
+            return self._fail_planning(project_id, correlation_id, str(exc))
+        try:
+            brief_proposal = BriefProposal.model_validate(brief_response.content)
+        except ValidationError as exc:
+            raise InvalidPlan(f"Invalid project brief: {exc}") from exc
+        brief = ProjectBrief(
+            project_id=project_id,
+            **brief_proposal.model_dump(mode="json"),
         )
-        brief = ProjectBrief(project_id=project_id, **brief_response.content)
         self.repository.set_project_brief(brief)
 
-        plan_response, _ = await self._call_role(
-            AgentRole.TECHNICAL_MANAGER,
-            ModelRequest(
-                operation="plan",
-                project_id=project_id,
-                payload={"brief": brief.model_dump(mode="json")},
-            ),
-            correlation_id,
+        try:
+            plan_response, _ = await self._call_role(
+                AgentRole.TECHNICAL_MANAGER,
+                ModelRequest(
+                    operation="plan",
+                    project_id=project_id,
+                    payload={"brief": brief.model_dump(mode="json")},
+                ),
+                correlation_id,
+            )
+        except RoleExecutionError as exc:
+            return self._fail_planning(project_id, correlation_id, str(exc))
+        plan = self._validate_plan(plan_response.content)
+        plan, missing_deliverables, missing_scope, missing_success_criteria = (
+            self._ensure_plan_covers_brief(plan, brief)
         )
-        raw_tasks = self._validate_plan(plan_response.content)
-        milestone_data = plan_response.content["milestone"]
+        if missing_deliverables or missing_scope or missing_success_criteria:
+            self._event(
+                project_id,
+                "plan_contract_completed",
+                (
+                    "Se añadió una tarea de cierre para cubrir el contrato "
+                    "completo del brief."
+                ),
+                metadata={
+                    "missing_deliverables": missing_deliverables,
+                    "missing_scope": missing_scope,
+                    "missing_success_criteria": missing_success_criteria,
+                },
+                correlation_id=correlation_id,
+            )
         milestone = Milestone(
             project_id=project_id,
-            title=str(milestone_data["title"]),
-            description=str(milestone_data["description"]),
+            title=plan.milestone.title,
+            description=plan.milestone.description,
             order=0,
         )
         self.repository.add_milestone(milestone)
-        key_to_id = {str(task["key"]): new_id() for task in raw_tasks}
-        for raw in raw_tasks:
-            dependency_ids = [key_to_id[str(key)] for key in raw["dependencies"]]
+        key_to_id = {task.key: new_id() for task in plan.tasks}
+        for task in plan.tasks:
+            dependency_ids = [key_to_id[key] for key in task.dependencies]
             status = WorkItemStatus.BLOCKED if dependency_ids else WorkItemStatus.READY
             item = WorkItem(
-                id=key_to_id[str(raw["key"])],
+                id=key_to_id[task.key],
                 project_id=project_id,
                 milestone_id=milestone.id,
-                title=str(raw["title"]),
-                description=str(raw["description"]),
+                title=task.title,
+                description=task.description,
                 dependency_ids=dependency_ids,
-                expected_outputs=[str(value) for value in raw["expected_outputs"]],
-                acceptance_criteria=[str(value) for value in raw["acceptance_criteria"]],
+                expected_outputs=task.expected_outputs,
+                acceptance_criteria=task.acceptance_criteria,
                 allowed_tools=["read_file", "write_file", "run_command"],
                 authorized_files=[f"workspaces/{project_id}/**"],
                 max_attempts=3,
-                risk=RiskLevel(str(raw["risk"])),
-                priority=int(raw["priority"]),
+                risk=task.risk,
+                priority=task.priority,
                 status=WorkItemStatus.DRAFT,
             )
             self.repository.add_work_item(item)
@@ -130,7 +188,10 @@ class Orchestrator:
             Decision(
                 project_id=project_id,
                 title="Alcance inicial conservador",
-                decision="Ejecutar un único hito vertical con tres entregables dependientes.",
+                decision=(
+                    f"Ejecutar un único hito vertical con {len(plan.tasks)} "
+                    "entregables dependientes."
+                ),
                 rationale="Es reversible, observable y adecuado para el presupuesto local.",
                 reversible=True,
                 alternatives=[
@@ -146,7 +207,7 @@ class Orchestrator:
         self._event(
             project_id,
             "planning_completed",
-            f"Brief y DAG creados con {len(raw_tasks)} tareas.",
+            f"Brief y DAG creados con {len(plan.tasks)} tareas.",
             previous=ProjectStatus.PLANNING.value,
             new=final_status.value,
             correlation_id=correlation_id,
@@ -198,6 +259,31 @@ class Orchestrator:
                 continue
 
             if items and all(item.status is WorkItemStatus.COMPLETED for item in items):
+                missing_deliverables, missing_scope, missing_success_criteria = (
+                    self._project_contract_gaps(current_project, items)
+                )
+                if missing_deliverables or missing_scope or missing_success_criteria:
+                    result = self.repository.update_project_status(
+                        project_id,
+                        ProjectStatus.FAILED,
+                    )
+                    self._event(
+                        project_id,
+                        "project_contract_failed",
+                        (
+                            "Las tareas terminaron, pero el DAG no cubre el contrato "
+                            "completo del brief."
+                        ),
+                        previous=ProjectStatus.RUNNING.value,
+                        new=ProjectStatus.FAILED.value,
+                        metadata={
+                            "missing_deliverables": missing_deliverables,
+                            "missing_scope": missing_scope,
+                            "missing_success_criteria": missing_success_criteria,
+                        },
+                        correlation_id=correlation_id,
+                    )
+                    return result
                 self.repository.update_project_progress(project_id, 100)
                 result = self.repository.update_project_status(project_id, ProjectStatus.COMPLETED)
                 self._event(
@@ -289,93 +375,653 @@ class Orchestrator:
                 )
             return
 
+        session: WorktreeSession | None = None
+        try:
+            work_proposal = self._validate_work(work_response.content)
+            prior_artifacts = [
+                artifact
+                for artifact in self.repository.list_artifacts(item.project_id)
+                if artifact.work_item_id == item.id
+            ]
+            if (
+                item.attempt_count > 1
+                and prior_artifacts
+                and self._candidate_matches_artifact(
+                    work_proposal,
+                    prior_artifacts[-1],
+                )
+            ):
+                raise InvalidPlan(
+                    "Retry candidate files are byte-for-byte identical to the "
+                    "previous rejected candidate"
+                )
+            if not self._work_declaration_matches_item(work_proposal, item):
+                self._event(
+                    item.project_id,
+                    "artifact_criterion_declaration_mismatch",
+                    (
+                        "La declaración de criterios no coincide con la tarea; "
+                        "el contenido continuará a evaluación semántica."
+                    ),
+                    work_item_id=item.id,
+                    attempt=item.attempt_count,
+                    correlation_id=correlation_id,
+                )
+            session = await self.isolation.prepare(
+                item.project_id,
+                item.id,
+                item.attempt_count,
+            )
+            workspace_evidence = self.workspace.stage(
+                item.project_id,
+                session.path,
+                work_proposal.files,
+            )
+            changes = await self.isolation.collect(session)
+        except (InvalidPlan, WorkspaceRejected, IsolationError) as exc:
+            if session is not None:
+                await self.isolation.discard(session)
+            self._event(
+                item.project_id,
+                "workspace_action_rejected",
+                f"La acción de workspace fue rechazada: {exc}",
+                work_item_id=item.id,
+                attempt=item.attempt_count,
+                error=str(exc),
+                correlation_id=correlation_id,
+            )
+            if item.attempt_count < item.max_attempts:
+                self._transition(
+                    item,
+                    WorkItemStatus.READY,
+                    correlation_id,
+                    error=str(exc),
+                )
+            else:
+                self._transition(
+                    item,
+                    WorkItemStatus.FAILED,
+                    correlation_id,
+                    error=str(exc),
+                )
+            return
+
+        assert session is not None
+        try:
+            await self._evaluate_candidate(
+                item,
+                correlation_id,
+                worker_run.id,
+                work_proposal,
+                workspace_evidence,
+                changes,
+            )
+        finally:
+            await self.isolation.discard(session)
+
+    async def re_evaluate_artifact(
+        self,
+        work_item_id: str,
+        artifact_id: str,
+    ) -> WorkItem:
+        item = self.repository.get_work_item(work_item_id)
+        if item.status is not WorkItemStatus.READY:
+            raise ValueError("Recovered artifact evaluation requires a ready task")
+        source = next(
+            (
+                artifact
+                for artifact in self.repository.list_artifacts(item.project_id)
+                if artifact.id == artifact_id
+            ),
+            None,
+        )
+        if source is None:
+            raise ValueError("Artifact does not exist in the task project")
+        approved_dependency_artifact_ids = {
+            review.artifact_id
+            for review in self.repository.list_reviews(item.project_id)
+            if review.work_item_id in item.dependency_ids
+            and review.verdict is ReviewVerdict.APPROVED
+        }
+        work_proposal = self._recovery_work_proposal(
+            source,
+            item,
+            approved_dependency_artifact_ids=approved_dependency_artifact_ids,
+        )
+        correlation_id = new_id()
+        item = self._transition(item, WorkItemStatus.ASSIGNED, correlation_id)
+        item = self._transition(item, WorkItemStatus.RUNNING, correlation_id)
+        item = self.repository.increment_attempt(item.id)
+        session: WorktreeSession | None = None
+        try:
+            session = await self.isolation.prepare(
+                item.project_id,
+                item.id,
+                item.attempt_count,
+            )
+            workspace_evidence = self.workspace.stage(
+                item.project_id,
+                session.path,
+                work_proposal.files,
+            )
+            changes = await self.isolation.collect(session)
+            self._event(
+                item.project_id,
+                "artifact_candidate_recovered",
+                "Un candidato anterior se rematerializÃ³ para reevaluaciÃ³n completa.",
+                work_item_id=item.id,
+                agent_run_id=source.agent_run_id,
+                attempt=item.attempt_count,
+                metadata={"source_artifact_id": source.id},
+                correlation_id=correlation_id,
+            )
+            await self._evaluate_candidate(
+                item,
+                correlation_id,
+                source.agent_run_id,
+                work_proposal,
+                workspace_evidence,
+                changes,
+            )
+        except (InvalidPlan, WorkspaceRejected, IsolationError) as exc:
+            current = self.repository.get_work_item(item.id)
+            target = (
+                WorkItemStatus.READY
+                if current.attempt_count < current.max_attempts
+                else WorkItemStatus.FAILED
+            )
+            self._transition(
+                current,
+                target,
+                correlation_id,
+                error=str(exc),
+            )
+        finally:
+            if session is not None:
+                await self.isolation.discard(session)
+        return self.repository.get_work_item(item.id)
+
+    async def evaluate_operator_candidate(
+        self,
+        work_item_id: str,
+        work_proposal: WorkArtifactProposal,
+    ) -> WorkItem:
+        item = self.repository.get_work_item(work_item_id)
+        if item.status is not WorkItemStatus.READY:
+            raise ValueError("Operator candidate evaluation requires a ready task")
+        correlation_id = new_id()
+        run = AgentRun(
+            project_id=item.project_id,
+            work_item_id=item.id,
+            agent_role=AgentRole.IMPLEMENTATION_WORKER,
+            model="operator-candidate",
+            provider="local",
+            attempt=item.attempt_count + 1,
+            outcome=RunOutcome.ARTIFACT_DELIVERED,
+            input_summary="Candidato presentado por un operador local.",
+            output_summary=work_proposal.summary,
+            resource_usage=ResourceUsage(
+                model="operator-candidate",
+                provider="local",
+            ),
+            correlation_id=correlation_id,
+        )
+        self.repository.add_agent_run(run)
+        item = self._transition(item, WorkItemStatus.ASSIGNED, correlation_id)
+        item = self._transition(item, WorkItemStatus.RUNNING, correlation_id)
+        item = self.repository.increment_attempt(item.id)
+        session: WorktreeSession | None = None
+        try:
+            session = await self.isolation.prepare(
+                item.project_id,
+                item.id,
+                item.attempt_count,
+            )
+            workspace_evidence = self.workspace.stage(
+                item.project_id,
+                session.path,
+                work_proposal.files,
+            )
+            changes = await self.isolation.collect(session)
+            self._event(
+                item.project_id,
+                "operator_candidate_submitted",
+                "Un operador local presentÃ³ un candidato para evaluaciÃ³n completa.",
+                work_item_id=item.id,
+                agent_run_id=run.id,
+                attempt=item.attempt_count,
+                correlation_id=correlation_id,
+            )
+            await self._evaluate_candidate(
+                item,
+                correlation_id,
+                run.id,
+                work_proposal,
+                workspace_evidence,
+                changes,
+            )
+        except (InvalidPlan, WorkspaceRejected, IsolationError) as exc:
+            current = self.repository.get_work_item(item.id)
+            target = (
+                WorkItemStatus.READY
+                if current.attempt_count < current.max_attempts
+                else WorkItemStatus.FAILED
+            )
+            self._transition(
+                current,
+                target,
+                correlation_id,
+                error=str(exc),
+            )
+        finally:
+            if session is not None:
+                await self.isolation.discard(session)
+        return self.repository.get_work_item(item.id)
+
+    async def _evaluate_candidate(
+        self,
+        item: WorkItem,
+        correlation_id: str,
+        worker_run_id: str,
+        work_proposal: WorkArtifactProposal,
+        workspace_evidence: list[WorkspaceFileEvidence],
+        changes: GitChangeSet,
+    ) -> None:
+        artifact_content = work_proposal.model_dump(mode="json")
+        artifact_content["isolation"] = {
+            "backend": "git_worktree",
+            "branch": changes.session.branch,
+            "commit": changes.commit,
+            "files": list(changes.files),
+        }
         path, checksum = self.artifacts.materialize(
             item.project_id,
             item.id,
             item.attempt_count,
-            work_response.content,
+            artifact_content,
         )
         artifact = Artifact(
             project_id=item.project_id,
             work_item_id=item.id,
-            agent_run_id=worker_run.id,
-            artifact_type=str(work_response.content["artifact_type"]),
-            title=str(work_response.content["title"]),
-            content=work_response.content,
+            agent_run_id=worker_run_id,
+            artifact_type=work_proposal.artifact_type,
+            title=work_proposal.title,
+            content=artifact_content,
             file_paths=[path],
             checksum=checksum,
         )
         self.repository.add_artifact(artifact)
+        self._event(
+            item.project_id,
+            "workspace_files_materialized",
+            (
+                f"Se prepararon {len(workspace_evidence)} archivos en un "
+                "worktree aislado."
+            ),
+            work_item_id=item.id,
+            agent_run_id=worker_run_id,
+            attempt=item.attempt_count,
+            metadata={
+                "branch": changes.session.branch,
+                "commit": changes.commit,
+                "files": [evidence.path for evidence in workspace_evidence],
+            },
+            correlation_id=correlation_id,
+        )
         item = self._transition(
             self.repository.get_work_item(item.id),
             WorkItemStatus.AWAITING_REVIEW,
             correlation_id,
         )
 
-        file_verified = self.artifacts.verify(path, checksum)
-        test_response, tester_run = await self._call_role(
-            AgentRole.TESTER,
-            ModelRequest(
-                operation="test",
-                project_id=item.project_id,
+        workspace_checks = [
+            evidence.as_check(verified=self.workspace.verify(evidence))
+            for evidence in workspace_evidence
+        ]
+        control_verified = self.artifacts.verify(path, checksum)
+        try:
+            validation_results = await self.validations.validate(
+                item.project_id,
+                workspace_evidence,
+                validation_root=changes.session.path,
+                acceptance_criteria=item.acceptance_criteria,
+                expected_outputs=item.expected_outputs,
+            )
+            validation_checks = [result.as_evidence() for result in validation_results]
+        except CommandRejected as exc:
+            validation_checks = [
+                {
+                    "check": "validation_profile",
+                    "profile": "policy",
+                    "targets": [],
+                    "command": [],
+                    "cwd": "",
+                    "stdout": "",
+                    "stderr": str(exc),
+                    "return_code": -1,
+                    "timed_out": False,
+                    "passed": False,
+                }
+            ]
+        profiles_passed = all(bool(check["passed"]) for check in validation_checks)
+        isolation_check = changes.as_evidence()
+        file_verified = (
+            control_verified
+            and all(bool(check["verified"]) for check in workspace_checks)
+            and profiles_passed
+            and bool(isolation_check["verified"])
+        )
+        self._event(
+            item.project_id,
+            "validation_profiles_completed",
+            (
+                f"{len(validation_checks)} perfiles de validación completados."
+                if profiles_passed
+                else "Al menos un perfil de validación falló."
+            ),
+            work_item_id=item.id,
+            attempt=item.attempt_count,
+            error=None if profiles_passed else "Validation profile failed",
+            metadata={
+                "profiles": [check["profile"] for check in validation_checks],
+                "passed": profiles_passed,
+            },
+            correlation_id=correlation_id,
+        )
+        report_passed = self._technical_evidence_passed(
+            file_verified=file_verified,
+            profiles_passed=profiles_passed,
+        )
+        try:
+            test_response, tester_run = await self._call_role(
+                AgentRole.TESTER,
+                ModelRequest(
+                    operation="test",
+                    project_id=item.project_id,
+                    work_item_id=item.id,
+                    attempt=item.attempt_count,
+                    payload={
+                        "artifact": artifact.content,
+                        "file_verified": file_verified,
+                        "workspace_files": workspace_checks,
+                        "validation_profiles": validation_checks,
+                        "isolation": isolation_check,
+                        "acceptance_criteria": item.acceptance_criteria,
+                    },
+                ),
+                correlation_id,
+            )
+        except RoleExecutionError as exc:
+            self._reject_evaluation(item, correlation_id, str(exc))
+            return
+        try:
+            test_proposal = self._validate_test(test_response.content)
+        except InvalidPlan as exc:
+            test_proposal = self._fallback_test_evaluation(
+                report_passed=report_passed,
+                reason=str(exc),
+            )
+            self._event(
+                item.project_id,
+                "tester_explanation_normalized",
+                (
+                    "La explicación del tester no cumplió el contrato; "
+                    "se conservó el resultado de la compuerta técnica fija."
+                ),
                 work_item_id=item.id,
                 attempt=item.attempt_count,
-                payload={
-                    "artifact": artifact.content,
-                    "file_verified": file_verified,
-                    "acceptance_criteria": item.acceptance_criteria,
-                },
-            ),
-            correlation_id,
-        )
+                error=str(exc),
+                correlation_id=correlation_id,
+            )
         report = TestReport(
             project_id=item.project_id,
             work_item_id=item.id,
             artifact_id=artifact.id,
             tester_run_id=tester_run.id,
-            passed=bool(test_response.content["passed"]),
-            checks=list(test_response.content["checks"]),
+            passed=report_passed,
+            checks=[
+                {
+                    "name": "fixed_evidence_gate",
+                    "passed": report_passed,
+                    "evidence": (
+                        "Checksums, aislamiento y perfiles locales son la fuente de verdad."
+                    ),
+                },
+                {
+                    "name": "model_assessment",
+                    "passed": test_proposal.passed,
+                    "evidence": "Evaluación explicativa del tester local.",
+                },
+                *[
+                    check.model_dump(mode="json")
+                    for check in test_proposal.checks
+                ],
+            ],
             command_evidence=[
                 {
                     "check": "materialized_file_checksum",
                     "path": path,
-                    "verified": file_verified,
-                }
+                    "verified": control_verified,
+                },
+                *workspace_checks,
+                *validation_checks,
+                isolation_check,
             ],
-            summary=str(test_response.content["summary"]),
+            summary=test_proposal.summary,
         )
         self.repository.add_test_report(report)
 
-        review_response, reviewer_run = await self._call_role(
-            AgentRole.CRITICAL_REVIEWER,
-            ModelRequest(
-                operation="review",
-                project_id=item.project_id,
+        semantic_review_criteria = self._semantic_review_criteria(
+            item.acceptance_criteria,
+            report_passed=report.passed,
+        )
+        try:
+            review_response, reviewer_run = await self._call_role(
+                AgentRole.CRITICAL_REVIEWER,
+                ModelRequest(
+                    operation="review",
+                    project_id=item.project_id,
+                    work_item_id=item.id,
+                    attempt=item.attempt_count,
+                    payload=self._review_payload(
+                        artifact.content,
+                        [
+                            file.model_dump(mode="json")
+                            for file in work_proposal.files
+                        ],
+                        semantic_review_criteria,
+                    ),
+                ),
+                correlation_id,
+            )
+        except RoleExecutionError as exc:
+            self._reject_evaluation(item, correlation_id, str(exc))
+            return
+        try:
+            review_fragments, initial_review_error = (
+                self._recover_initial_review_fragment(
+                    review_response.content,
+                    semantic_review_criteria,
+                )
+            )
+            covered_criteria = {
+                criterion
+                for fragment in review_fragments
+                for criterion in fragment.acceptance_results
+            }
+            missing_criteria = [
+                criterion
+                for criterion in semantic_review_criteria
+                if criterion not in covered_criteria
+            ]
+            for criterion in missing_criteria:
+                fragment_response, _ = await self._call_role(
+                    AgentRole.CRITICAL_REVIEWER,
+                    ModelRequest(
+                        operation="review",
+                        project_id=item.project_id,
+                        work_item_id=item.id,
+                        attempt=item.attempt_count,
+                        payload=self._review_payload(
+                            artifact.content,
+                            [
+                                file.model_dump(mode="json")
+                                for file in work_proposal.files
+                            ],
+                            [criterion],
+                        ),
+                    ),
+                    correlation_id,
+                )
+                try:
+                    fragment = self._validate_focused_review(
+                        fragment_response.content,
+                        criterion,
+                    )
+                except InvalidPlan:
+                    fragment = ReviewEvaluationProposal(
+                        verdict=ReviewVerdict.CHANGES_REQUESTED.value,
+                        reasons=[
+                            (
+                                "El revisor local no aportó una respuesta focalizada "
+                                f"válida para: {criterion}"
+                            )
+                        ],
+                        acceptance_results={criterion: False},
+                    )
+                review_fragments.append(
+                    fragment
+                )
+            if not report.passed:
+                covered_criteria = {
+                    criterion
+                    for fragment in review_fragments
+                    for criterion in fragment.acceptance_results
+                }
+                for criterion in item.acceptance_criteria:
+                    if criterion in covered_criteria:
+                        continue
+                    review_fragments.append(
+                        ReviewEvaluationProposal(
+                            verdict=ReviewVerdict.CHANGES_REQUESTED.value,
+                            reasons=[
+                                (
+                                    "La compuerta técnica ya rechazó la entrega; "
+                                    "el criterio queda pendiente del próximo intento."
+                                )
+                            ],
+                            acceptance_results={criterion: False},
+                        )
+                    )
+            review_proposal = self._merge_review_fragments(
+                review_fragments,
+                item.acceptance_criteria,
+            )
+        except (InvalidPlan, RoleExecutionError) as exc:
+            self._reject_evaluation(item, correlation_id, str(exc))
+            return
+        if initial_review_error is not None:
+            self._event(
+                item.project_id,
+                "review_initial_response_recovered",
+                (
+                    "La respuesta inicial del revisor no cumpliÃ³ el contrato; "
+                    "se reevaluaron individualmente todos los criterios."
+                ),
                 work_item_id=item.id,
                 attempt=item.attempt_count,
-                payload={
-                    "artifact": artifact.content,
-                    "acceptance_criteria": item.acceptance_criteria,
-                    "test_report": report.model_dump(mode="json"),
-                },
-            ),
-            correlation_id,
+                error=initial_review_error,
+                metadata={"criteria": missing_criteria},
+                correlation_id=correlation_id,
+            )
+        if missing_criteria:
+            self._event(
+                item.project_id,
+                "review_coverage_recovered",
+                (
+                    f"Se recuperaron {len(missing_criteria)} criterios omitidos "
+                    "mediante revisiones focalizadas."
+                ),
+                work_item_id=item.id,
+                attempt=item.attempt_count,
+                metadata={"criteria": missing_criteria},
+                correlation_id=correlation_id,
+            )
+        review_proposal = self._apply_technical_review_gate(
+            review_proposal,
+            item.acceptance_criteria,
+            report_passed=report.passed,
+            validation_checks=validation_checks,
         )
+        raw_verdict = review_response.content.get("verdict")
+        if raw_verdict != review_proposal.verdict:
+            self._event(
+                item.project_id,
+                "review_verdict_normalized",
+                (
+                    "El veredicto del revisor se ajustó para coincidir con sus "
+                    "resultados de aceptación."
+                ),
+                work_item_id=item.id,
+                attempt=item.attempt_count,
+                metadata={
+                    "raw_verdict": raw_verdict,
+                    "normalized_verdict": review_proposal.verdict,
+                },
+                correlation_id=correlation_id,
+            )
         review = Review(
             project_id=item.project_id,
             work_item_id=item.id,
             artifact_id=artifact.id,
             reviewer_run_id=reviewer_run.id,
-            verdict=ReviewVerdict(str(review_response.content["verdict"])),
-            reasons=[str(value) for value in review_response.content["reasons"]],
-            acceptance_results={
-                str(key): bool(value)
-                for key, value in review_response.content["acceptance_results"].items()
-            },
+            verdict=ReviewVerdict(review_proposal.verdict),
+            reasons=review_proposal.reasons,
+            acceptance_results=review_proposal.acceptance_results,
         )
         self.repository.add_review(review)
 
         if report.passed and review.verdict is ReviewVerdict.APPROVED:
+            try:
+                integration = await self.isolation.integrate(changes)
+                integrated_evidence = self.workspace.project_evidence(
+                    item.project_id,
+                    work_proposal.files,
+                )
+            except (IsolationError, WorkspaceRejected) as exc:
+                self._event(
+                    item.project_id,
+                    "change_integration_failed",
+                    f"No se pudo integrar el cambio aislado: {exc}",
+                    work_item_id=item.id,
+                    attempt=item.attempt_count,
+                    error=str(exc),
+                    correlation_id=correlation_id,
+                )
+                self._request_changes(
+                    item,
+                    correlation_id,
+                    f"Falló la integración aislada: {exc}",
+                )
+                return
+            self.repository.update_artifact_file_paths(
+                artifact.id,
+                [path, *(evidence.path for evidence in integrated_evidence)],
+            )
+            self._event(
+                item.project_id,
+                "change_set_integrated",
+                f"Cambio aislado integrado en main ({integration.commit[:12]}).",
+                work_item_id=item.id,
+                attempt=item.attempt_count,
+                metadata={
+                    "branch": changes.session.branch,
+                    "candidate_commit": changes.commit,
+                    "integration_commit": integration.commit,
+                    "files": list(integration.files),
+                },
+                correlation_id=correlation_id,
+            )
             item = self._transition(item, WorkItemStatus.PASSED, correlation_id)
             self._transition(item, WorkItemStatus.COMPLETED, correlation_id)
             return
@@ -388,16 +1034,73 @@ class Orchestrator:
             attempt=item.attempt_count,
             correlation_id=correlation_id,
         )
+        self._request_changes(
+            item,
+            correlation_id,
+            "; ".join(review.reasons),
+        )
+
+    def _fail_planning(
+        self,
+        project_id: str,
+        correlation_id: str,
+        reason: str,
+    ) -> Project:
+        result = self.repository.update_project_status(project_id, ProjectStatus.FAILED)
+        self._event(
+            project_id,
+            "planning_failed",
+            f"La planificación no pudo completarse: {reason}",
+            previous=ProjectStatus.PLANNING.value,
+            new=ProjectStatus.FAILED.value,
+            error=reason,
+            correlation_id=correlation_id,
+        )
+        return result
+
+    def _reject_evaluation(
+        self,
+        item: WorkItem,
+        correlation_id: str,
+        reason: str,
+    ) -> None:
+        self._event(
+            item.project_id,
+            "evaluation_response_rejected",
+            f"La evaluación del modelo fue rechazada: {reason}",
+            work_item_id=item.id,
+            attempt=item.attempt_count,
+            error=reason,
+            correlation_id=correlation_id,
+        )
+        self._request_changes(item, correlation_id, reason)
+
+    def _request_changes(
+        self,
+        item: WorkItem,
+        correlation_id: str,
+        reason: str,
+    ) -> None:
         item = self._transition(
             item,
             WorkItemStatus.CHANGES_REQUESTED,
             correlation_id,
-            error="; ".join(review.reasons),
+            error=reason,
         )
         if item.attempt_count < item.max_attempts:
-            self._transition(item, WorkItemStatus.READY, correlation_id)
+            self._transition(
+                item,
+                WorkItemStatus.READY,
+                correlation_id,
+                error=reason,
+            )
         else:
-            self._transition(item, WorkItemStatus.FAILED, correlation_id)
+            self._transition(
+                item,
+                WorkItemStatus.FAILED,
+                correlation_id,
+                error=reason,
+            )
 
     async def _call_role(
         self,
@@ -496,6 +1199,7 @@ class Orchestrator:
         attempt: int | None = None,
         error: str | None = None,
         resource_usage: Any = None,
+        metadata: dict[str, Any] | None = None,
         correlation_id: str,
     ) -> None:
         self.repository.add_event(
@@ -513,56 +1217,463 @@ class Orchestrator:
                 error=error,
                 resource_usage=resource_usage,
                 correlation_id=correlation_id,
+                metadata=metadata or {},
             )
         )
 
     @staticmethod
-    def _validate_plan(content: dict[str, Any]) -> list[dict[str, Any]]:
-        if "milestone" not in content or "tasks" not in content:
-            raise InvalidPlan("Plan must contain milestone and tasks")
-        tasks = content["tasks"]
-        if not isinstance(tasks, list) or not tasks:
-            raise InvalidPlan("Plan must contain at least one task")
-        keys = [str(task.get("key", "")) for task in tasks]
-        if len(set(keys)) != len(keys) or any(not key for key in keys):
-            raise InvalidPlan("Task keys must be non-empty and unique")
-        titles = [str(task.get("title", "")).strip().casefold() for task in tasks]
-        if len(set(titles)) != len(titles):
-            raise InvalidPlan("Repeated task detected")
-        known = set(keys)
-        graph: dict[str, list[str]] = {}
-        required = {
-            "key",
-            "title",
-            "description",
-            "dependencies",
-            "expected_outputs",
-            "acceptance_criteria",
-            "risk",
-            "priority",
+    def _validate_plan(content: dict[str, Any]) -> PlanProposal:
+        try:
+            return PlanProposal.model_validate(content)
+        except ValidationError as exc:
+            raise InvalidPlan(f"Invalid project plan: {exc}") from exc
+
+    @staticmethod
+    def _ensure_plan_covers_brief(
+        plan: PlanProposal,
+        brief: ProjectBrief,
+    ) -> tuple[PlanProposal, list[str], list[str], list[str]]:
+        outputs = {
+            Orchestrator._planning_entry_key(output)
+            for task in plan.tasks
+            for output in task.expected_outputs
         }
-        for task in tasks:
-            missing = required - set(task)
-            if missing:
-                raise InvalidPlan(f"Task is missing fields: {sorted(missing)}")
-            dependencies = [str(value) for value in task["dependencies"]]
-            if not set(dependencies).issubset(known):
-                raise InvalidPlan("Task references an unknown dependency")
-            graph[str(task["key"])] = dependencies
-        visiting: set[str] = set()
-        visited: set[str] = set()
+        criteria = {
+            Orchestrator._planning_entry_key(criterion)
+            for task in plan.tasks
+            for criterion in task.acceptance_criteria
+        }
+        missing_deliverables = [
+            deliverable
+            for deliverable in brief.deliverables
+            if Orchestrator._planning_entry_key(deliverable) not in outputs
+        ]
+        missing_scope = [
+            scope_entry
+            for scope_entry in brief.scope
+            if Orchestrator._planning_entry_key(scope_entry) not in criteria
+        ]
+        missing_success_criteria = [
+            criterion
+            for criterion in brief.success_criteria
+            if Orchestrator._planning_entry_key(criterion) not in criteria
+        ]
+        if (
+            not missing_deliverables
+            and not missing_scope
+            and not missing_success_criteria
+        ):
+            return plan, [], [], []
 
-        def visit(node: str) -> None:
-            if node in visiting:
-                raise InvalidPlan("Task dependency graph contains a cycle")
-            if node in visited:
-                return
-            visiting.add(node)
-            for dependency in graph[node]:
-                visit(dependency)
-            visiting.remove(node)
-            visited.add(node)
+        depended_on = {
+            dependency
+            for task in plan.tasks
+            for dependency in task.dependencies
+        }
+        terminal_keys = [
+            task.key
+            for task in plan.tasks
+            if task.key not in depended_on
+        ]
+        existing_keys = {task.key for task in plan.tasks}
+        closing_key = "complete_project_delivery"
+        suffix = 2
+        while closing_key in existing_keys:
+            closing_key = f"complete_project_delivery_{suffix}"
+            suffix += 1
 
-        for key in keys:
-            visit(key)
-        return tasks
+        closing_title = "Completar y verificar la entrega del proyecto"
+        existing_titles = {
+            task.title.strip().casefold()
+            for task in plan.tasks
+        }
+        if closing_title.casefold() in existing_titles:
+            closing_title = f"{closing_title} ({suffix - 1})"
+
+        closing_task = TaskProposal(
+            key=closing_key,
+            title=closing_title,
+            description=(
+                "Integrar los resultados anteriores y materializar el contrato "
+                f"completo del brief: {brief.summary}"
+            ),
+            dependencies=terminal_keys,
+            expected_outputs=list(brief.deliverables),
+            acceptance_criteria=Orchestrator._unique_planning_entries(
+                [*brief.scope, *brief.success_criteria]
+            ),
+            risk=RiskLevel.MEDIUM,
+            priority=70,
+        )
+        completed_plan = PlanProposal.model_validate(
+            {
+                "milestone": plan.milestone.model_dump(mode="json"),
+                "tasks": [
+                    task.model_dump(mode="json")
+                    for task in [*plan.tasks, closing_task]
+                ],
+            }
+        )
+        return (
+            completed_plan,
+            missing_deliverables,
+            missing_scope,
+            missing_success_criteria,
+        )
+
+    @staticmethod
+    def _project_contract_gaps(
+        project: Project,
+        items: list[WorkItem],
+    ) -> tuple[list[str], list[str], list[str]]:
+        brief = project.brief
+        if brief is None:
+            return [], [], []
+        outputs = {
+            Orchestrator._planning_entry_key(output)
+            for item in items
+            for output in item.expected_outputs
+        }
+        criteria = {
+            Orchestrator._planning_entry_key(criterion)
+            for item in items
+            for criterion in item.acceptance_criteria
+        }
+        return (
+            [
+                deliverable
+                for deliverable in brief.deliverables
+                if Orchestrator._planning_entry_key(deliverable) not in outputs
+            ],
+            [
+                scope_entry
+                for scope_entry in brief.scope
+                if Orchestrator._planning_entry_key(scope_entry) not in criteria
+            ],
+            [
+                criterion
+                for criterion in brief.success_criteria
+                if Orchestrator._planning_entry_key(criterion) not in criteria
+            ],
+        )
+
+    @staticmethod
+    def _planning_entry_key(value: str) -> str:
+        return " ".join(value.split()).casefold()
+
+    @staticmethod
+    def _unique_planning_entries(values: list[str]) -> list[str]:
+        unique: list[str] = []
+        seen: set[str] = set()
+        for value in values:
+            key = Orchestrator._planning_entry_key(value)
+            if key in seen:
+                continue
+            seen.add(key)
+            unique.append(value)
+        return unique
+
+    @staticmethod
+    def _validate_work(content: dict[str, Any]) -> WorkArtifactProposal:
+        try:
+            return WorkArtifactProposal.model_validate(content)
+        except ValidationError as exc:
+            raise InvalidPlan(f"Invalid workspace artifact: {exc}") from exc
+
+    @staticmethod
+    def _candidate_matches_artifact(
+        proposal: WorkArtifactProposal,
+        artifact: Artifact,
+    ) -> bool:
+        previous_files = artifact.content.get("files", [])
+        if not isinstance(previous_files, list):
+            return False
+        previous = {
+            str(file.get("path", "")).casefold(): str(file.get("content", ""))
+            for file in previous_files
+            if isinstance(file, dict) and str(file.get("path", "")).strip()
+        }
+        current = {
+            file.path.casefold(): file.content
+            for file in proposal.files
+        }
+        return bool(previous) and current == previous
+
+    @staticmethod
+    def _recovery_work_proposal(
+        artifact: Artifact,
+        item: WorkItem,
+        *,
+        approved_dependency_artifact_ids: set[str] | None = None,
+    ) -> WorkArtifactProposal:
+        same_task = artifact.work_item_id == item.id
+        approved_dependency = (
+            artifact.work_item_id in item.dependency_ids
+            and artifact.id in (approved_dependency_artifact_ids or set())
+        )
+        if artifact.project_id != item.project_id or not (
+            same_task or approved_dependency
+        ):
+            raise ValueError(
+                "Artifact must belong to the task or an approved direct dependency"
+            )
+        content = {
+            key: value
+            for key, value in artifact.content.items()
+            if key != "isolation"
+        }
+        return Orchestrator._validate_work(content)
+
+    @staticmethod
+    def _validate_test(content: dict[str, Any]) -> TestEvaluationProposal:
+        try:
+            return TestEvaluationProposal.model_validate(content)
+        except ValidationError as exc:
+            raise InvalidPlan(f"Invalid tester evaluation: {exc}") from exc
+
+    @staticmethod
+    def _fallback_test_evaluation(
+        *,
+        report_passed: bool,
+        reason: str,
+    ) -> TestEvaluationProposal:
+        return TestEvaluationProposal(
+            passed=report_passed,
+            checks=[
+                {
+                    "name": "model_explanation_contract",
+                    "passed": False,
+                    "evidence": reason[:2000] or "Invalid tester explanation",
+                }
+            ],
+            summary=(
+                "La explicación del modelo fue inválida; el resultado se derivó "
+                "exclusivamente de checksums, aislamiento y perfiles locales."
+            ),
+        )
+
+    @staticmethod
+    def _work_declaration_matches_item(
+        proposal: WorkArtifactProposal,
+        item: WorkItem,
+    ) -> bool:
+        addressed = set(proposal.acceptance_criteria_addressed)
+        current_criteria = set(item.acceptance_criteria)
+        return not current_criteria or bool(addressed.intersection(current_criteria))
+
+    @staticmethod
+    def _technical_evidence_passed(
+        *,
+        file_verified: bool,
+        profiles_passed: bool,
+    ) -> bool:
+        return file_verified and profiles_passed
+
+    @staticmethod
+    def _semantic_review_criteria(
+        criteria: list[str],
+        *,
+        report_passed: bool,
+    ) -> list[str]:
+        if report_passed:
+            return criteria
+        return criteria[:3]
+
+    @staticmethod
+    def _apply_technical_review_gate(
+        proposal: ReviewEvaluationProposal,
+        criteria: list[str],
+        *,
+        report_passed: bool,
+        validation_checks: list[dict[str, object]],
+    ) -> ReviewEvaluationProposal:
+        if report_passed:
+            return proposal
+        failed_profiles = [
+            check
+            for check in validation_checks
+            if not bool(check.get("passed"))
+        ]
+        details: list[str] = []
+        for check in failed_profiles:
+            output = str(
+                check.get("stderr")
+                or check.get("stdout")
+                or ""
+            ).strip()
+            profile = str(check.get("profile") or "unknown")
+            details.append(f"{profile}: {output[:1200] or 'sin detalle'}")
+        reason = "La compuerta técnica fija rechazó la entrega"
+        if details:
+            reason = f"{reason}. {'; '.join(details)}"
+        return ReviewEvaluationProposal(
+            verdict=ReviewVerdict.CHANGES_REQUESTED.value,
+            reasons=[reason, *proposal.reasons][:20],
+            acceptance_results={criterion: False for criterion in criteria},
+        )
+
+    @staticmethod
+    def _review_payload(
+        artifact: dict[str, Any],
+        workspace_file_contents: list[dict[str, Any]],
+        acceptance_criteria: list[str],
+    ) -> dict[str, Any]:
+        """Keep technical model opinions out of the semantic review."""
+        semantic_artifact = {
+            key: value
+            for key, value in artifact.items()
+            if key
+            not in {
+                "acceptance_criteria_addressed",
+                "evidence",
+                "isolation",
+            }
+        }
+        return {
+            "artifact": semantic_artifact,
+            "workspace_file_contents": workspace_file_contents,
+            "acceptance_criteria": acceptance_criteria,
+        }
+
+    @staticmethod
+    def _validate_review(
+        content: dict[str, Any],
+        acceptance_criteria: list[str],
+    ) -> ReviewEvaluationProposal:
+        proposal = Orchestrator._validate_review_fragment(
+            content,
+            acceptance_criteria,
+        )
+        if set(proposal.acceptance_results) != set(acceptance_criteria):
+            raise InvalidPlan(
+                "Reviewer acceptance_results must cover every acceptance criterion exactly"
+            )
+        return Orchestrator._merge_review_fragments(
+            [proposal],
+            acceptance_criteria,
+        )
+
+    @staticmethod
+    def _validate_review_fragment(
+        content: dict[str, Any],
+        allowed_criteria: list[str],
+    ) -> ReviewEvaluationProposal:
+        try:
+            proposal = ReviewEvaluationProposal.model_validate(content)
+        except ValidationError as exc:
+            raise InvalidPlan(f"Invalid reviewer evaluation: {exc}") from exc
+        unexpected = set(proposal.acceptance_results) - set(allowed_criteria)
+        if unexpected:
+            raise InvalidPlan(
+                "Reviewer acceptance_results contained unexpected criteria: "
+                + "; ".join(sorted(unexpected))
+            )
+        return proposal
+
+    @staticmethod
+    def _validate_focused_review(
+        content: dict[str, Any],
+        criterion: str,
+    ) -> ReviewEvaluationProposal:
+        try:
+            return Orchestrator._validate_review(content, [criterion])
+        except InvalidPlan as original_error:
+            raw_results = content.get("acceptance_results")
+            result_values = (
+                [
+                    value
+                    for value in raw_results.values()
+                    if isinstance(value, bool)
+                ]
+                if isinstance(raw_results, dict)
+                else []
+            )
+            raw_value: bool | None = None
+            if result_values and all(
+                value is result_values[0]
+                for value in result_values
+            ):
+                raw_value = result_values[0]
+            raw_verdict = content.get("verdict")
+            if raw_value is None and raw_verdict in {
+                ReviewVerdict.APPROVED.value,
+                ReviewVerdict.CHANGES_REQUESTED.value,
+            }:
+                raw_value = raw_verdict == ReviewVerdict.APPROVED.value
+            if raw_value is None:
+                raise original_error
+            raw_reasons = content.get("reasons")
+            reasons = (
+                [
+                    reason
+                    for reason in raw_reasons
+                    if isinstance(reason, str) and reason.strip()
+                ]
+                if isinstance(raw_reasons, list)
+                else []
+            )
+            if not reasons:
+                raise original_error
+            return ReviewEvaluationProposal(
+                verdict=(
+                    ReviewVerdict.APPROVED.value
+                    if raw_value
+                    else ReviewVerdict.CHANGES_REQUESTED.value
+                ),
+                reasons=(
+                    reasons[:20]
+                ),
+                acceptance_results={criterion: raw_value},
+            )
+
+    @staticmethod
+    def _recover_initial_review_fragment(
+        content: dict[str, Any],
+        allowed_criteria: list[str],
+    ) -> tuple[list[ReviewEvaluationProposal], str | None]:
+        try:
+            fragment = Orchestrator._validate_review_fragment(
+                content,
+                allowed_criteria,
+            )
+        except InvalidPlan as exc:
+            return [], str(exc)
+        return [fragment], None
+
+    @staticmethod
+    def _merge_review_fragments(
+        proposals: list[ReviewEvaluationProposal],
+        acceptance_criteria: list[str],
+    ) -> ReviewEvaluationProposal:
+        combined_results: dict[str, bool] = {}
+        combined_reasons: list[str] = []
+        for proposal in proposals:
+            combined_results.update(proposal.acceptance_results)
+            for reason in proposal.reasons:
+                if reason not in combined_reasons:
+                    combined_reasons.append(reason)
+        if set(combined_results) != set(acceptance_criteria):
+            raise InvalidPlan(
+                "Reviewer acceptance_results must cover every acceptance criterion exactly"
+            )
+        expected_verdict = (
+            ReviewVerdict.APPROVED.value
+            if all(combined_results.values())
+            else ReviewVerdict.CHANGES_REQUESTED.value
+        )
+        if not combined_reasons:
+            combined_reasons = [
+                (
+                    "Todos los criterios de aceptación fueron satisfechos."
+                    if expected_verdict == ReviewVerdict.APPROVED.value
+                    else "Al menos un criterio de aceptación no fue satisfecho."
+                )
+            ]
+        return ReviewEvaluationProposal(
+            verdict=expected_verdict,
+            reasons=combined_reasons[:20],
+            acceptance_results={
+                criterion: combined_results[criterion]
+                for criterion in acceptance_criteria
+            },
+        )
