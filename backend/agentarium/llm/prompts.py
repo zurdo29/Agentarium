@@ -17,7 +17,7 @@ from agentarium.planning import BriefProposal, PlanProposal
 from .base import ModelRequest
 
 PLANNING_PROMPT_VERSION = "planning-v2"
-WORKSPACE_PROMPT_VERSION = "workspace-v4"
+WORKSPACE_PROMPT_VERSION = "workspace-v5"
 
 _OPERATION_CONTRACTS: dict[str, type[BaseModel]] = {
     "brief": BriefProposal,
@@ -74,7 +74,12 @@ _OPERATION_INSTRUCTIONS = {
         "comportamiento ejecutable concreto y no entregues TODOs, placeholders, "
         "funciones vacías ni comentarios del tipo 'logic here'. "
         "No propongas comandos y copia literalmente en acceptance_criteria_addressed "
-        "cada criterio de la tarea que la entrega cubre."
+        "cada criterio de la tarea que la entrega cubre. "
+        "SOLICITUD.payload.project.decisions es un registro interno de gestión del "
+        "propio Agentarium (por ejemplo, la decisión de ejecutar un único hito "
+        "vertical); nunca es contenido de dominio ni una decisión de arquitectura "
+        "del producto solicitado. No lo copies, resumas ni adaptes como si fuera "
+        "parte del entregable."
     ),
     "test": (
         "Valida únicamente evidencia técnica: file_verified, checksums, aislamiento y "
@@ -88,6 +93,10 @@ _OPERATION_INSTRUCTIONS = {
         "Las adaptaciones explícitas de acceptance_criteria son intencionales y "
         "prevalecen sobre convenciones de la obra base; nunca rechaces un criterio "
         "porque se aleje de la versión tradicional. "
+        "Si dependency_artifacts no está vacío, compara explícitamente su contenido "
+        "contra artifact.files[].content: rechaza si el artefacto actual contradice, "
+        "duplica de forma distinta o redefine datos, cifras o términos ya establecidos "
+        "en una dependencia aprobada. "
         "acceptance_results debe contener exacta y únicamente las claves recibidas en "
         "acceptance_criteria, sin agregar checks técnicos. No exijas entregables fuera "
         "del alcance de la tarea actual."

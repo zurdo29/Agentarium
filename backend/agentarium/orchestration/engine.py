@@ -57,6 +57,11 @@ TERMINAL_TASK_STATES = {
     WorkItemStatus.CANCELLED,
 }
 
+DEPENDENCY_CONSISTENCY_CRITERION = (
+    "El artefacto no contradice ni redefine de forma distinta datos, cifras "
+    "o terminos ya establecidos en sus artefactos dependientes aprobados."
+)
+
 
 class InvalidPlan(ValueError):
     pass
@@ -394,6 +399,12 @@ class Orchestrator:
                 raise InvalidPlan(
                     "Retry candidate files are byte-for-byte identical to the "
                     "previous rejected candidate"
+                )
+            colliding_paths = self._colliding_dependency_paths(item, work_proposal)
+            if colliding_paths:
+                raise InvalidPlan(
+                    "Workspace file paths collide with files already owned by "
+                    "an unrelated task: " + ", ".join(sorted(colliding_paths))
                 )
             if not self._work_declaration_matches_item(work_proposal, item):
                 self._event(
@@ -811,8 +822,14 @@ class Orchestrator:
         )
         self.repository.add_test_report(report)
 
+        dependency_artifacts = self.memory.dependency_artifacts(item)
+        effective_criteria = (
+            [*item.acceptance_criteria, DEPENDENCY_CONSISTENCY_CRITERION]
+            if dependency_artifacts
+            else list(item.acceptance_criteria)
+        )
         semantic_review_criteria = self._semantic_review_criteria(
-            item.acceptance_criteria,
+            effective_criteria,
             report_passed=report.passed,
         )
         try:
@@ -830,6 +847,7 @@ class Orchestrator:
                             for file in work_proposal.files
                         ],
                         semantic_review_criteria,
+                        dependency_artifacts,
                     ),
                 ),
                 correlation_id,
@@ -869,6 +887,7 @@ class Orchestrator:
                                 for file in work_proposal.files
                             ],
                             [criterion],
+                            dependency_artifacts,
                         ),
                     ),
                     correlation_id,
@@ -898,7 +917,7 @@ class Orchestrator:
                     for fragment in review_fragments
                     for criterion in fragment.acceptance_results
                 }
-                for criterion in item.acceptance_criteria:
+                for criterion in effective_criteria:
                     if criterion in covered_criteria:
                         continue
                     review_fragments.append(
@@ -915,7 +934,7 @@ class Orchestrator:
                     )
             review_proposal = self._merge_review_fragments(
                 review_fragments,
-                item.acceptance_criteria,
+                effective_criteria,
             )
         except (InvalidPlan, RoleExecutionError) as exc:
             self._reject_evaluation(item, correlation_id, str(exc))
@@ -949,7 +968,7 @@ class Orchestrator:
             )
         review_proposal = self._apply_technical_review_gate(
             review_proposal,
-            item.acceptance_criteria,
+            effective_criteria,
             report_passed=report.passed,
             validation_checks=validation_checks,
         )
@@ -1399,6 +1418,48 @@ class Orchestrator:
         }
         return bool(previous) and current == previous
 
+    def _colliding_dependency_paths(
+        self,
+        item: WorkItem,
+        proposal: WorkArtifactProposal,
+    ) -> set[str]:
+        allowed_work_item_ids = {item.id, *self._transitive_dependency_ids(item)}
+        owners: dict[str, str] = {}
+        for artifact in self.repository.list_artifacts(item.project_id):
+            if artifact.work_item_id in allowed_work_item_ids:
+                continue
+            files = artifact.content.get("files", [])
+            if not isinstance(files, list):
+                continue
+            for file in files:
+                if not isinstance(file, dict):
+                    continue
+                path = str(file.get("path", "")).strip().casefold()
+                if path:
+                    owners[path] = artifact.work_item_id
+        return {
+            file.path
+            for file in proposal.files
+            if file.path.casefold() in owners
+        }
+
+    def _transitive_dependency_ids(self, item: WorkItem) -> set[str]:
+        by_id = {
+            candidate.id: candidate
+            for candidate in self.repository.list_work_items(item.project_id)
+        }
+        seen: set[str] = set()
+        pending = list(item.dependency_ids)
+        while pending:
+            dependency_id = pending.pop()
+            if dependency_id in seen:
+                continue
+            seen.add(dependency_id)
+            dependency = by_id.get(dependency_id)
+            if dependency is not None:
+                pending.extend(dependency.dependency_ids)
+        return seen
+
     @staticmethod
     def _recovery_work_proposal(
         artifact: Artifact,
@@ -1517,6 +1578,7 @@ class Orchestrator:
         artifact: dict[str, Any],
         workspace_file_contents: list[dict[str, Any]],
         acceptance_criteria: list[str],
+        dependency_artifacts: list[dict[str, Any]],
     ) -> dict[str, Any]:
         """Keep technical model opinions out of the semantic review."""
         semantic_artifact = {
@@ -1533,6 +1595,7 @@ class Orchestrator:
             "artifact": semantic_artifact,
             "workspace_file_contents": workspace_file_contents,
             "acceptance_criteria": acceptance_criteria,
+            "dependency_artifacts": dependency_artifacts,
         }
 
     @staticmethod

@@ -1,5 +1,6 @@
 import pytest
 from agentarium.domain.enums import ProjectStatus, ReviewVerdict, WorkItemStatus
+from agentarium.orchestration.engine import DEPENDENCY_CONSISTENCY_CRITERION
 from agentarium.services import ApplicationService
 
 
@@ -102,3 +103,36 @@ async def test_completed_work_is_persisted_and_not_repeated(
 
     assert second_result.status is ProjectStatus.COMPLETED
     assert attempts_after == attempts_before
+
+
+@pytest.mark.asyncio
+async def test_dependency_consistency_criterion_only_applies_when_relevant(
+    service: ApplicationService,
+) -> None:
+    project = service.create_project("Crear un resultado persistente")
+    await service.run_project(project.id)
+
+    items = {
+        item.id: item
+        for item in service.repository.list_work_items(project.id)
+    }
+    reviews = service.repository.list_reviews(project.id)
+    with_dependencies = [
+        review for review in reviews if items[review.work_item_id].dependency_ids
+    ]
+    without_dependencies = [
+        review
+        for review in reviews
+        if not items[review.work_item_id].dependency_ids
+    ]
+
+    assert with_dependencies
+    assert without_dependencies
+    assert all(
+        DEPENDENCY_CONSISTENCY_CRITERION in review.acceptance_results
+        for review in with_dependencies
+    )
+    assert all(
+        DEPENDENCY_CONSISTENCY_CRITERION not in review.acceptance_results
+        for review in without_dependencies
+    )

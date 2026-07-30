@@ -250,3 +250,52 @@ def test_operational_context_excludes_dependency_with_foreign_criteria(
 
     assert context["dependency_artifacts"] == []
     assert context["dependency_references"] == []
+
+
+def test_dependency_artifacts_includes_approved_work_with_empty_addressed_list() -> None:
+    artifact = Artifact(
+        id="approved-no-addressed",
+        project_id="project",
+        work_item_id="dependency",
+        agent_run_id="worker",
+        artifact_type="Design",
+        title="Entrega aprobada sin acceptance_criteria_addressed",
+        content={
+            "files": [],
+            "acceptance_criteria_addressed": [],
+        },
+    )
+    review = Review(
+        project_id="project",
+        work_item_id="dependency",
+        artifact_id=artifact.id,
+        reviewer_run_id="reviewer",
+        verdict=ReviewVerdict.APPROVED,
+        reasons=["Aprobado por el revisor."],
+        acceptance_results={"Diseño listo": True},
+    )
+    dependency = WorkItem(
+        id="dependency",
+        project_id="project",
+        milestone_id="milestone",
+        title="Diseñar",
+        description="Crear diseño",
+        expected_outputs=["Diseño"],
+        acceptance_criteria=["Diseño listo"],
+    )
+    repository = ContextRepository([artifact], [review], [dependency])
+    builder = ContextBuilder(cast(Repository, repository))
+    item = WorkItem(
+        id="current",
+        project_id="project",
+        milestone_id="milestone",
+        title="Crear juego",
+        description="Implementar lógica",
+        expected_outputs=["Código"],
+        dependency_ids=["dependency"],
+        acceptance_criteria=["Juego funcional"],
+    )
+
+    dependency_artifacts = builder.dependency_artifacts(item)
+
+    assert [entry["id"] for entry in dependency_artifacts] == ["approved-no-addressed"]

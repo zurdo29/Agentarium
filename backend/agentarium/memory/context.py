@@ -12,7 +12,7 @@ class ContextBuilder:
     def __init__(self, repository: Repository) -> None:
         self.repository = repository
 
-    def operational(self, item: WorkItem) -> dict[str, Any]:
+    def dependency_artifacts(self, item: WorkItem) -> list[dict[str, Any]]:
         reviews = self.repository.list_reviews(item.project_id)
         approved_dependency_artifact_ids = {
             review.artifact_id
@@ -26,14 +26,38 @@ class ContextBuilder:
             )
             for dependency_id in item.dependency_ids
         }
-        approved_dependency_artifacts = [
+        return [
             artifact.model_dump(mode="json")
             for artifact in self.repository.list_artifacts(item.project_id)
             if artifact.id in approved_dependency_artifact_ids
-            and dependency_criteria.get(artifact.work_item_id, set()).issubset(
-                set(artifact.content.get("acceptance_criteria_addressed", []))
+            and self._addressed_matches_dependency(
+                dependency_criteria.get(artifact.work_item_id, set()),
+                artifact.content.get("acceptance_criteria_addressed", []),
             )
         ]
+
+    @staticmethod
+    def _addressed_matches_dependency(
+        dependency_criteria: set[str],
+        acceptance_criteria_addressed: object,
+    ) -> bool:
+        addressed = (
+            set(acceptance_criteria_addressed)
+            if isinstance(acceptance_criteria_addressed, list)
+            else set()
+        )
+        if not addressed:
+            # A real provider often approves work without echoing every
+            # criterion back into acceptance_criteria_addressed. The review
+            # verdict is already the trust gate; only exclude the artifact
+            # when it explicitly claims criteria that share nothing with
+            # this dependency's own scope, not merely when it claims none.
+            return True
+        return bool(dependency_criteria.intersection(addressed))
+
+    def operational(self, item: WorkItem) -> dict[str, Any]:
+        reviews = self.repository.list_reviews(item.project_id)
+        approved_dependency_artifacts = self.dependency_artifacts(item)
         prior_review_feedback = [
             {
                 "attempt_artifact_id": review.artifact_id,

@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import pytest
-from agentarium.domain.models import Artifact, WorkItem
+from agentarium.domain.enums import AgentRole, RunOutcome
+from agentarium.domain.models import AgentRun, Artifact, Milestone, ResourceUsage, WorkItem
 from agentarium.execution import ReviewEvaluationProposal, WorkArtifactProposal
 from agentarium.orchestration.engine import InvalidPlan, Orchestrator
+from agentarium.services import ApplicationService
 
 
 def test_tester_contract_rejects_renamed_fields() -> None:
@@ -73,6 +75,171 @@ def test_identical_retry_candidate_is_detected_from_file_content() -> None:
     changed.files[0].content = "const answer = 43;"
 
     assert not Orchestrator._candidate_matches_artifact(changed, artifact)
+
+
+def test_colliding_dependency_paths_detects_unrelated_task_reusing_a_path(
+    service: ApplicationService,
+) -> None:
+    project = service.create_project("Detectar colisión de rutas entre tareas")
+    milestone = Milestone(
+        project_id=project.id,
+        title="Hito",
+        description="Hito de prueba",
+        order=0,
+    )
+    service.repository.add_milestone(milestone)
+
+    owner = WorkItem(
+        project_id=project.id,
+        milestone_id=milestone.id,
+        title="Tarea A",
+        description="Escribe el glosario",
+        expected_outputs=["glosario"],
+        acceptance_criteria=["Existe"],
+    )
+    service.repository.add_work_item(owner)
+    run = AgentRun(
+        project_id=project.id,
+        work_item_id=owner.id,
+        agent_role=AgentRole.IMPLEMENTATION_WORKER,
+        model="mock",
+        provider="mock",
+        outcome=RunOutcome.ARTIFACT_DELIVERED,
+        input_summary="s",
+        output_summary="s",
+        resource_usage=ResourceUsage(model="mock", provider="mock"),
+        correlation_id="corr-a",
+    )
+    service.repository.add_agent_run(run)
+    service.repository.add_artifact(
+        Artifact(
+            project_id=project.id,
+            work_item_id=owner.id,
+            agent_run_id=run.id,
+            artifact_type="Doc",
+            title="Entrega A",
+            content={
+                "files": [
+                    {"path": "docs/design.md", "content": "A", "purpose": "p"}
+                ],
+            },
+        )
+    )
+
+    unrelated = WorkItem(
+        project_id=project.id,
+        milestone_id=milestone.id,
+        title="Tarea B",
+        description="Escribe las decisiones de diseño",
+        expected_outputs=["decisiones"],
+        acceptance_criteria=["Existe"],
+    )
+    service.repository.add_work_item(unrelated)
+
+    proposal = WorkArtifactProposal.model_validate(
+        {
+            "artifact_type": "Doc",
+            "title": "Entrega B",
+            "summary": "s",
+            "quality": "verified",
+            "files": [
+                {"path": "docs/design.md", "content": "B", "purpose": "p"}
+            ],
+        }
+    )
+
+    colliding = service.orchestrator._colliding_dependency_paths(unrelated, proposal)
+    assert colliding == {"docs/design.md"}
+
+    dependent = unrelated.model_copy(update={"dependency_ids": [owner.id]})
+    assert (
+        service.orchestrator._colliding_dependency_paths(dependent, proposal) == set()
+    )
+
+
+def test_colliding_dependency_paths_allows_transitive_ancestor_ownership(
+    service: ApplicationService,
+) -> None:
+    project = service.create_project("Cierre depende transitivamente del dueño")
+    milestone = Milestone(
+        project_id=project.id,
+        title="Hito",
+        description="Hito de prueba",
+        order=0,
+    )
+    service.repository.add_milestone(milestone)
+
+    grandparent = WorkItem(
+        project_id=project.id,
+        milestone_id=milestone.id,
+        title="Componentes",
+        description="Identifica componentes",
+        expected_outputs=["componentes"],
+        acceptance_criteria=["Existe"],
+    )
+    service.repository.add_work_item(grandparent)
+    run = AgentRun(
+        project_id=project.id,
+        work_item_id=grandparent.id,
+        agent_role=AgentRole.IMPLEMENTATION_WORKER,
+        model="mock",
+        provider="mock",
+        outcome=RunOutcome.ARTIFACT_DELIVERED,
+        input_summary="s",
+        output_summary="s",
+        resource_usage=ResourceUsage(model="mock", provider="mock"),
+        correlation_id="corr-grandparent",
+    )
+    service.repository.add_agent_run(run)
+    service.repository.add_artifact(
+        Artifact(
+            project_id=project.id,
+            work_item_id=grandparent.id,
+            agent_run_id=run.id,
+            artifact_type="Doc",
+            title="Componentes",
+            content={
+                "files": [
+                    {"path": "docs/architecture.md", "content": "A", "purpose": "p"}
+                ],
+            },
+        )
+    )
+
+    parent = WorkItem(
+        project_id=project.id,
+        milestone_id=milestone.id,
+        title="Revisión",
+        description="Revisa y aprueba",
+        expected_outputs=["revision"],
+        acceptance_criteria=["Existe"],
+        dependency_ids=[grandparent.id],
+    )
+    service.repository.add_work_item(parent)
+
+    closing = WorkItem(
+        project_id=project.id,
+        milestone_id=milestone.id,
+        title="Completar y verificar la entrega del proyecto",
+        description="Consolida el resultado",
+        expected_outputs=["documento final"],
+        acceptance_criteria=["Existe"],
+        dependency_ids=[parent.id],
+    )
+
+    proposal = WorkArtifactProposal.model_validate(
+        {
+            "artifact_type": "Doc",
+            "title": "Documento final",
+            "summary": "s",
+            "quality": "verified",
+            "files": [
+                {"path": "docs/architecture.md", "content": "final", "purpose": "p"}
+            ],
+        }
+    )
+
+    assert service.orchestrator._colliding_dependency_paths(closing, proposal) == set()
 
 
 @pytest.mark.parametrize(
@@ -346,6 +513,7 @@ def test_semantic_review_payload_excludes_tester_opinions() -> None:
         },
         [{"path": "docs/design.md", "content": "1. A\n2. B\n3. C"}],
         ["Incluye al menos tres tipos"],
+        [],
     )
 
     assert payload == {
@@ -354,6 +522,7 @@ def test_semantic_review_payload_excludes_tester_opinions() -> None:
             {"path": "docs/design.md", "content": "1. A\n2. B\n3. C"}
         ],
         "acceptance_criteria": ["Incluye al menos tres tipos"],
+        "dependency_artifacts": [],
     }
     assert "test_report" not in payload
     assert "acceptance_criteria_addressed" not in payload["artifact"]

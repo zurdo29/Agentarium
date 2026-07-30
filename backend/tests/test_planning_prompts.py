@@ -250,6 +250,7 @@ def test_work_prompt_exposes_versioned_workspace_contract() -> None:
     assert '"purpose"' in rendered
     assert "placeholders" in rendered
     assert "funciones vacías" in rendered
+    assert "project.decisions es un registro interno" in rendered
 
 
 @pytest.mark.parametrize(
