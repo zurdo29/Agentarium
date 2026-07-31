@@ -54,11 +54,23 @@ class ApplicationService:
         self.preview = preview
         self.approval_policy = ApprovalPolicy()
 
-    def initialize(self) -> int:
+    def ensure_ready(self) -> None:
+        """Idempotent, safe to call from any process on every invocation:
+        directories + schema only, no crash recovery. Use this (not
+        `initialize`) for anything that isn't a genuine one-time process
+        startup — recovery must stay scoped to that, or a second process
+        (e.g. a CLI read command) will reset work items an active
+        `run_project` elsewhere is still mid-flight on."""
         self.settings.ensure_directories()
         self.database.create_all()
-        recovered = self.repository.recover_interrupted()
-        return recovered
+
+    def initialize(self) -> int:
+        """Full startup: schema + a GLOBAL crash-recovery sweep. Call this
+        once per real process lifetime (the API server's lifespan, or the
+        explicit `agentarium init` command) — never from a per-command
+        helper that runs on every CLI invocation."""
+        self.ensure_ready()
+        return self.repository.recover_interrupted()
 
     def create_project(self, goal: str, title: str | None = None) -> Project:
         cleaned = goal.strip()

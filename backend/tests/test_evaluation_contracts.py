@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import pytest
-from agentarium.domain.enums import AgentRole, RunOutcome
+from agentarium.domain.enums import AgentRole, OutputStrategy, RunOutcome
 from agentarium.domain.models import AgentRun, Artifact, Milestone, ResourceUsage, WorkItem
 from agentarium.execution import ReviewEvaluationProposal, WorkArtifactProposal
 from agentarium.orchestration.engine import InvalidPlan, Orchestrator
@@ -240,6 +240,94 @@ def test_colliding_dependency_paths_allows_transitive_ancestor_ownership(
     )
 
     assert service.orchestrator._colliding_dependency_paths(closing, proposal) == set()
+
+
+def test_colliding_dependency_paths_allows_matching_shared_component_fragment(
+    service: ApplicationService,
+) -> None:
+    project = service.create_project("Fragmentos comparten componente")
+    milestone = Milestone(
+        project_id=project.id,
+        title="Hito",
+        description="Hito de prueba",
+        order=0,
+    )
+    service.repository.add_milestone(milestone)
+
+    owner = WorkItem(
+        project_id=project.id,
+        milestone_id=milestone.id,
+        title="Tarea A",
+        description="Escribe una parte del módulo compartido",
+        expected_outputs=["modulo_parte_a"],
+        acceptance_criteria=["Existe"],
+        shared_component="library_api",
+        output_strategy=OutputStrategy.FRAGMENT,
+    )
+    service.repository.add_work_item(owner)
+    run = AgentRun(
+        project_id=project.id,
+        work_item_id=owner.id,
+        agent_role=AgentRole.IMPLEMENTATION_WORKER,
+        model="mock",
+        provider="mock",
+        outcome=RunOutcome.ARTIFACT_DELIVERED,
+        input_summary="s",
+        output_summary="s",
+        resource_usage=ResourceUsage(model="mock", provider="mock"),
+        correlation_id="corr-fragment-a",
+    )
+    service.repository.add_agent_run(run)
+    service.repository.add_artifact(
+        Artifact(
+            project_id=project.id,
+            work_item_id=owner.id,
+            agent_run_id=run.id,
+            artifact_type="Code",
+            title="Entrega A",
+            content={
+                "files": [
+                    {"path": "library_api.py", "content": "A", "purpose": "p"}
+                ],
+            },
+        )
+    )
+
+    candidate = WorkItem(
+        project_id=project.id,
+        milestone_id=milestone.id,
+        title="Tarea B",
+        description="Escribe otra parte del módulo compartido",
+        expected_outputs=["modulo_parte_b"],
+        acceptance_criteria=["Existe"],
+        shared_component="library_api",
+        output_strategy=OutputStrategy.FRAGMENT,
+    )
+    service.repository.add_work_item(candidate)
+
+    proposal = WorkArtifactProposal.model_validate(
+        {
+            "artifact_type": "Code",
+            "title": "Entrega B",
+            "summary": "s",
+            "quality": "verified",
+            "files": [
+                {"path": "library_api.py", "content": "B", "purpose": "p"}
+            ],
+        }
+    )
+
+    assert service.orchestrator._colliding_dependency_paths(candidate, proposal) == set()
+
+    # Only the CANDIDATE's own strategy is exempted — an otherwise-identical
+    # candidate that claims "exclusive" still collides, even with a matching
+    # shared_component, because it isn't declaring itself as sharing.
+    exclusive_candidate = candidate.model_copy(
+        update={"output_strategy": OutputStrategy.EXCLUSIVE}
+    )
+    assert service.orchestrator._colliding_dependency_paths(
+        exclusive_candidate, proposal
+    ) == {"library_api.py"}
 
 
 @pytest.mark.parametrize(

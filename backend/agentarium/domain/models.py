@@ -9,6 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from .enums import (
     AgentRole,
     ApprovalStatus,
+    OutputStrategy,
     ProjectStatus,
     ReviewVerdict,
     RiskLevel,
@@ -98,6 +99,10 @@ class WorkItem(DomainModel):
     priority: int = Field(default=50, ge=0, le=100)
     status: WorkItemStatus = WorkItemStatus.DRAFT
     last_error: str | None = None
+    version: int = Field(default=1, ge=1)
+    owned_paths: list[str] = Field(default_factory=list)
+    shared_component: str | None = None
+    output_strategy: OutputStrategy = OutputStrategy.EXCLUSIVE
     created_at: datetime = Field(default_factory=utc_now)
     updated_at: datetime = Field(default_factory=utc_now)
 

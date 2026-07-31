@@ -1,14 +1,17 @@
 from __future__ import annotations
 
+import time
 from collections import Counter
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, cast
 
-from sqlalchemy import select
+from sqlalchemy import select, update
+from sqlalchemy.engine import CursorResult
 
 from agentarium.domain.enums import (
     AgentRole,
     ApprovalStatus,
+    OutputStrategy,
     ProjectStatus,
     ReviewVerdict,
     RiskLevel,
@@ -51,6 +54,10 @@ from .tables import (
 
 
 class NotFoundError(LookupError):
+    pass
+
+
+class ConcurrentModificationError(RuntimeError):
     pass
 
 
@@ -175,6 +182,10 @@ class Repository:
                     priority=item.priority,
                     status=item.status.value,
                     last_error=item.last_error,
+                    version=item.version,
+                    owned_paths_json=item.owned_paths,
+                    shared_component=item.shared_component,
+                    output_strategy=item.output_strategy.value,
                     created_at=item.created_at,
                     updated_at=item.updated_at,
                 )
@@ -234,23 +245,96 @@ class Repository:
                 for row in rows
             ]
 
+    def retarget_dependency(
+        self,
+        project_id: str,
+        old_depends_on_id: str,
+        new_depends_on_id: str,
+    ) -> None:
+        with self.database.session() as session:
+            rows = session.scalars(
+                select(DependencyRow).where(
+                    DependencyRow.project_id == project_id,
+                    DependencyRow.depends_on_id == old_depends_on_id,
+                )
+            ).all()
+            for row in rows:
+                owner = session.get(WorkItemRow, row.work_item_id)
+                if owner is not None and owner.status != WorkItemStatus.BLOCKED.value:
+                    raise ValueError(
+                        "Cannot retarget a dependency for a work item that is "
+                        f"not BLOCKED: {row.work_item_id} is {owner.status}"
+                    )
+                row.depends_on_id = new_depends_on_id
+
+    _MAX_TRANSITION_RETRIES = 5
+
     def transition_work_item(
         self,
         item_id: str,
         target: WorkItemStatus,
         *,
         error: str | None = None,
+        event: ExecutionEvent | None = None,
     ) -> WorkItem:
-        with self.database.session() as session:
-            row = session.get(WorkItemRow, item_id)
-            if row is None:
-                raise NotFoundError(f"Work item {item_id} not found")
-            current = WorkItemStatus(row.status)
-            validate_transition(current, target)
-            row.status = target.value
-            row.last_error = error
-            row.updated_at = utc_now()
-        return self.get_work_item(item_id)
+        for attempt in range(self._MAX_TRANSITION_RETRIES):
+            with self.database.session() as session:
+                row = session.get(WorkItemRow, item_id)
+                if row is None:
+                    raise NotFoundError(f"Work item {item_id} not found")
+                current = WorkItemStatus(row.status)
+                validate_transition(current, target)
+                expected_version = row.version
+                cas_update = (
+                    update(WorkItemRow)
+                    .where(
+                        WorkItemRow.id == item_id,
+                        WorkItemRow.version == expected_version,
+                    )
+                    .values(
+                        status=target.value,
+                        last_error=error,
+                        updated_at=utc_now(),
+                        version=WorkItemRow.version + 1,
+                    )
+                    .execution_options(synchronize_session=False)
+                )
+                result = cast(CursorResult[Any], session.execute(cas_update))
+                won_race = result.rowcount > 0
+                if won_race and event is not None:
+                    session.add(
+                        EventRow(
+                            id=event.id,
+                            project_id=event.project_id,
+                            work_item_id=event.work_item_id,
+                            agent_run_id=event.agent_run_id,
+                            agent_role=(
+                                event.agent_role.value if event.agent_role else None
+                            ),
+                            model=event.model,
+                            action=event.action,
+                            message=event.message,
+                            previous_state=event.previous_state,
+                            new_state=event.new_state,
+                            attempt=event.attempt,
+                            error=event.error,
+                            resource_usage_json=(
+                                event.resource_usage.model_dump(mode="json")
+                                if event.resource_usage
+                                else None
+                            ),
+                            correlation_id=event.correlation_id,
+                            metadata_json=event.metadata,
+                            timestamp=event.timestamp,
+                        )
+                    )
+            if won_race:
+                return self.get_work_item(item_id)
+            time.sleep(0.01 * (attempt + 1))
+        raise ConcurrentModificationError(
+            f"Work item {item_id} changed concurrently after "
+            f"{self._MAX_TRANSITION_RETRIES} attempts"
+        )
 
     def increment_attempt(self, item_id: str) -> WorkItem:
         with self.database.session() as session:
@@ -577,23 +661,34 @@ class Repository:
             ).all()
             return [self._event_from_row(row) for row in rows]
 
-    def recover_interrupted(self) -> int:
+    def recover_interrupted(self, project_id: str | None = None) -> int:
+        """Reset work items stuck mid-flight (ASSIGNED/RUNNING/
+        AWAITING_REVIEW) back to READY. Only safe to call for a project that
+        is NOT currently being driven by a live `run_project` loop in some
+        other process — callers must scope this deliberately (global, at
+        real process startup; or per-project, right before that project's
+        own run begins) rather than on every incidental DB access, or it
+        will yank an actively-running item out from under its own
+        orchestrator."""
         recovered = 0
         with self.database.session() as session:
-            rows = session.scalars(
-                select(WorkItemRow).where(
-                    WorkItemRow.status.in_(
-                        [
-                            WorkItemStatus.ASSIGNED.value,
-                            WorkItemStatus.RUNNING.value,
-                            WorkItemStatus.AWAITING_REVIEW.value,
-                        ]
-                    )
-                )
-            ).all()
+            stuck_status = WorkItemRow.status.in_(
+                [
+                    WorkItemStatus.ASSIGNED.value,
+                    WorkItemStatus.RUNNING.value,
+                    WorkItemStatus.AWAITING_REVIEW.value,
+                ]
+            )
+            query = (
+                select(WorkItemRow).where(stuck_status, WorkItemRow.project_id == project_id)
+                if project_id is not None
+                else select(WorkItemRow).where(stuck_status)
+            )
+            rows = session.scalars(query).all()
             for row in rows:
                 row.status = WorkItemStatus.READY.value
                 row.last_error = "Recovered after interrupted execution"
+                row.version += 1
                 row.updated_at = utc_now()
                 recovered += 1
         return recovered
@@ -675,6 +770,10 @@ class Repository:
             priority=row.priority,
             status=WorkItemStatus(row.status),
             last_error=row.last_error,
+            version=row.version,
+            owned_paths=row.owned_paths_json,
+            shared_component=row.shared_component,
+            output_strategy=OutputStrategy(row.output_strategy),
             created_at=row.created_at,
             updated_at=row.updated_at,
         )

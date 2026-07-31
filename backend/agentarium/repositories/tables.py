@@ -62,6 +62,10 @@ class WorkItemRow(Base):
     priority: Mapped[int] = mapped_column(Integer, default=50)
     status: Mapped[str] = mapped_column(String(40), index=True)
     last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    owned_paths_json: Mapped[list[str]] = mapped_column(JSON, default=list)
+    shared_component: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    output_strategy: Mapped[str] = mapped_column(String(20), default="exclusive")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 

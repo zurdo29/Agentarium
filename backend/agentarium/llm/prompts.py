@@ -12,12 +12,14 @@ from agentarium.execution import (
     TestEvaluationProposal,
     WorkArtifactProposal,
 )
-from agentarium.planning import BriefProposal, PlanProposal
+from agentarium.planning import BriefProposal, DecomposeProposal, PlanProposal
 
 from .base import ModelRequest
 
-PLANNING_PROMPT_VERSION = "planning-v2"
-WORKSPACE_PROMPT_VERSION = "workspace-v5"
+PLANNING_PROMPT_VERSION = "planning-v3"
+WORKSPACE_PROMPT_VERSION = "workspace-v7"
+DECOMPOSE_PROMPT_VERSION = "decompose-v2"
+PLAN_REVISION_PROMPT_VERSION = "plan-revision-v1"
 
 _OPERATION_CONTRACTS: dict[str, type[BaseModel]] = {
     "brief": BriefProposal,
@@ -25,6 +27,8 @@ _OPERATION_CONTRACTS: dict[str, type[BaseModel]] = {
     "work": WorkArtifactProposal,
     "test": TestEvaluationProposal,
     "review": ReviewEvaluationProposal,
+    "decompose": DecomposeProposal,
+    "plan_revision": PlanProposal,
 }
 
 _OPERATION_INSTRUCTIONS = {
@@ -44,12 +48,61 @@ _OPERATION_INSTRUCTIONS = {
         "literalmente cada entrada de brief.deliverables en expected_outputs de al "
         "menos una tarea y cada entrada de brief.scope y brief.success_criteria en "
         "acceptance_criteria de al menos una tarea; ninguna aclaración puede "
-        "sustituir esa cobertura."
+        "sustituir esa cobertura. "
+        "Declara owned_paths por tarea: los archivos que esa tarea va a escribir "
+        "(puede quedar vacío si el entregable no es un archivo concreto). Dos "
+        "tareas sin relación de dependencia entre sí no deben declarar el mismo "
+        "owned_path salvo que genuinamente necesiten combinar contenido en el "
+        "mismo artefacto — en ese caso usa shared_component (un nombre corto "
+        "que identifique ese artefacto compartido) igual en ambas, y "
+        "output_strategy distinto de 'exclusive' en cada una: 'fragment' si la "
+        "tarea produce una pieza autocontenida que otra combina después, "
+        "'consolidation' si es la tarea que combina esas piezas en el archivo "
+        "final, 'patch' si extiende un archivo que otra tarea ya posee. Una "
+        "dependencia entre tareas sólo ordena ejecución, no dice cómo combinar "
+        "contenido: si dos tareas comparten un archivo, usa shared_component "
+        "además de (no en vez de) declarar la dependencia si corresponde. "
+        "Preferí dividir un componente compartido en archivos separados (por "
+        "ejemplo módulos bajo una carpeta) en vez de forzar varias tareas "
+        "'exclusive' a escribir el mismo archivo."
+    ),
+    "plan_revision": (
+        "SOLICITUD.payload.previous_plan tiene tareas cuyos owned_paths "
+        "colisionan sin una agrupación válida — ver path_conflicts (pares de "
+        "claves de tarea y los paths en conflicto). Devolvé un PlanProposal "
+        "completo y corregido (no un parche): mismas claves de tarea salvo que "
+        "decidas fusionar o dividir alguna. Para cada conflicto, resolvé con una "
+        "de estas estrategias: (1) fusionar las tareas en conflicto en una sola "
+        "si en realidad modifican el mismo componente; (2) separar el "
+        "componente compartido en archivos distintos, uno por tarea; (3) darles "
+        "el mismo shared_component y un output_strategy no-exclusive "
+        "('fragment' para las que producen piezas, 'consolidation' para la que "
+        "las combina) si genuinamente deben combinar contenido en un archivo "
+        "final; (4) si alguna genuinamente depende de que la otra termine "
+        "primero, agregá la dependencia Y un shared_component+output_strategy "
+        "coherente — la dependencia sola no alcanza, no explica cómo combinar "
+        "el contenido. No dejes ningún path del conflicto sin resolver."
     ),
     "work": (
         "La tarea actual es SOLICITUD.payload.task y tiene prioridad absoluta. Produce "
         "un artefacto NUEVO que satisfaga sus expected_outputs y cada uno de sus "
-        "acceptance_criteria. Los dependency_artifacts son sólo referencias de entrada: "
+        "acceptance_criteria. "
+        "task.output_strategy define cómo te relacionás con owned_paths: "
+        "'exclusive' (default) — el archivo es tuyo, comportamiento normal. "
+        "'fragment' — producís una pieza autocontenida bajo tu propio owned_path "
+        "(por ejemplo un módulo o archivo de rutas separado); nunca toques el "
+        "archivo de entrada compartido (task.shared_component identifica ese "
+        "componente), otra tarea de consolidación lo arma con tu pieza. "
+        "'patch' — extendés un archivo que ya posee otra tarea aprobada: "
+        "revisá dependency_artifacts/dependency_references para ver su contenido "
+        "actual y modificalo agregando lo tuyo, nunca lo sobreescribas desde cero "
+        "ni lo devuelvas sin cambios. "
+        "'consolidation' — dependés de las tareas fragment/patch de tu mismo "
+        "shared_component; tu trabajo es combinar sus salidas (ya aprobadas, "
+        "están en dependency_artifacts) en tu propio owned_path, no inventar "
+        "contenido nuevo que ellas no produjeron. "
+        "Los dependency_artifacts son sólo referencias de entrada salvo que tu "
+        "propia estrategia sea patch/consolidation (ahí son la base a extender): "
         "nunca los devuelvas ni los reescribas como si fueran la entrega actual. En un "
         "reintento los archivos de dependencia se omiten deliberadamente: usa "
         "dependency_references sólo como contexto y corrige explícitamente "
@@ -79,7 +132,16 @@ _OPERATION_INSTRUCTIONS = {
         "propio Agentarium (por ejemplo, la decisión de ejecutar un único hito "
         "vertical); nunca es contenido de dominio ni una decisión de arquitectura "
         "del producto solicitado. No lo copies, resumas ni adaptes como si fuera "
-        "parte del entregable."
+        "parte del entregable. "
+        "Si un archivo .py declarado será ejecutado (criterios que exigen "
+        "herramienta ejecutable), ese script corre en un entorno aislado sin "
+        "acceso a red y sin instalación de paquetes: no puede importar nada fuera "
+        "de la biblioteca estándar de Python. No uses Flask, FastAPI, requests, "
+        "pandas ni ninguna dependencia de terceros en un script ejecutable; usa "
+        "sólo módulos como sqlite3, http.server, json, csv o argparse. Si el "
+        "objetivo pide explícitamente una librería de terceros como parte de la "
+        "entrega, decláralo como limitación en vez de producir un script que no "
+        "puede ejecutarse."
     ),
     "test": (
         "Valida únicamente evidencia técnica: file_verified, checksums, aislamiento y "
@@ -101,6 +163,23 @@ _OPERATION_INSTRUCTIONS = {
         "acceptance_criteria, sin agregar checks técnicos. No exijas entregables fuera "
         "del alcance de la tarea actual."
     ),
+    "decompose": (
+        "SOLICITUD.payload.task agotó sus intentos sin producir una entrega "
+        "aceptable. Divídela en entre 2 y 4 subtareas más chicas e "
+        "independientemente resolubles. La unión literal de los "
+        "acceptance_criteria de todas las subtareas debe cubrir cada entrada "
+        "de task.acceptance_criteria: no omitas ninguna ni la reformules de "
+        "forma irreconocible. Usa prior_review_feedback y "
+        "prior_validation_failures (evidencia de por qué falló) para separar "
+        "las causas de falla en subtareas distintas cuando sea razonable, en "
+        "vez de dividir arbitrariamente. Cada subtítulo debe ser distinto y "
+        "describir un entregable concreto y verificable por sí solo. "
+        "Declara owned_paths por subtarea; si dos subtareas necesitan escribir "
+        "en el mismo archivo, dales el mismo shared_component y un "
+        "output_strategy no-exclusive ('fragment' para las que producen una "
+        "pieza, 'consolidation' para la que las combina) — nunca dejes a dos "
+        "subtareas reclamando el mismo path como 'exclusive'."
+    ),
 }
 
 
@@ -111,6 +190,10 @@ def render_prompt(request: ModelRequest, agent: AgentDefinition) -> str:
         if request.operation in {"brief", "plan"}
         else WORKSPACE_PROMPT_VERSION
         if request.operation == "work"
+        else DECOMPOSE_PROMPT_VERSION
+        if request.operation == "decompose"
+        else PLAN_REVISION_PROMPT_VERSION
+        if request.operation == "plan_revision"
         else "artifact-v1"
     )
     instruction = _OPERATION_INSTRUCTIONS.get(

@@ -3,9 +3,11 @@ from __future__ import annotations
 from collections.abc import Generator
 from contextlib import contextmanager
 
-from sqlalchemy import create_engine, event
+from sqlalchemy import create_engine, event, text
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
+
+SQLITE_BUSY_TIMEOUT_MS = 5000
 
 
 class Base(DeclarativeBase):
@@ -14,10 +16,11 @@ class Base(DeclarativeBase):
 
 class Database:
     def __init__(self, url: str) -> None:
-        connect_args = {"check_same_thread": False} if url.startswith("sqlite") else {}
+        self.is_sqlite = url.startswith("sqlite")
+        connect_args = {"check_same_thread": False} if self.is_sqlite else {}
         self.engine = create_engine(url, connect_args=connect_args, future=True)
-        if url.startswith("sqlite"):
-            event.listen(self.engine, "connect", self._enable_sqlite_foreign_keys)
+        if self.is_sqlite:
+            event.listen(self.engine, "connect", self._configure_sqlite_connection)
         self.session_factory = sessionmaker(
             bind=self.engine,
             expire_on_commit=False,
@@ -25,15 +28,45 @@ class Database:
         )
 
     @staticmethod
-    def _enable_sqlite_foreign_keys(connection: object, _: object) -> None:
+    def _configure_sqlite_connection(connection: object, _: object) -> None:
         cursor = connection.cursor()  # type: ignore[attr-defined]
         cursor.execute("PRAGMA foreign_keys=ON")
+        # WAL lets readers (e.g. a separate CLI process) and the writer
+        # proceed without blocking each other; busy_timeout makes a writer
+        # that does momentarily contend retry instead of failing outright.
+        cursor.execute("PRAGMA journal_mode=WAL")
+        cursor.execute(f"PRAGMA busy_timeout={SQLITE_BUSY_TIMEOUT_MS}")
         cursor.close()
 
     def create_all(self) -> None:
         from . import tables  # noqa: F401
 
         Base.metadata.create_all(self.engine)
+        if self.is_sqlite:
+            self._ensure_work_item_columns()
+
+    # Columns added to `work_items` after the table already existed in the
+    # field. There is no Alembic in this backend and `create_all()` only
+    # creates missing tables, not missing columns on existing ones, so any
+    # such addition needs an explicit, idempotent ALTER TABLE here.
+    _WORK_ITEM_COLUMN_MIGRATIONS: tuple[tuple[str, str], ...] = (
+        ("version", "INTEGER NOT NULL DEFAULT 1"),
+        ("owned_paths_json", "JSON NOT NULL DEFAULT '[]'"),
+        ("shared_component", "VARCHAR(120)"),
+        ("output_strategy", "VARCHAR(20) NOT NULL DEFAULT 'exclusive'"),
+    )
+
+    def _ensure_work_item_columns(self) -> None:
+        with self.engine.connect() as connection:
+            columns = {
+                row[1] for row in connection.execute(text("PRAGMA table_info(work_items)"))
+            }
+            for name, definition in self._WORK_ITEM_COLUMN_MIGRATIONS:
+                if name not in columns:
+                    connection.execute(
+                        text(f"ALTER TABLE work_items ADD COLUMN {name} {definition}")
+                    )
+            connection.commit()
 
     @contextmanager
     def session(self) -> Generator[Session, None, None]:

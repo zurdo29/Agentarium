@@ -5,17 +5,20 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from agentarium.domain.enums import AgentRole
+from agentarium.domain.enums import AgentRole, OutputStrategy
 from agentarium.domain.models import AgentDefinition, ProjectBrief
 from agentarium.llm import (
     PLANNING_PROMPT_VERSION,
     WORKSPACE_PROMPT_VERSION,
     ModelRequest,
+    ProviderResponse,
     render_prompt,
 )
 from agentarium.llm.mock import MockProvider
 from agentarium.orchestration.engine import InvalidPlan, Orchestrator
-from agentarium.planning import BriefProposal, PlanProposal
+from agentarium.planning import BriefProposal, DecomposeProposal, PlanProposal, SubtaskProposal
+from agentarium.services import ApplicationService
+from pydantic import ValidationError
 
 FIXTURES = json.loads(
     (Path(__file__).parent / "fixtures" / "planning_cases.json").read_text(encoding="utf-8")
@@ -251,6 +254,8 @@ def test_work_prompt_exposes_versioned_workspace_contract() -> None:
     assert "placeholders" in rendered
     assert "funciones vacías" in rendered
     assert "project.decisions es un registro interno" in rendered
+    assert "sin acceso a red y sin instalación de paquetes" in rendered
+    assert "biblioteca estándar de Python" in rendered
 
 
 @pytest.mark.parametrize(
@@ -280,3 +285,142 @@ def test_evaluation_prompts_include_strict_contracts(
 
     assert "CONTRATO_JSON_SCHEMA=" in rendered
     assert all(field in rendered for field in required_fields)
+
+
+def _subtask(**overrides: object) -> dict[str, object]:
+    base: dict[str, object] = {
+        "title": "Subtarea",
+        "description": "Descripción",
+        "expected_outputs": ["resultado"],
+        "acceptance_criteria": ["Existe"],
+        "owned_paths": [],
+        "shared_component": None,
+        "output_strategy": "exclusive",
+    }
+    base.update(overrides)
+    return base
+
+
+def test_owned_paths_rejects_absolute_and_escaping_entries() -> None:
+    with pytest.raises(ValidationError):
+        SubtaskProposal.model_validate(_subtask(owned_paths=["/etc/passwd"]))
+    with pytest.raises(ValidationError):
+        SubtaskProposal.model_validate(_subtask(owned_paths=["../outside.py"]))
+    with pytest.raises(ValidationError):
+        SubtaskProposal.model_validate(_subtask(owned_paths=["  "]))
+
+
+def test_owned_paths_defaults_to_empty_and_accepts_relative_paths() -> None:
+    subtask = SubtaskProposal.model_validate(_subtask())
+    assert subtask.owned_paths == []
+    assert subtask.output_strategy is OutputStrategy.EXCLUSIVE
+
+    subtask = SubtaskProposal.model_validate(
+        _subtask(owned_paths=["routes/books.py"])
+    )
+    assert subtask.owned_paths == ["routes/books.py"]
+
+
+def test_decompose_proposal_rejects_overlap_without_grouping() -> None:
+    with pytest.raises(ValidationError, match="owned_paths overlap"):
+        DecomposeProposal.model_validate(
+            {
+                "subtasks": [
+                    _subtask(title="Parte 1", owned_paths=["library_api.py"]),
+                    _subtask(title="Parte 2", owned_paths=["library_api.py"]),
+                ]
+            }
+        )
+
+
+def test_decompose_proposal_allows_overlap_with_matching_shared_component() -> None:
+    proposal = DecomposeProposal.model_validate(
+        {
+            "subtasks": [
+                _subtask(
+                    title="Parte 1",
+                    owned_paths=["library_api.py"],
+                    shared_component="library_api",
+                    output_strategy="fragment",
+                ),
+                _subtask(
+                    title="Parte 2",
+                    owned_paths=["library_api.py"],
+                    shared_component="library_api",
+                    output_strategy="consolidation",
+                ),
+            ]
+        }
+    )
+    assert len(proposal.subtasks) == 2
+
+
+@pytest.mark.asyncio
+async def test_plan_owned_path_conflicts_trigger_a_revision(
+    service: ApplicationService,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    original_generate = MockProvider.generate
+
+    async def colliding_plan(self, request, agent):  # type: ignore[no-untyped-def]
+        if request.operation == "plan":
+            content = {
+                "milestone": {
+                    "title": "MVP verificable",
+                    "description": "Del objetivo a un resultado integrado.",
+                },
+                "tasks": [
+                    {
+                        "key": "task_a",
+                        "title": "Tarea A",
+                        "description": "Primera mitad del módulo compartido.",
+                        "dependencies": [],
+                        "expected_outputs": ["parte a"],
+                        "acceptance_criteria": ["Existe la parte a"],
+                        "risk": "low",
+                        "priority": 90,
+                        "owned_paths": ["shared.py"],
+                    },
+                    {
+                        "key": "task_b",
+                        "title": "Tarea B",
+                        "description": "Segunda mitad del módulo compartido.",
+                        "dependencies": [],
+                        "expected_outputs": ["parte b"],
+                        "acceptance_criteria": ["Existe la parte b"],
+                        "risk": "low",
+                        "priority": 90,
+                        "owned_paths": ["shared.py"],
+                    },
+                ],
+            }
+            raw = json.dumps(content)
+            return ProviderResponse(
+                content=content,
+                raw_text=raw,
+                prompt_characters=len(raw),
+                response_characters=len(raw),
+            )
+        return await original_generate(self, request, agent)
+
+    monkeypatch.setattr(MockProvider, "generate", colliding_plan)
+
+    project = service.create_project("Objetivo con conflicto de propiedad de archivo")
+    await service.orchestrator.plan_project(project.id)
+
+    events = {
+        event["action"] for event in service.repository.list_events(project.id)
+    }
+    assert "plan_owned_path_conflict_detected" in events
+    assert "plan_owned_path_conflict_unresolved" not in events
+
+    items = {
+        item.title: item
+        for item in service.repository.list_work_items(project.id)
+    }
+    task_a = items["Tarea A"]
+    task_b = items["Tarea B"]
+    assert task_a.shared_component is not None
+    assert task_a.shared_component == task_b.shared_component
+    assert task_a.output_strategy is not OutputStrategy.EXCLUSIVE
+    assert task_b.output_strategy is not OutputStrategy.EXCLUSIVE

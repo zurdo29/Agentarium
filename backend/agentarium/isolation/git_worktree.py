@@ -1,11 +1,17 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from uuid import uuid4
 
+from filelock import FileLock, Timeout
+
 from agentarium.execution import CommandResult, SafeCommandExecutor
+
+_FILE_LOCK_POLL_SECONDS = 0.05
 
 
 class IsolationError(RuntimeError):
@@ -63,14 +69,17 @@ class GitWorktreeIsolation:
     ) -> WorktreeSession:
         project_root = self._project_root(project_id)
         token = uuid4().hex[:10]
-        branch = f"agentarium/{task_id}-attempt-{attempt}-{token}"
-        worktree = self._contained(
-            project_id,
-            "worktrees",
-            task_id,
-            f"attempt-{attempt}-{token}",
-        )
-        async with self._lock(project_id):
+        # Keep this short: git's own internal worktree bookkeeping
+        # (.git/worktrees/<name>/gitdir) hits "fatal: '$GIT_DIR' too big"
+        # well before Windows' MAX_PATH, once the full task_id (a UUID) is
+        # nested as its own directory on top of pytest's already-deep
+        # tmp_path. Uniqueness comes from `token`, not from task_id being
+        # spelled out in full — an 8-char prefix is only a human-readable
+        # hint here.
+        leaf = f"{task_id[:8]}-{attempt}-{token}"
+        branch = f"agentarium/{leaf}"
+        worktree = self._contained(project_id, "worktrees", leaf)
+        async with self._project_lock(project_id):
             await self._ensure_repository(project_root)
             await asyncio.to_thread(
                 worktree.parent.mkdir,
@@ -98,32 +107,37 @@ class GitWorktreeIsolation:
         )
 
     async def collect(self, session: WorktreeSession) -> GitChangeSet:
-        await self._run(["git", "add", "-A"], cwd=session.path)
-        diff_result = await self._run(
-            ["git", "diff", "--cached", "--no-ext-diff", "--unified=3"],
-            cwd=session.path,
-        )
-        files_result = await self._run(
-            ["git", "diff", "--cached", "--name-only"],
-            cwd=session.path,
-        )
-        await self._run(
-            [
-                "git",
-                "-c",
-                "user.name=Agentarium",
-                "-c",
-                "user.email=agentarium@local",
-                "commit",
-                "--allow-empty",
-                "-m",
-                f"Task {session.task_id} attempt {session.attempt}",
-            ],
-            cwd=session.path,
-        )
-        commit = (
-            await self._run(["git", "rev-parse", "HEAD"], cwd=session.path)
-        ).stdout.strip()
+        # Runs against session.path (the isolated per-attempt worktree), but
+        # worktrees of the same repo share the object database and refs, so
+        # this still needs the project-wide lock to avoid contending with a
+        # concurrent prepare()/integrate()/discard() on a sibling worktree.
+        async with self._project_lock(session.project_id):
+            await self._run(["git", "add", "-A"], cwd=session.path)
+            diff_result = await self._run(
+                ["git", "diff", "--cached", "--no-ext-diff", "--unified=3"],
+                cwd=session.path,
+            )
+            files_result = await self._run(
+                ["git", "diff", "--cached", "--name-only"],
+                cwd=session.path,
+            )
+            await self._run(
+                [
+                    "git",
+                    "-c",
+                    "user.name=Agentarium",
+                    "-c",
+                    "user.email=agentarium@local",
+                    "commit",
+                    "--allow-empty",
+                    "-m",
+                    f"Task {session.task_id} attempt {session.attempt}",
+                ],
+                cwd=session.path,
+            )
+            commit = (
+                await self._run(["git", "rev-parse", "HEAD"], cwd=session.path)
+            ).stdout.strip()
         files = tuple(
             line.strip()
             for line in files_result.stdout.splitlines()
@@ -138,7 +152,7 @@ class GitWorktreeIsolation:
 
     async def integrate(self, changes: GitChangeSet) -> IntegrationResult:
         project_root = self._project_root(changes.session.project_id)
-        async with self._lock(changes.session.project_id):
+        async with self._project_lock(changes.session.project_id):
             try:
                 await self._run(
                     [
@@ -168,7 +182,7 @@ class GitWorktreeIsolation:
 
     async def discard(self, session: WorktreeSession) -> None:
         project_root = self._project_root(session.project_id)
-        async with self._lock(session.project_id):
+        async with self._project_lock(session.project_id):
             await self._run(
                 ["git", "worktree", "remove", "--force", str(session.path)],
                 cwd=project_root,
@@ -242,9 +256,38 @@ class GitWorktreeIsolation:
             raise IsolationError("Isolation path escaped the configured workspace")
         return path
 
-    def _lock(self, project_id: str) -> asyncio.Lock:
+    def _process_lock(self, project_id: str) -> asyncio.Lock:
         lock = self._locks.get(project_id)
         if lock is None:
             lock = asyncio.Lock()
             self._locks[project_id] = lock
         return lock
+
+    @asynccontextmanager
+    async def _project_lock(self, project_id: str) -> AsyncIterator[None]:
+        # Two layers: the asyncio.Lock serializes coroutines within this
+        # process cheaply; the FileLock serializes across processes (e.g.
+        # this worker vs. a CLI/API process touching the same repo), which
+        # is the case an in-memory-only lock can never cover.
+        #
+        # Acquire/release run directly on the event loop thread via a
+        # non-blocking poll, not asyncio.to_thread: filelock tracks lock
+        # ownership per OS thread, and to_thread's worker-thread reuse is
+        # non-deterministic, so an acquire and its matching release can land
+        # on different threads and trip filelock's own (false-positive)
+        # deadlock detector. A quick non-blocking attempt is cheap enough to
+        # run inline.
+        async with self._process_lock(project_id):
+            project_dir = self.workspace_root / project_id
+            project_dir.mkdir(parents=True, exist_ok=True)
+            file_lock = FileLock(str(project_dir / ".isolation.lock"))
+            while True:
+                try:
+                    file_lock.acquire(blocking=False)
+                    break
+                except Timeout:
+                    await asyncio.sleep(_FILE_LOCK_POLL_SECONDS)
+            try:
+                yield
+            finally:
+                file_lock.release()

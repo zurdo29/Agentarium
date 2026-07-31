@@ -186,6 +186,53 @@ class MockProvider(LLMProvider):
                     else "Falta evidencia materializada."
                 ),
             }
+        if operation == "decompose":
+            task = request.payload["task"]
+            criteria = list(task["acceptance_criteria"])
+            outputs = list(task["expected_outputs"]) or ["deliverable"]
+            split = max(1, len(criteria) // 2)
+            criteria_halves = [criteria[:split], criteria[split:]] or [criteria]
+            criteria_halves = [half for half in criteria_halves if half]
+            if len(criteria_halves) < 2:
+                criteria_halves = [criteria, list(criteria)]
+            return {
+                "subtasks": [
+                    {
+                        "title": f"{task['title']} — parte {index + 1}",
+                        "description": (
+                            f"Subtarea determinista {index + 1} derivada de "
+                            f"{task['title']}."
+                        ),
+                        "expected_outputs": [
+                            f"{name}_part_{index + 1}" for name in outputs
+                        ],
+                        "acceptance_criteria": half,
+                        "owned_paths": [
+                            f"deliverables/{name}_part_{index + 1}.md"
+                            for name in outputs
+                        ],
+                    }
+                    for index, half in enumerate(criteria_halves)
+                ]
+            }
+        if operation == "plan_revision":
+            previous_plan = request.payload["previous_plan"]
+            conflicts = request.payload.get("path_conflicts", [])
+            resolution_by_key: dict[str, tuple[str, str]] = {}
+            for index, conflict in enumerate(conflicts):
+                component = f"shared-{index}"
+                resolution_by_key[conflict["task_a"]] = (component, "fragment")
+                resolution_by_key[conflict["task_b"]] = (component, "consolidation")
+            tasks = []
+            for task in previous_plan["tasks"]:
+                updated = dict(task)
+                resolution = resolution_by_key.get(task["key"])
+                if resolution is not None:
+                    component, strategy = resolution
+                    updated["shared_component"] = component
+                    updated["output_strategy"] = strategy
+                tasks.append(updated)
+            return {"milestone": previous_plan["milestone"], "tasks": tasks}
         if operation == "review":
             artifact = request.payload["artifact"]
             criteria = request.payload["acceptance_criteria"]

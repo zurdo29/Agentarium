@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from agentarium.domain.enums import ReviewVerdict
+from agentarium.domain.enums import OutputStrategy, ReviewVerdict
 from agentarium.domain.models import WorkItem
 from agentarium.execution.validation import VALIDATION_CONTRACT_VERSION
 from agentarium.repositories import Repository
@@ -145,7 +145,16 @@ class ContextBuilder:
                 "prior_candidate_files": latest_candidate_files,
             },
             "dependency_artifacts": (
-                [] if is_retry else approved_dependency_artifacts
+                # A patch/consolidation task's whole job is to extend or
+                # combine its dependencies' actual content — stripping that
+                # on retry (the anti-copy-paste default for exclusive and
+                # fragment tasks) would make the strategy unusable the
+                # moment the first attempt doesn't pass review.
+                approved_dependency_artifacts
+                if not is_retry
+                or item.output_strategy
+                in {OutputStrategy.PATCH, OutputStrategy.CONSOLIDATION}
+                else []
             ),
             "dependency_references": [
                 {

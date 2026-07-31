@@ -62,3 +62,10 @@ class RiskLevel(StrEnum):
     MEDIUM = "medium"
     HIGH = "high"
     CRITICAL = "critical"
+
+
+class OutputStrategy(StrEnum):
+    EXCLUSIVE = "exclusive"
+    FRAGMENT = "fragment"
+    PATCH = "patch"
+    CONSOLIDATION = "consolidation"

@@ -5,7 +5,7 @@ import json
 import shutil
 import subprocess
 import sys
-from typing import Annotated
+from typing import Annotated, Any
 
 import httpx
 import typer
@@ -23,8 +23,13 @@ app.add_typer(project_app, name="project")
 
 
 def _service() -> ApplicationService:
+    # Not .initialize(): that runs a global crash-recovery sweep, which
+    # would yank any work item back to READY out from under a `project run`
+    # that's actively mid-flight in another process. Schema/directories
+    # only here; recovery stays scoped to genuine startups (`init`, the API
+    # server) or to the specific project a `run` is about to drive.
     service = build_application()
-    service.initialize()
+    service.ensure_ready()
     return service
 
 
@@ -114,8 +119,20 @@ def resume_project(project_id: str) -> None:
 
 @project_app.command("status")
 def project_status(project_id: str) -> None:
-    detail = _service().project_detail(project_id)
-    typer.echo(json.dumps(detail, indent=2, ensure_ascii=False))
+    typer.echo(json.dumps(_project_detail(project_id), indent=2, ensure_ascii=False))
+
+
+def _project_detail(project_id: str) -> dict[str, Any]:
+    """Prefer the running API (single writer, WAL-safe reads) over opening
+    the SQLite file from a second process; fall back when no server answers."""
+    settings = get_settings()
+    url = f"http://{settings.api_host}:{settings.api_port}/api/projects/{project_id}"
+    try:
+        response = httpx.get(url, timeout=1.0)
+        response.raise_for_status()
+        return dict(response.json())
+    except httpx.HTTPError:
+        return _service().project_detail(project_id)
 
 
 def _version(command: list[str]) -> str | None:

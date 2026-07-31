@@ -10,6 +10,7 @@ from agentarium.artifacts import ArtifactStore
 from agentarium.domain.enums import (
     AgentRole,
     ApprovalStatus,
+    OutputStrategy,
     ProjectStatus,
     ReviewVerdict,
     RiskLevel,
@@ -48,7 +49,7 @@ from agentarium.isolation import (
 )
 from agentarium.llm import ModelRequest, ProviderResponse
 from agentarium.memory import ContextBuilder
-from agentarium.planning import BriefProposal, PlanProposal, TaskProposal
+from agentarium.planning import BriefProposal, DecomposeProposal, PlanProposal, TaskProposal
 from agentarium.repositories import Repository
 
 TERMINAL_TASK_STATES = {
@@ -159,6 +160,9 @@ class Orchestrator:
                 },
                 correlation_id=correlation_id,
             )
+        plan = await self._resolve_owned_path_conflicts(
+            plan, brief, project_id, correlation_id
+        )
         milestone = Milestone(
             project_id=project_id,
             title=plan.milestone.title,
@@ -185,6 +189,9 @@ class Orchestrator:
                 risk=task.risk,
                 priority=task.priority,
                 status=WorkItemStatus.DRAFT,
+                owned_paths=task.owned_paths,
+                shared_component=task.shared_component,
+                output_strategy=task.output_strategy,
             )
             self.repository.add_work_item(item)
             self._transition(item, status, correlation_id)
@@ -221,6 +228,14 @@ class Orchestrator:
 
     async def run_project(self, project_id: str) -> Project:
         project = self.repository.get_project(project_id)
+        recovered = self.repository.recover_interrupted(project_id)
+        if recovered:
+            self._event(
+                project_id,
+                "execution_recovered",
+                f"Se recuperaron {recovered} tareas interrumpidas de este proyecto.",
+                correlation_id=new_id(),
+            )
         if project.status is ProjectStatus.DRAFT:
             project = await self.plan_project(project_id)
         if project.status in {ProjectStatus.COMPLETED, ProjectStatus.CANCELLED}:
@@ -263,7 +278,10 @@ class Orchestrator:
                 self._update_progress(project_id)
                 continue
 
-            if items and all(item.status is WorkItemStatus.COMPLETED for item in items):
+            if items and all(
+                item.status in {WorkItemStatus.COMPLETED, WorkItemStatus.CANCELLED}
+                for item in items
+            ):
                 missing_deliverables, missing_scope, missing_success_criteria = (
                     self._project_contract_gaps(current_project, items)
                 )
@@ -449,12 +467,7 @@ class Orchestrator:
                     error=str(exc),
                 )
             else:
-                self._transition(
-                    item,
-                    WorkItemStatus.FAILED,
-                    correlation_id,
-                    error=str(exc),
-                )
+                await self._on_attempts_exhausted(item, correlation_id, str(exc))
             return
 
         assert session is not None
@@ -763,7 +776,7 @@ class Orchestrator:
                 correlation_id,
             )
         except RoleExecutionError as exc:
-            self._reject_evaluation(item, correlation_id, str(exc))
+            await self._reject_evaluation(item, correlation_id, str(exc))
             return
         try:
             test_proposal = self._validate_test(test_response.content)
@@ -853,7 +866,7 @@ class Orchestrator:
                 correlation_id,
             )
         except RoleExecutionError as exc:
-            self._reject_evaluation(item, correlation_id, str(exc))
+            await self._reject_evaluation(item, correlation_id, str(exc))
             return
         try:
             review_fragments, initial_review_error = (
@@ -937,7 +950,7 @@ class Orchestrator:
                 effective_criteria,
             )
         except (InvalidPlan, RoleExecutionError) as exc:
-            self._reject_evaluation(item, correlation_id, str(exc))
+            await self._reject_evaluation(item, correlation_id, str(exc))
             return
         if initial_review_error is not None:
             self._event(
@@ -1017,7 +1030,7 @@ class Orchestrator:
                     error=str(exc),
                     correlation_id=correlation_id,
                 )
-                self._request_changes(
+                await self._request_changes(
                     item,
                     correlation_id,
                     f"Falló la integración aislada: {exc}",
@@ -1053,7 +1066,7 @@ class Orchestrator:
             attempt=item.attempt_count,
             correlation_id=correlation_id,
         )
-        self._request_changes(
+        await self._request_changes(
             item,
             correlation_id,
             "; ".join(review.reasons),
@@ -1077,7 +1090,7 @@ class Orchestrator:
         )
         return result
 
-    def _reject_evaluation(
+    async def _reject_evaluation(
         self,
         item: WorkItem,
         correlation_id: str,
@@ -1092,9 +1105,9 @@ class Orchestrator:
             error=reason,
             correlation_id=correlation_id,
         )
-        self._request_changes(item, correlation_id, reason)
+        await self._request_changes(item, correlation_id, reason)
 
-    def _request_changes(
+    async def _request_changes(
         self,
         item: WorkItem,
         correlation_id: str,
@@ -1114,12 +1127,162 @@ class Orchestrator:
                 error=reason,
             )
         else:
-            self._transition(
-                item,
-                WorkItemStatus.FAILED,
+            await self._on_attempts_exhausted(item, correlation_id, reason)
+
+    async def _on_attempts_exhausted(
+        self,
+        item: WorkItem,
+        correlation_id: str,
+        reason: str,
+    ) -> None:
+        if await self._attempt_split(item, correlation_id, reason):
+            return
+        self._transition(
+            item,
+            WorkItemStatus.FAILED,
+            correlation_id,
+            error=reason,
+        )
+
+    async def _attempt_split(
+        self,
+        item: WorkItem,
+        correlation_id: str,
+        reason: str,
+    ) -> bool:
+        if len(item.acceptance_criteria) < 2:
+            return False
+        if item.title.startswith("[subtarea] "):
+            return False
+
+        retry_guidance = self.memory.operational(item).get("retry_guidance", {})
+        try:
+            decompose_response, _ = await self._call_role(
+                AgentRole.TECHNICAL_MANAGER,
+                ModelRequest(
+                    operation="decompose",
+                    project_id=item.project_id,
+                    work_item_id=item.id,
+                    attempt=item.attempt_count,
+                    payload={
+                        "task": item.model_dump(mode="json"),
+                        "prior_review_feedback": retry_guidance.get(
+                            "prior_review_feedback", []
+                        ),
+                        "prior_validation_failures": retry_guidance.get(
+                            "prior_validation_failures", []
+                        ),
+                    },
+                ),
                 correlation_id,
-                error=reason,
             )
+        except RoleExecutionError:
+            return False
+
+        try:
+            decompose_proposal = DecomposeProposal.model_validate(
+                decompose_response.content
+            )
+        except ValidationError:
+            return False
+
+        original_criteria = {
+            self._planning_entry_key(criterion)
+            for criterion in item.acceptance_criteria
+        }
+        covered_criteria = {
+            self._planning_entry_key(criterion)
+            for subtask in decompose_proposal.subtasks
+            for criterion in subtask.acceptance_criteria
+        }
+        if not original_criteria.issubset(covered_criteria):
+            return False
+
+        # Give this split its own sharing group: if the parent already had
+        # one, its children extend it; otherwise a fresh one scoped to this
+        # split keeps its own 2-4 children from colliding with each other,
+        # independent of whatever any other split of a sibling task does.
+        shared_component = item.shared_component or f"split-{item.id}"
+
+        children: list[WorkItem] = []
+        for subtask in decompose_proposal.subtasks:
+            child = WorkItem(
+                project_id=item.project_id,
+                milestone_id=item.milestone_id,
+                title=f"[subtarea] {subtask.title}",
+                description=subtask.description,
+                dependency_ids=list(item.dependency_ids),
+                expected_outputs=subtask.expected_outputs,
+                acceptance_criteria=subtask.acceptance_criteria,
+                allowed_tools=list(item.allowed_tools),
+                authorized_files=list(item.authorized_files),
+                max_attempts=3,
+                risk=item.risk,
+                requires_approval=item.requires_approval,
+                priority=item.priority,
+                status=WorkItemStatus.READY,
+                owned_paths=list(subtask.owned_paths),
+                shared_component=shared_component,
+                output_strategy=OutputStrategy.FRAGMENT,
+            )
+            self.repository.add_work_item(child)
+            children.append(child)
+
+        consolidation_owned_paths = list(item.owned_paths) or sorted(
+            {path for child in children for path in child.owned_paths}
+        )
+        consolidation = WorkItem(
+            project_id=item.project_id,
+            milestone_id=item.milestone_id,
+            title=f"Consolidar subtareas: {item.title}",
+            description=(
+                "Confirmar que las subtareas cubren completamente el "
+                f"contrato original: {item.description}"
+            ),
+            dependency_ids=[child.id for child in children],
+            expected_outputs=list(item.expected_outputs),
+            acceptance_criteria=list(item.acceptance_criteria),
+            allowed_tools=list(item.allowed_tools),
+            authorized_files=list(item.authorized_files),
+            max_attempts=3,
+            risk=item.risk,
+            requires_approval=item.requires_approval,
+            priority=item.priority,
+            status=WorkItemStatus.BLOCKED,
+            owned_paths=consolidation_owned_paths,
+            shared_component=shared_component,
+            output_strategy=OutputStrategy.CONSOLIDATION,
+        )
+        self.repository.add_work_item(consolidation)
+
+        self.repository.retarget_dependency(item.project_id, item.id, consolidation.id)
+
+        self._transition(
+            item,
+            WorkItemStatus.CANCELLED,
+            correlation_id,
+            error=(
+                f"Dividida en {len(children)} subtareas tras agotar intentos: "
+                f"{reason}"
+            ),
+        )
+        self._event(
+            item.project_id,
+            "task_split_created",
+            (
+                f"{item.title} se dividió en {len(children)} subtareas tras "
+                "agotar intentos sin producir una entrega aceptable."
+            ),
+            work_item_id=item.id,
+            attempt=item.attempt_count,
+            metadata={
+                "child_ids": [child.id for child in children],
+                "consolidation_id": consolidation.id,
+                "reason": reason,
+            },
+            correlation_id=correlation_id,
+        )
+        return True
 
     async def _call_role(
         self,
@@ -1189,19 +1352,25 @@ class Orchestrator:
         error: str | None = None,
     ) -> WorkItem:
         current = item.status
-        updated = self.repository.transition_work_item(item.id, target, error=error)
-        self._event(
-            item.project_id,
-            "task_state_changed",
-            f"{item.title}: {current.value} → {target.value}",
+        # attempt_count is untouched by a status transition, so item's own
+        # value is still correct after the update — no need to re-fetch.
+        event = ExecutionEvent(
+            project_id=item.project_id,
             work_item_id=item.id,
-            previous=current.value,
-            new=target.value,
-            attempt=updated.attempt_count,
+            action="task_state_changed",
+            message=f"{item.title}: {current.value} → {target.value}",
+            previous_state=current.value,
+            new_state=target.value,
+            attempt=item.attempt_count,
             error=error,
             correlation_id=correlation_id,
         )
-        return updated
+        return self.repository.transition_work_item(
+            item.id,
+            target,
+            error=error,
+            event=event,
+        )
 
     def _event(
         self,
@@ -1323,6 +1492,7 @@ class Orchestrator:
             ),
             risk=RiskLevel.MEDIUM,
             priority=70,
+            output_strategy=OutputStrategy.CONSOLIDATION,
         )
         completed_plan = PlanProposal.model_validate(
             {
@@ -1339,6 +1509,114 @@ class Orchestrator:
             missing_scope,
             missing_success_criteria,
         )
+
+    @staticmethod
+    def _plan_dependency_closure(plan: PlanProposal) -> dict[str, set[str]]:
+        graph = {task.key: task.dependencies for task in plan.tasks}
+        closures: dict[str, set[str]] = {}
+        for key in graph:
+            seen: set[str] = set()
+            pending = list(graph[key])
+            while pending:
+                dependency_key = pending.pop()
+                if dependency_key in seen:
+                    continue
+                seen.add(dependency_key)
+                pending.extend(graph.get(dependency_key, []))
+            closures[key] = seen
+        return closures
+
+    @staticmethod
+    def _detect_owned_path_conflicts(plan: PlanProposal) -> list[dict[str, Any]]:
+        closures = Orchestrator._plan_dependency_closure(plan)
+        tasks = plan.tasks
+        conflicts: list[dict[str, Any]] = []
+        for index, task_a in enumerate(tasks):
+            for task_b in tasks[index + 1 :]:
+                if (
+                    task_b.key in closures[task_a.key]
+                    or task_a.key in closures[task_b.key]
+                ):
+                    continue  # real dependency edge, not siblings
+                by_key_a = {path.casefold(): path for path in task_a.owned_paths}
+                by_key_b = {path.casefold(): path for path in task_b.owned_paths}
+                overlap = set(by_key_a) & set(by_key_b)
+                if not overlap:
+                    continue
+                grouped = (
+                    task_a.shared_component is not None
+                    and task_a.shared_component == task_b.shared_component
+                    and task_a.output_strategy != OutputStrategy.EXCLUSIVE
+                    and task_b.output_strategy != OutputStrategy.EXCLUSIVE
+                )
+                if grouped:
+                    continue
+                conflicts.append(
+                    {
+                        "task_a": task_a.key,
+                        "task_b": task_b.key,
+                        "paths": sorted(by_key_a[key] for key in overlap),
+                    }
+                )
+        return conflicts
+
+    async def _resolve_owned_path_conflicts(
+        self,
+        plan: PlanProposal,
+        brief: ProjectBrief,
+        project_id: str,
+        correlation_id: str,
+        *,
+        max_revisions: int = 2,
+    ) -> PlanProposal:
+        current = plan
+        for _ in range(max_revisions):
+            conflicts = self._detect_owned_path_conflicts(current)
+            if not conflicts:
+                return current
+            self._event(
+                project_id,
+                "plan_owned_path_conflict_detected",
+                (
+                    f"Se detectaron {len(conflicts)} conflictos de propiedad "
+                    "de archivo en el plan; pidiendo una revisión."
+                ),
+                metadata={"conflicts": conflicts},
+                correlation_id=correlation_id,
+            )
+            try:
+                revision_response, _ = await self._call_role(
+                    AgentRole.TECHNICAL_MANAGER,
+                    ModelRequest(
+                        operation="plan_revision",
+                        project_id=project_id,
+                        payload={
+                            "brief": brief.model_dump(mode="json"),
+                            "previous_plan": current.model_dump(mode="json"),
+                            "path_conflicts": conflicts,
+                        },
+                    ),
+                    correlation_id,
+                )
+                revised = self._validate_plan(revision_response.content)
+            except (RoleExecutionError, InvalidPlan):
+                break
+            revised, _, _, _ = self._ensure_plan_covers_brief(revised, brief)
+            current = revised
+        remaining = self._detect_owned_path_conflicts(current)
+        if remaining:
+            self._event(
+                project_id,
+                "plan_owned_path_conflict_unresolved",
+                (
+                    f"Quedaron {len(remaining)} conflictos de propiedad de "
+                    "archivo sin resolver tras la revisión; la compuerta de "
+                    "colisión en ejecución sigue siendo la protección final."
+                ),
+                metadata={"conflicts": remaining},
+                correlation_id=correlation_id,
+            )
+        return current
 
     @staticmethod
     def _project_contract_gaps(
@@ -1424,9 +1702,23 @@ class Orchestrator:
         proposal: WorkArtifactProposal,
     ) -> set[str]:
         allowed_work_item_ids = {item.id, *self._transitive_dependency_ids(item)}
+        by_id = {
+            candidate.id: candidate
+            for candidate in self.repository.list_work_items(item.project_id)
+        }
+        cancelled_work_item_ids = {
+            candidate.id
+            for candidate in by_id.values()
+            if candidate.status is WorkItemStatus.CANCELLED
+        }
         owners: dict[str, str] = {}
         for artifact in self.repository.list_artifacts(item.project_id):
             if artifact.work_item_id in allowed_work_item_ids:
+                continue
+            if artifact.work_item_id in cancelled_work_item_ids:
+                # A cancelled task's candidate was never integrated (e.g. it
+                # was superseded by a split into subtasks); its claim on a
+                # path is moot and must not block the replacement work.
                 continue
             files = artifact.content.get("files", [])
             if not isinstance(files, list):
@@ -1437,11 +1729,28 @@ class Orchestrator:
                 path = str(file.get("path", "")).strip().casefold()
                 if path:
                     owners[path] = artifact.work_item_id
-        return {
-            file.path
-            for file in proposal.files
-            if file.path.casefold() in owners
-        }
+        colliding: set[str] = set()
+        for file in proposal.files:
+            key = file.path.casefold()
+            owner_id = owners.get(key)
+            if owner_id is None:
+                continue
+            owner = by_id.get(owner_id)
+            # Intentional sharing: both sides tagged with the same grouping
+            # and this candidate isn't claiming sole ("exclusive") ownership
+            # of the path — e.g. a fragment/patch contributing to a file a
+            # consolidation task (or the original exclusive owner) combines.
+            # Only the CANDIDATE's own strategy is constrained here; the
+            # owning task may legitimately still be "exclusive" in origin.
+            if (
+                owner is not None
+                and item.shared_component is not None
+                and item.shared_component == owner.shared_component
+                and item.output_strategy is not OutputStrategy.EXCLUSIVE
+            ):
+                continue
+            colliding.add(file.path)
+        return colliding
 
     def _transitive_dependency_ids(self, item: WorkItem) -> set[str]:
         by_id = {
