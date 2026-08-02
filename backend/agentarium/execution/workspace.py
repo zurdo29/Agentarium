@@ -13,7 +13,24 @@ from .contracts import WorkspaceFileProposal
 
 
 class WorkspaceRejected(PermissionError):
-    pass
+    """Base rejection. On its own it means the *proposed content* was wrong in
+    a way the model could plausibly fix on a retry (too many files, a file over
+    the size limit, no files at all), so it is allowed to drive a retry and,
+    once attempts run out, a task split."""
+
+
+class WorkspaceSecurityRejected(WorkspaceRejected):
+    """The proposal tried to leave its authorized sandbox (escaping path,
+    symbolic link, destination outside the project scope). Never retried and
+    never split: a boundary violation is not a decomposition problem, and
+    re-running it only repeats the attempt."""
+
+
+class WorkspaceInfrastructureRejected(WorkspaceRejected):
+    """The machine failed, not the proposal (the file could not be written,
+    an integrated file failed checksum verification). A retry can legitimately
+    succeed, but splitting the task would be answering a disk problem with a
+    planning change."""
 
 
 @dataclass(frozen=True)
@@ -79,7 +96,9 @@ class WorkspaceMaterializer:
         project_scope = self._contained_directory(project_id)
         resolved_destination = destination.resolve()
         if not self._is_within(resolved_destination, project_scope):
-            raise WorkspaceRejected("Workspace destination escaped the project scope")
+            raise WorkspaceSecurityRejected(
+                "Workspace destination escaped the project scope"
+            )
         prepared: list[tuple[WorkspaceFileProposal, Path, bytes]] = []
         for proposal in files:
             content = proposal.content.encode("utf-8")
@@ -125,7 +144,7 @@ class WorkspaceMaterializer:
                     stream.flush()
                     os.fsync(stream.fileno())
             except OSError as exc:
-                raise WorkspaceRejected(
+                raise WorkspaceInfrastructureRejected(
                     f"Workspace file could not be installed: {target.name}"
                 ) from exc
 
@@ -141,7 +160,7 @@ class WorkspaceMaterializer:
             target = self._contained_file(project_root, proposal.path)
             evidence = self._evidence(proposal, target, content)
             if not self.verify(evidence):
-                raise WorkspaceRejected(
+                raise WorkspaceInfrastructureRejected(
                     f"Integrated workspace file failed verification: {proposal.path}"
                 )
             result.append(evidence)
@@ -159,20 +178,28 @@ class WorkspaceMaterializer:
 
     def _contained_directory(self, *parts: str) -> Path:
         if any(not part or Path(part).name != part for part in parts):
-            raise WorkspaceRejected("Workspace identifiers must be single path components")
+            raise WorkspaceSecurityRejected(
+                "Workspace identifiers must be single path components"
+            )
         candidate = self.workspace_root.joinpath(*parts).resolve()
         if not self._is_within(candidate, self.workspace_root):
-            raise WorkspaceRejected("Workspace directory escaped the configured root")
+            raise WorkspaceSecurityRejected(
+                "Workspace directory escaped the configured root"
+            )
         return candidate
 
     def _contained_file(self, root: Path, relative_path: str) -> Path:
         candidate = (root / Path(relative_path)).resolve()
         if not self._is_within(candidate, root):
-            raise WorkspaceRejected("Workspace file escaped its authorized directory")
+            raise WorkspaceSecurityRejected(
+                "Workspace file escaped its authorized directory"
+            )
         current = candidate
         while current != root:
             if current.exists() and current.is_symlink():
-                raise WorkspaceRejected("Workspace file crosses a symbolic link")
+                raise WorkspaceSecurityRejected(
+                    "Workspace file crosses a symbolic link"
+                )
             current = current.parent
         return candidate
 

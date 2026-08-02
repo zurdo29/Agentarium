@@ -54,6 +54,7 @@ class Database:
         ("owned_paths_json", "JSON NOT NULL DEFAULT '[]'"),
         ("shared_component", "VARCHAR(120)"),
         ("output_strategy", "VARCHAR(20) NOT NULL DEFAULT 'exclusive'"),
+        ("split_depth", "INTEGER NOT NULL DEFAULT 0"),
     )
 
     def _ensure_work_item_columns(self) -> None:

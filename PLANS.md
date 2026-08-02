@@ -21,7 +21,7 @@ El objetivo del próximo ciclo no es añadir más roles. Es conseguir un MVP
 local-first confiable para proyectos pequeños y demostrarlo con mediciones
 repetibles.
 
-## Foto actual — 1 de agosto de 2026
+## Foto actual — 2 de agosto de 2026
 
 ### Lo que ya funciona
 
@@ -38,25 +38,40 @@ repetibles.
   tarea agotada en subtareas más consolidación.
 - Detección reactiva de colisiones de archivos y contrato de propiedad
   (`owned_paths`, `shared_component`, `output_strategy`).
+- Rutas efectivas resueltas de forma mecánica: `owned_paths` más las entradas
+  de `expected_outputs` que son rutas relativas válidas, sin interpretar
+  descripciones libres. Lo usan el preflight de plan, `decompose` y la
+  compuerta reactiva.
+- Identidad estable de criterios en `decompose` (`ac-1`, `ac-2`, …): el texto
+  se copia del padre y una partición determinista cubre el reparto si el
+  modelo rompe el mapeo.
+- Subtareas que heredan el mismo archivo se encadenan en secuencia con `patch`
+  en vez de sobrescribirse.
+- Máximo una división automática por linaje (`split_depth` persistido); lo
+  agotado falla y queda reparable a mano.
 - Vista previa local aislada por proyecto.
 
 ### Evidencia disponible
 
-- Última verificación registrada: Ruff y MyPy limpios; 134/134 pruebas backend
-  en verde, sin `xfail` ni exclusiones.
-- El build, lint y las dos pruebas web pasaron antes de los últimos cambios de
-  backend, pero no se reverificaron en la sesión del último commit.
+- Última verificación registrada: Ruff y MyPy limpios; 170/170 pruebas backend
+  en verde, sin `xfail` ni exclusiones; lint y pruebas web reverificadas con
+  `.\test.ps1` completo.
 - La concurrencia entre un `project run` y lecturas repetidas de
   `project status` se verificó con un modelo real sin nuevas transiciones
   inválidas.
-- Los detalles y reproducciones de los fixes recientes están en ADR 0015–0023.
+- P0 se confirmó con tres corridas reales contra qwen2.5-coder:7b, una por
+  fix, sin repetir objetivos: workspaces `13ee7f71` (preflight detectando un
+  solapamiento declarado sólo vía `expected_outputs`), `75ae6456` (primera
+  división que llegó a crear hijas, ambas `COMPLETED`) y `8be5cde9`.
+- Los detalles y reproducciones están en ADR 0015–0026.
 
 ### Riesgos y límites actuales
 
 | Área | Evidencia actual | Consecuencia |
 |---|---|---|
-| Propiedad de archivos | El modelo sigue usando `expected_outputs` y suele dejar `owned_paths` vacío | El preflight de ADR 0023 puede no ver un conflicto real |
-| División de tareas | La cobertura exige coincidencia textual de criterios | Una división razonable puede rechazarse aunque cubra el significado |
+| Propiedad de archivos | Resuelto en P0: la detección lee también `expected_outputs`. Confirmado en vivo en `13ee7f71` | El modelo sigue sin declarar `owned_paths`, pero ya no hace falta que lo haga |
+| División de tareas | Resuelto en P0: reparto por ids con partición determinista de respaldo | Queda que el título de una hija puede no describir bien los criterios que le tocaron tras una partición |
+| Calidad de la descomposición | El modelo repite el mismo candidato también a nivel de subtarea | Dividir reduce el alcance, no cambia esa conducta; un linaje agotado ahora para y espera intervención |
 | Dependencias de ejecución | El worker puede elegir paquetes no disponibles en el sandbox | El fallo aparece tarde, después de gastar inferencias e intentos |
 | Evaluación de modelos | Hay corridas útiles, pero no una matriz repetible | No se puede elegir modelo por rol con evidencia suficiente |
 | Mantenibilidad | `engine.py` tiene 2051 líneas y `app/page.tsx` 2207 | Cada cambio cruza demasiadas responsabilidades |
@@ -124,7 +139,11 @@ queda clasificado por separado.
 El orden es deliberado. No comenzar una fase posterior porque resulte más
 atractiva si la anterior no cumple sus criterios de salida.
 
-### P0 — cerrar el bucle de planificación actual
+### P0 — cerrar el bucle de planificación actual — CERRADO (2 de agosto de 2026)
+
+**Esfuerzo real:** 4 PR. Los dos puntos previstos, más dos causas que
+aparecieron en las corridas de confirmación y se trataron como PR aparte en
+vez de ampliar el original, según la regla 3.
 
 **Esfuerzo estimado:** 1–2 PR, 2–4 sesiones de trabajo.
 
@@ -155,6 +174,24 @@ atractiva si la anterior no cumple sus criterios de salida.
 - la corrida real ya no falla por esos dos motivos;
 - cualquier causa nueva queda registrada como categoría, no corregida dentro
   del mismo PR.
+
+**Resultado.** Los cuatro criterios se cumplieron.
+
+| Criterio | Evidencia |
+|---|---|
+| Solapamiento con `owned_paths` vacío | `13ee7f71`: preflight detectó `api_endpoints.py` entre dos hermanas con `declared_via: ["expected_outputs"]` |
+| Reformulación no cancela la división | `75ae6456`: primera división que creó hijas, ambas `COMPLETED`; el modelo repartió `ac-1`/`ac-2` bien al primer intento |
+| La corrida ya no falla por esos motivos | Confirmado; los fallos restantes son de otra categoría |
+| Causas nuevas clasificadas, no arrastradas | Dos: rechazo de candidato sin clasificar por tipo, y recursión de la división. Cada una fue su propio PR |
+
+Detalle en ADR 0024 (rutas efectivas y encadenamiento), 0025 (clasificación
+del fallo de un candidato en corregible / infraestructura / seguridad),
+0026 (identidad de criterios) y la revisión de 2026-08-02 en ADR 0021
+(`split_depth`).
+
+Pendiente conocido, no bloqueante: la partición determinista de respaldo nunca
+llegó a ejercitarse en vivo — el modelo no rompió el mapeo en la corrida de
+confirmación. Sólo está cubierta por pruebas.
 
 ### P1 — benchmark reproducible y taxonomía de fallos
 
@@ -274,13 +311,13 @@ botella resuelve.
 
 ## Próximas tres entregas
 
-1. **PR 1 — planificación mecánica:** rutas efectivas más IDs de criterios y
-   sus regresiones.
+1. ~~**PR 1 — planificación mecánica:** rutas efectivas más IDs de criterios y
+   sus regresiones.~~ Entregado, ver P0.
 2. **PR 2 — medición:** casos versionados, taxonomía y `benchmark report`.
 3. **PR 3 — capacidades:** manifiesto del runtime y fallo temprano por capacidad
    no disponible.
 
-No empezar la modularización grande antes de que PR 1 y PR 2 congelen el
+No empezar la modularización grande antes de que PR 2 congele el
 comportamiento que se debe preservar.
 
 ## Runbook de Windows
@@ -307,6 +344,16 @@ Si Ollama no responde:
 ```powershell
 ollama list
 ollama serve
+```
+
+Si `pytest` falla en los tests que usan worktrees, revisar `TMP`/`TEMP`: git
+tiene un límite propio de longitud de path para su contabilidad de worktrees
+(`fatal: '$GIT_DIR' too big`, ADR 0022) que `core.longpaths` no cubre. El
+directorio temporal tiene que ser **corto**:
+
+```powershell
+$env:TMP = "C:\Users\$env:USERNAME\agtmp"
+$env:TEMP = $env:TMP
 ```
 
 Inicio y parada local:
@@ -343,3 +390,6 @@ Inicio y parada local:
 - División de tareas: ADR 0021
 - Concurrencia y recuperación: ADR 0022
 - Propiedad explícita de archivos: ADR 0023
+- Rutas efectivas y encadenamiento de subtareas: ADR 0024
+- Clasificación del fallo de un candidato: ADR 0025
+- Identidad de criterios en `decompose`: ADR 0026

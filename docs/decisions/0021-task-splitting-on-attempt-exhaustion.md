@@ -49,12 +49,11 @@ ni produjo candidato — dividir no ayuda a un fallo de proveedor), ni
 ya iniciados por un humano, que puede decidir por su cuenta). Esta exclusión
 es intencional, no un olvido.
 
-**Freno de recursión sin migración de esquema**: una subtarea se marca con
-el prefijo de título `"[subtarea] "`; si ella misma agota intentos, no
-vuelve a dividirse, falla normal. No se agregó una columna `is_subtask`
-porque no existe Alembic ni `ALTER TABLE` en el backend
-(`Database.create_all()` sólo crea tablas faltantes) y `runtime/
-agentarium.db` ya tiene datos reales acumulados.
+**Freno de recursión** — ver la revisión de 2026-08-02 más abajo, que
+reemplazó el mecanismo original. La versión inicial marcaba una subtarea con
+el prefijo de título `"[subtarea] "` y evitaba una columna nueva porque no
+existe Alembic en el backend; resultó insuficiente y se corrigió con una
+columna `split_depth` persistida.
 
 **El chequeo de finalización de `run_project`** se amplió de `all(status is
 COMPLETED)` a `all(status in {COMPLETED, CANCELLED})` — si no, una tarea
@@ -93,7 +92,9 @@ sus hijas, y la tarea final del proyecto quedó re-apuntada a las cuatro
 consolidaciones en vez de a las tareas originales (ninguna de las cuatro
 tareas canceladas sigue apareciendo en ningún `dependency_ids` del resto del
 DAG). El freno de recursión también se sostuvo: ninguna subtarea, aun
-agotando sus propios 3 intentos, intentó dividirse de nuevo.
+agotando sus propios 3 intentos, intentó dividirse de nuevo. (Cierto para
+subtareas, que es lo único que se pudo observar entonces; el hueco estaba en
+las tareas de **consolidación** — ver la revisión de 2026-08-02 al final.)
 
 El proyecto terminó `failed` de todos modos, por dos causas reales y
 separadas del mecanismo de división en sí:
@@ -129,3 +130,58 @@ toman `prepare()`/`discard()`) — confirmado corriendo la misma secuencia
 fuera de pytest, donde completa sin problema. Los 4 tests unitarios directos
 de `test_task_splitting.py` (que no pasan por git worktree) sí verifican la
 lógica de división de forma determinista y confiable.
+
+## Revisión 2026-08-02: el freno de recursión pasa a `split_depth` persistido
+
+El freno original miraba el prefijo de título `"[subtarea] "`. Es insuficiente
+por dos motivos, uno de los cuales se observó en vivo:
+
+1. **Una tarea de consolidación no lleva ese prefijo.** Su título es
+   `"Consolidar subtareas: …"`, así que el freno no la alcanzaba. En la corrida
+   de verificación de ADR 0026 (workspace
+   `75ae6456-b10b-4dc9-82d7-82e7e2e759cf`) la consolidación de una división
+   agotó sus propios intentos y se dividió a su vez, generando
+   `"Consolidar subtareas: Consolidar subtareas: Validation Implementation"` y
+   una segunda generación de hijas. Una nieta falló y arrastró al proyecto.
+   Ese camino era inalcanzable hasta ADR 0026: sin divisiones que llegaran a
+   crear hijas, nunca hubo una consolidación capaz de agotar intentos.
+2. **El título es texto de un modelo, no un tipo.** Derivar de él una decisión
+   de control de flujo es la misma clase de dependencia de compliance que ADR
+   0018, 0020, 0023 y 0024 documentaron como poco fiable.
+
+**Lo que se implementó**: una columna `split_depth` en `work_items`
+(`INTEGER NOT NULL DEFAULT 0`, con el mismo patrón de migración manual e
+idempotente de ADR 0022/0023 — el argumento original de "no hay Alembic" ya no
+aplica, ese patrón existe desde ADR 0022) y el campo correspondiente en
+`WorkItem`.
+
+- Una tarea planificada nace con `split_depth = 0`.
+- Todo lo que produce una división —hijas **y** consolidación por igual—
+  hereda `split_depth = item.split_depth + 1`.
+- `_attempt_split` se niega a dividir cuando `split_depth >= MAX_SPLIT_DEPTH`
+  (1), y emite `task_split_depth_exhausted` para dejarlo auditable.
+- El chequeo por prefijo de título desapareció por completo del código de
+  producción; el prefijo sigue existiendo sólo como texto visible del título.
+
+**Máximo una división automática por linaje.** Una hija o una consolidación
+que agota intentos falla, y ahí se detiene el automatismo.
+
+**Fallar no es el final**: `ApplicationService.retry_work_item`,
+`recover_artifact` y `submit_candidate` ya aceptan una tarea `FAILED` y
+extienden su presupuesto de intentos, así que la reparación manual sigue
+disponible sin código nuevo. Reabrir una tarea **no** reinicia el linaje: su
+`split_depth` se conserva, así que un segundo agotamiento tampoco divide.
+
+**Pruebas**: herencia de `split_depth` en hijas y consolidación (incluida la
+lectura desde la base, no sólo el objeto en memoria); tres casos
+parametrizados que confirman que lo que frena es la profundidad y no la forma
+del título (prefijo `"[subtarea] "`, título de consolidación, y un título
+arbitrario sin prefijo), cada uno terminando en `FAILED` con el evento nuevo y
+sin crear ninguna tarea; y una prueba de que una hija fallida se reabre por el
+camino manual y sigue sin dividirse al agotarse otra vez. Suite completa:
+170/170 en verde.
+
+**Consecuencia aceptada**: un linaje agotado ahora termina en una falla que
+requiere intervención humana en vez de seguir descomponiéndose solo. Es
+deliberado — la segunda generación de la corrida de ADR 0026 no aportó
+progreso, sólo tareas más chicas repitiendo el mismo candidato.

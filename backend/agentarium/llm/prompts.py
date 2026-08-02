@@ -18,7 +18,7 @@ from .base import ModelRequest
 
 PLANNING_PROMPT_VERSION = "planning-v3"
 WORKSPACE_PROMPT_VERSION = "workspace-v7"
-DECOMPOSE_PROMPT_VERSION = "decompose-v2"
+DECOMPOSE_PROMPT_VERSION = "decompose-v3"
 PLAN_REVISION_PROMPT_VERSION = "plan-revision-v1"
 
 _OPERATION_CONTRACTS: dict[str, type[BaseModel]] = {
@@ -166,10 +166,14 @@ _OPERATION_INSTRUCTIONS = {
     "decompose": (
         "SOLICITUD.payload.task agotó sus intentos sin producir una entrega "
         "aceptable. Divídela en entre 2 y 4 subtareas más chicas e "
-        "independientemente resolubles. La unión literal de los "
-        "acceptance_criteria de todas las subtareas debe cubrir cada entrada "
-        "de task.acceptance_criteria: no omitas ninguna ni la reformules de "
-        "forma irreconocible. Usa prior_review_feedback y "
+        "independientemente resolubles. "
+        "SOLICITUD.payload.acceptance_criteria_index numera los criterios del "
+        "padre como 'ac-1', 'ac-2', etc. Repartí esos identificadores entre "
+        "las subtareas con acceptance_criteria_ids: cada id debe aparecer en "
+        "exactamente una subtarea, cada subtarea debe recibir al menos uno, y "
+        "entre todas deben cubrirse todos. El texto de cada criterio se copia "
+        "del padre, así que no hace falta que lo reescribas fiel: lo que "
+        "importa es el reparto de ids. Usa prior_review_feedback y "
         "prior_validation_failures (evidencia de por qué falló) para separar "
         "las causas de falla en subtareas distintas cuando sea razonable, en "
         "vez de dividir arbitrariamente. Cada subtítulo debe ser distinto y "

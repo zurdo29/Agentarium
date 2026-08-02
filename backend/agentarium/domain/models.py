@@ -103,6 +103,9 @@ class WorkItem(DomainModel):
     owned_paths: list[str] = Field(default_factory=list)
     shared_component: str | None = None
     output_strategy: OutputStrategy = OutputStrategy.EXCLUSIVE
+    # How many automatic splits this task descends from. A planned task is 0;
+    # everything an automatic split creates is 1, and only depth 0 may split.
+    split_depth: int = Field(default=0, ge=0)
     created_at: datetime = Field(default_factory=utc_now)
     updated_at: datetime = Field(default_factory=utc_now)
 

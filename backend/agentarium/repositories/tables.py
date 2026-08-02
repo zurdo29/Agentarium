@@ -66,6 +66,7 @@ class WorkItemRow(Base):
     owned_paths_json: Mapped[list[str]] = mapped_column(JSON, default=list)
     shared_component: Mapped[str | None] = mapped_column(String(120), nullable=True)
     output_strategy: Mapped[str] = mapped_column(String(20), default="exclusive")
+    split_depth: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 

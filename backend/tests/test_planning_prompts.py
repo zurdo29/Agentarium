@@ -16,7 +16,14 @@ from agentarium.llm import (
 )
 from agentarium.llm.mock import MockProvider
 from agentarium.orchestration.engine import InvalidPlan, Orchestrator
-from agentarium.planning import BriefProposal, DecomposeProposal, PlanProposal, SubtaskProposal
+from agentarium.planning import (
+    BriefProposal,
+    DecomposeProposal,
+    PlanProposal,
+    SubtaskProposal,
+    implicit_path_claims,
+    merge_path_claims,
+)
 from agentarium.services import ApplicationService
 from pydantic import ValidationError
 
@@ -321,8 +328,71 @@ def test_owned_paths_defaults_to_empty_and_accepts_relative_paths() -> None:
     assert subtask.owned_paths == ["routes/books.py"]
 
 
+def test_implicit_path_claims_only_counts_file_like_entries() -> None:
+    assert implicit_path_claims(
+        [
+            "api.py",
+            "docs/design.md",
+            "src\\routes\\books.ts",
+        ]
+    ) == ["api.py", "docs/design.md", "src/routes/books.ts"]
+
+    # Prose, versions and unsafe paths are not ownership claims.
+    assert (
+        implicit_path_claims(
+            [
+                "resultado",
+                "Documento de arquitectura en Markdown",
+                "Una API REST funcionando",
+                "informe final.md",
+                "v1.2",
+                "/etc/passwd",
+                "../outside.py",
+                "C:/tmp/out.py",
+            ]
+        )
+        == []
+    )
+
+
+def test_merge_path_claims_keeps_declared_paths_and_adds_implicit_ones() -> None:
+    assert merge_path_claims(["routes/books.py"], ["api.py", "resultado"]) == [
+        "routes/books.py",
+        "api.py",
+    ]
+    # An implicit claim already declared explicitly is not duplicated.
+    assert merge_path_claims(["Api.py"], ["api.py"]) == ["Api.py"]
+
+
+def test_decompose_proposal_rejects_overlap_declared_only_via_expected_outputs() -> None:
+    # The exact shape qwen2.5-coder:7b produced in workspace 487c5194: the file
+    # is named in expected_outputs, owned_paths stays empty, strategy is the
+    # default "exclusive".
+    with pytest.raises(ValidationError, match="path claim overlap"):
+        DecomposeProposal.model_validate(
+            {
+                "subtasks": [
+                    _subtask(title="Listar", expected_outputs=["api.py"]),
+                    _subtask(title="Agregar", expected_outputs=["api.py"]),
+                ]
+            }
+        )
+
+
+def test_decompose_proposal_allows_distinct_expected_output_files() -> None:
+    proposal = DecomposeProposal.model_validate(
+        {
+            "subtasks": [
+                _subtask(title="Listar", expected_outputs=["routes/list.py"]),
+                _subtask(title="Agregar", expected_outputs=["routes/create.py"]),
+            ]
+        }
+    )
+    assert len(proposal.subtasks) == 2
+
+
 def test_decompose_proposal_rejects_overlap_without_grouping() -> None:
-    with pytest.raises(ValidationError, match="owned_paths overlap"):
+    with pytest.raises(ValidationError, match="path claim overlap"):
         DecomposeProposal.model_validate(
             {
                 "subtasks": [
@@ -424,3 +494,74 @@ async def test_plan_owned_path_conflicts_trigger_a_revision(
     assert task_a.shared_component == task_b.shared_component
     assert task_a.output_strategy is not OutputStrategy.EXCLUSIVE
     assert task_b.output_strategy is not OutputStrategy.EXCLUSIVE
+
+
+@pytest.mark.asyncio
+async def test_plan_conflicts_are_detected_from_expected_outputs_alone(
+    service: ApplicationService,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    original_generate = MockProvider.generate
+
+    def _task(key: str, title: str, output: str) -> dict[str, object]:
+        # owned_paths deliberately absent: the model names the file it will
+        # write in expected_outputs and never adopts the newer field.
+        return {
+            "key": key,
+            "title": title,
+            "description": f"Endpoints de {title}.",
+            "dependencies": [],
+            "expected_outputs": [output],
+            "acceptance_criteria": [f"Responde a solicitudes de {title}"],
+            "risk": "low",
+            "priority": 90,
+        }
+
+    async def colliding_plan(self, request, agent):  # type: ignore[no-untyped-def]
+        if request.operation == "plan":
+            content = {
+                "milestone": {
+                    "title": "MVP verificable",
+                    "description": "Del objetivo a un resultado integrado.",
+                },
+                "tasks": [
+                    _task("task_a", "Listar", "api.py"),
+                    _task("task_b", "Agregar", "api.py"),
+                    _task("task_c", "Documentar", "README.md"),
+                ],
+            }
+            raw = json.dumps(content)
+            return ProviderResponse(
+                content=content,
+                raw_text=raw,
+                prompt_characters=len(raw),
+                response_characters=len(raw),
+            )
+        return await original_generate(self, request, agent)
+
+    monkeypatch.setattr(MockProvider, "generate", colliding_plan)
+
+    project = service.create_project("Objetivo con archivo compartido implícito")
+    await service.orchestrator.plan_project(project.id)
+
+    conflict_events = [
+        event
+        for event in service.repository.list_events(project.id)
+        if event["action"] == "plan_owned_path_conflict_detected"
+    ]
+    assert conflict_events
+    conflicts = conflict_events[0]["metadata"]["conflicts"]
+    assert [conflict["paths"] for conflict in conflicts] == [["api.py"]]
+    assert conflicts[0]["declared_via"] == ["expected_outputs"]
+    assert {conflicts[0]["task_a"], conflicts[0]["task_b"]} == {"task_a", "task_b"}
+
+    items = {
+        item.title: item
+        for item in service.repository.list_work_items(project.id)
+    }
+    assert items["Listar"].shared_component == items["Agregar"].shared_component
+    assert items["Listar"].output_strategy is not OutputStrategy.EXCLUSIVE
+    assert items["Agregar"].output_strategy is not OutputStrategy.EXCLUSIVE
+    # The task nobody collides with is left alone.
+    assert items["Documentar"].shared_component is None
+    assert items["Documentar"].output_strategy is OutputStrategy.EXCLUSIVE
