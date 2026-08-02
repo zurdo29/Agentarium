@@ -6,6 +6,14 @@ en `docs/decisions/`. Si una investigación no cambia la arquitectura, debe
 quedar en el commit, el issue o el informe de benchmark correspondiente, no
 crecer indefinidamente aquí.
 
+> **Dónde estamos (2 de agosto de 2026).** P0, P1.1, P1.1b y P1.2a están
+> cerrados y mergeados en `main` (`6d11fd5`); árbol limpio, 294/294 en verde.
+> **El siguiente paso es ejecutar P1.2**, y está listo para correr: los
+> comandos exactos, el aislamiento de base y workspace, y qué revisar después
+> están en la sección "P1.2 — la matriz" más abajo. Empezar por la tanda de 9
+> con `qwen3:4b`; verificado con `--dry-run` que planifica exactamente esas 9.
+> No cambiar prompts, casos ni configuración hasta terminar la matriz.
+
 ## Norte del producto
 
 Agentarium debe convertir un objetivo claro en artefactos útiles, trazables y
@@ -355,10 +363,69 @@ arquitectura producen la misma cadena; un parche del SO no invalida un
 baseline, mudarse de SO o arquitectura sí. El ledger pasa a
 `schema_version: 2`.
 
-#### P1.2 — la matriz
+#### P1.2 — la matriz — SIGUIENTE PASO, listo para ejecutar
 
-**P1.1b ya está cerrada, así que la matriz está desbloqueada.** Ejecutar la matriz inicial de 3 casos × 3 modelos ×
-3 repeticiones. Las 27 corridas deben ser automatizadas; no supervisadas manualmente una por una:
+Toda la maquinaria está cerrada y mergeada (P1.1, P1.1b, P1.2a). Falta
+únicamente correr la matriz de 3 casos × 3 modelos × 3 repeticiones. Las 27
+corridas son automatizadas; no se supervisan una por una.
+
+**Se ejecuta en dos tandas, en la misma suite.** Primero 9 —los tres casos
+contra `qwen3:4b`, el modelo más liviano— y sólo después las 18 restantes. Si
+hay un problema de infraestructura, de staging, del contrato funcional o de
+persistencia, aparece antes de gastar horas con los modelos grandes, y las
+tres repeticiones ya muestran si los resultados son inestables.
+
+##### Aislamiento (obligatorio, en la misma sesión de PowerShell)
+
+La matriz crea un proyecto real y un workspace por corrida. Van a una base y a
+un workspace propios para no mezclarse con los proyectos de auditoría ni
+inflar `runtime/agentarium.db`.
+
+```powershell
+$env:AGENTARIUM_DATABASE_URL = "sqlite:///runtime/benchmarks/p1-baseline-2026-08/agentarium.db"
+$env:AGENTARIUM_WORKSPACE_ROOT = "C:\Users\Renzo\agbench\workspaces"
+
+New-Item -ItemType Directory -Force `
+  "runtime\benchmarks\p1-baseline-2026-08", `
+  "C:\Users\Renzo\agbench\workspaces" | Out-Null
+```
+
+El workspace va **fuera del repositorio y con path corto** a propósito: cada
+corrida crea worktrees de git, y con paths profundos reaparece el
+`fatal: '$GIT_DIR' too big` de ADR 0022.
+
+##### Tanda 1 — 9 corridas
+
+```powershell
+.\.venv\Scripts\agentarium.exe benchmark run `
+  --suite "p1-baseline-2026-08" `
+  --model "ollama:qwen3:4b" `
+  --repetitions 3
+```
+
+Verificado con `--dry-run` sobre el commit `6d11fd5`: planifica exactamente 9
+corridas, congela el digest de `qwen3:4b` y sale con código 0.
+
+Después, informe provisional:
+
+```powershell
+.\.venv\Scripts\agentarium.exe benchmark report --suite "p1-baseline-2026-08"
+```
+
+**Qué revisar antes de seguir**, y nada más:
+
+1. que las nueve quedaron registradas (`Corridas registradas: 9`);
+2. que no hay falsos `completed` — el orquestador dando por buena una entrega
+   que los validadores rechazan;
+3. que las categorías de fallo son plausibles y no todas `infrastructure`.
+
+**No cambiar prompts, casos ni configuración aunque los resultados sean
+malos.** Un resultado malo es un dato del baseline; cambiar algo a mitad de
+camino invalida la suite y obliga a empezar de cero con otro nombre.
+
+##### Tanda 2 — las 18 restantes
+
+Mismo nombre de suite, misma base, mismo workspace, misma sesión de variables:
 
 ```powershell
 .\.venv\Scripts\agentarium.exe benchmark run `
@@ -370,17 +437,31 @@ baseline, mudarse de SO o arquitectura sí. El ledger pasa a
 .\.venv\Scripts\agentarium.exe benchmark report --suite "p1-baseline-2026-08"
 ```
 
-Usar siempre una suite con fecha: congela casos y prompts, así que si algo
-cambia a mitad de camino la corrida avisa en vez de mezclar baselines. Es
-reanudable: si Ollama se cae o se interrumpe la corrida, volver a ejecutar el
-mismo comando continúa donde quedó.
+Las 9 ya hechas se omiten solas. Agregar modelos no invalida los registros
+anteriores: los digests se comparan por `(proveedor, modelo)`.
+
+##### Lo que puede detener la matriz, y qué significa
+
+| Código | Motivo | Qué hacer |
+|---|---|---|
+| 3 | deriva: cambió el commit, el runtime, la versión de Ollama o el digest de un modelo | usar `--suite` con nombre nuevo; la suite anterior ya no es comparable |
+| 4 | árbol de trabajo sucio | commitear primero — no hay `--allow-dirty`, y un booleano no distingue dos árboles sucios |
+| 5 | falta el digest de un modelo | `ollama serve` y `ollama pull <modelo>` |
+
+Es reanudable ante cualquier interrupción: volver a ejecutar el mismo comando
+continúa donde quedó. **No** hay que borrar el ledger para reintentar.
 
 **Criterios de salida:**
 
-- informe Markdown/JSON reproducible desde eventos persistidos;
+- informe Markdown/JSON reproducible desde el ledger;
 - cero falsos `completed` en los validadores independientes;
 - baseline de tasa de finalización, tiempo y causas de fallo;
 - ninguna recomendación de modelo por rol antes de tener esos datos.
+
+**Expectativa honesta sobre el caso de biblioteca:** se dejó
+deliberadamente sin contrato de sólo-stdlib. Es probable que falle sobre todo
+por `unsupported_capability` (el modelo eligiendo Flask, ADR 0020). Eso es
+información real que P2 necesita, no un defecto de la medición.
 
 ### P2 — contrato real de capacidades del runtime
 
@@ -467,9 +548,10 @@ botella resuelve.
 ## Próximas tres entregas
 
 1. ~~**PR 1 — planificación mecánica:** rutas efectivas más IDs de criterios y
-   sus regresiones.~~ Entregado, ver P0.
+   sus regresiones.~~ Entregado, ver P0 (PR #1).
 2. ~~**PR 2 — medición:** casos versionados, taxonomía y `benchmark report`.~~
-   Entregado como P1.1; queda ejecutar la matriz (P1.2).
+   Entregado como P1.1 (PR #2), más P1.1b (PR #3, validación funcional) y
+   P1.2a (PR #4, identidad de la suite). **Queda ejecutar la matriz, P1.2.**
 3. **PR 3 — capacidades:** manifiesto del runtime y fallo temprano por capacidad
    no disponible.
 
