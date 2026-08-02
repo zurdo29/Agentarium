@@ -53,16 +53,20 @@ repetibles.
 
 ### Evidencia disponible
 
-- Última verificación registrada: Ruff y MyPy limpios; 170/170 pruebas backend
+- Última verificación registrada: Ruff y MyPy limpios; 184/184 pruebas backend
   en verde, sin `xfail` ni exclusiones; lint y pruebas web reverificadas con
   `.\test.ps1` completo.
 - La concurrencia entre un `project run` y lecturas repetidas de
   `project status` se verificó con un modelo real sin nuevas transiciones
   inválidas.
 - P0 se confirmó con tres corridas reales contra qwen2.5-coder:7b, una por
-  fix, sin repetir objetivos: workspaces `13ee7f71` (preflight detectando un
-  solapamiento declarado sólo vía `expected_outputs`), `75ae6456` (primera
-  división que llegó a crear hijas, ambas `COMPLETED`) y `8be5cde9`.
+  fix: workspaces `8be5cde9`, `13ee7f71` (preflight detectando un solapamiento
+  declarado sólo vía `expected_outputs`) y `75ae6456` (primera división que
+  llegó a crear hijas, ambas `COMPLETED`). Las tres usaron **el mismo objetivo
+  de biblioteca**, deliberadamente, para poder compararlas contra el baseline
+  de ADR 0021/0023. Eso no viola la regla 5: no se repitió una corrida
+  buscando una salida distinta, y cada resultado se registró como salió,
+  incluidos los negativos.
 - Los detalles y reproducciones están en ADR 0015–0026.
 
 ### Riesgos y límites actuales
@@ -76,7 +80,7 @@ repetibles.
 | Evaluación de modelos | Hay corridas útiles, pero no una matriz repetible | No se puede elegir modelo por rol con evidencia suficiente |
 | Mantenibilidad | `engine.py` tiene 2051 líneas y `app/page.tsx` 2207 | Cada cambio cruza demasiadas responsabilidades |
 | Interfaz | Sólo hay dos pruebas de render/strings; no prueban interacciones reales | Reintentos, acciones y SSE pueden romperse sin señal temprana |
-| Persistencia | Las columnas nuevas se migran manualmente desde `create_all()` | El riesgo aumenta con cada evolución del esquema |
+| Persistencia | Las columnas nuevas se migran manualmente desde `create_all()`, ahora con backfill y prueba sobre una DB antigua real | Funciona, pero cada columna nueva sigue necesitando su propio backfill escrito a mano |
 | Distribución | La aplicación real es local; el frontend alojado cae a una demo | El modelo de distribución todavía es ambiguo |
 | Uso sobre proyectos reales | Cada proyecto empieza en un repositorio vacío propio | Hoy sirve mejor para greenfield que para trabajo cotidiano existente |
 
@@ -141,9 +145,12 @@ atractiva si la anterior no cumple sus criterios de salida.
 
 ### P0 — cerrar el bucle de planificación actual — CERRADO (2 de agosto de 2026)
 
-**Esfuerzo real:** 4 PR. Los dos puntos previstos, más dos causas que
-aparecieron en las corridas de confirmación y se trataron como PR aparte en
-vez de ampliar el original, según la regla 3.
+**Esfuerzo real:** un solo PR con cuatro incrementos lógicos — los dos puntos
+previstos, más dos causas que aparecieron en las corridas de confirmación. Cada
+incremento tuvo su propia hipótesis, sus pruebas y su corrida, pero se
+entregaron juntos. La regla 1 ("una hipótesis por PR") queda como norma para
+adelante, no aplicada retroactivamente: dividir esto ahora sería reescribir
+historia sin ganancia.
 
 **Esfuerzo estimado:** 1–2 PR, 2–4 sesiones de trabajo.
 

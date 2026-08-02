@@ -725,11 +725,35 @@ class Orchestrator:
             correlation_id,
         )
 
-        workspace_checks = [
-            evidence.as_check(verified=self.workspace.verify(evidence))
-            for evidence in workspace_evidence
-        ]
-        control_verified = self.artifacts.verify(path, checksum)
+        # Reading the files back can fail for reasons that have nothing to do
+        # with the candidate (full disk, revoked permission, I/O error). This
+        # runs after the task already moved to AWAITING_REVIEW, outside the
+        # rejection routing of _execute_work_item, so an escaping error here
+        # would take the whole request down. Treat it as an unverified check
+        # and let the technical gate decide, with the cause on the record.
+        try:
+            workspace_checks = [
+                evidence.as_check(verified=self.workspace.verify(evidence))
+                for evidence in workspace_evidence
+            ]
+            control_verified = self.artifacts.verify(path, checksum)
+        except (WorkspaceInfrastructureRejected, OSError) as exc:
+            self._event(
+                item.project_id,
+                "workspace_verification_unavailable",
+                (
+                    "No se pudieron releer los archivos para verificar su "
+                    f"checksum: {exc}"
+                ),
+                work_item_id=item.id,
+                attempt=item.attempt_count,
+                error=str(exc),
+                correlation_id=correlation_id,
+            )
+            workspace_checks = [
+                evidence.as_check(verified=False) for evidence in workspace_evidence
+            ]
+            control_verified = False
         try:
             validation_results = await self.validations.validate(
                 item.project_id,

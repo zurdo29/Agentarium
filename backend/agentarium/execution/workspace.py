@@ -112,13 +112,28 @@ class WorkspaceMaterializer:
 
         result: list[WorkspaceFileEvidence] = []
         for proposal, target, content in prepared:
-            target.parent.mkdir(parents=True, exist_ok=True)
-            temporary = target.with_name(f".{target.name}.{uuid4().hex}.tmp")
+            # Every filesystem call below can fail for reasons that have
+            # nothing to do with the proposal — a full disk, a revoked
+            # permission, an I/O error. Those must reach the orchestrator as
+            # WorkspaceInfrastructureRejected, not as a bare OSError that no
+            # caller catches and that would take the whole request down.
             try:
-                temporary.write_bytes(content)
-                self._install_file(temporary, target, content)
-            finally:
-                temporary.unlink(missing_ok=True)
+                target.parent.mkdir(parents=True, exist_ok=True)
+                temporary = target.with_name(f".{target.name}.{uuid4().hex}.tmp")
+                try:
+                    temporary.write_bytes(content)
+                    self._install_file(temporary, target, content)
+                finally:
+                    temporary.unlink(missing_ok=True)
+            except WorkspaceRejected:
+                # Already classified (WorkspaceRejected derives from
+                # PermissionError, so it would otherwise be swallowed by the
+                # OSError clause below).
+                raise
+            except OSError as exc:
+                raise WorkspaceInfrastructureRejected(
+                    f"Workspace file could not be written: {proposal.path}"
+                ) from exc
             result.append(
                 self._evidence(proposal, target, content)
             )
@@ -170,11 +185,19 @@ class WorkspaceMaterializer:
         path = (self.workspace_root.parent / evidence.path).resolve()
         if not self._is_within(path, self.workspace_root):
             return False
-        return (
-            path.is_file()
-            and path.stat().st_size == evidence.size_bytes
-            and hashlib.sha256(path.read_bytes()).hexdigest() == evidence.checksum
-        )
+        try:
+            return (
+                path.is_file()
+                and path.stat().st_size == evidence.size_bytes
+                and hashlib.sha256(path.read_bytes()).hexdigest() == evidence.checksum
+            )
+        except OSError as exc:
+            # A file that cannot be read back is an infrastructure failure, not
+            # a checksum mismatch: returning False here would blame the
+            # candidate for a broken disk.
+            raise WorkspaceInfrastructureRejected(
+                f"Workspace file could not be read back: {evidence.path}"
+            ) from exc
 
     def _contained_directory(self, *parts: str) -> Path:
         if any(not part or Path(part).name != part for part in parts):
