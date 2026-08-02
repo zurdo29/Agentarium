@@ -1,0 +1,39 @@
+schema_version: 1
+id: architecture_document
+title: Documento de arquitectura sin código
+goal: >-
+  Crear un documento de arquitectura en Markdown para un sistema de reservas de
+  un restaurante pequeño: describe los componentes principales, las decisiones
+  de diseño con al menos una alternativa considerada para cada una, y un
+  glosario de los términos del dominio.
+
+expected_artifacts:
+  - Un documento de arquitectura en Markdown
+  - Un glosario de términos del dominio
+
+# Dominio deliberadamente sin código: sirve como prueba negativa de que los
+# perfiles de ejecución (SCRIPT_EXECUTION, ADR 0016) no se activan donde no
+# corresponde, y como caso de consistencia entre tareas (ADR 0017).
+validators:
+  - kind: file_exists
+    description: Existe el documento en Markdown
+    path_glob: "**/*.md"
+
+  - kind: file_matches
+    description: El documento describe componentes
+    path_glob: "**/*.md"
+    pattern: "(?i)componente"
+
+  - kind: file_matches
+    description: Cada decisión considera una alternativa
+    path_glob: "**/*.md"
+    pattern: "(?i)alternativa"
+
+  - kind: file_matches
+    description: Existe un glosario del dominio
+    path_glob: "**/*.md"
+    pattern: "(?i)glosario"
+
+  - kind: file_absent
+    description: Un documento de arquitectura no entrega código ejecutable
+    path_glob: "**/*.py"

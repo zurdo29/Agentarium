@@ -5,6 +5,7 @@ import json
 import shutil
 import subprocess
 import sys
+from pathlib import Path
 from typing import Annotated, Any
 
 import httpx
@@ -20,6 +21,11 @@ app = typer.Typer(
 )
 project_app = typer.Typer(help="Crear y controlar proyectos.", no_args_is_help=True)
 app.add_typer(project_app, name="project")
+benchmark_app = typer.Typer(
+    help="Medir el sistema con casos versionados.",
+    no_args_is_help=True,
+)
+app.add_typer(benchmark_app, name="benchmark")
 
 
 def _service() -> ApplicationService:
@@ -120,6 +126,118 @@ def resume_project(project_id: str) -> None:
 @project_app.command("status")
 def project_status(project_id: str) -> None:
     typer.echo(json.dumps(_project_detail(project_id), indent=2, ensure_ascii=False))
+
+
+@benchmark_app.command("run")
+def benchmark_run(
+    cases: Annotated[
+        list[str] | None,
+        typer.Option("--case", "-c", help="Id del caso; repetible. Por defecto, todos."),
+    ] = None,
+    models: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--model",
+            "-m",
+            help="Objetivo 'proveedor:modelo'; repetible. Por defecto, mock.",
+        ),
+    ] = None,
+    repetitions: Annotated[
+        int, typer.Option("--repetitions", "-r", min=1, max=10)
+    ] = 1,
+    suite: Annotated[str, typer.Option("--suite", help="Nombre del ledger.")] = "default",
+    dry_run: Annotated[
+        bool,
+        typer.Option("--dry-run", help="Sólo listar lo que falta, sin ejecutar."),
+    ] = False,
+) -> None:
+    """Ejecuta la matriz de casos. Reanudable: omite lo ya registrado."""
+    from agentarium.benchmarks import (
+        BenchmarkLedger,
+        BenchmarkRunner,
+        InvalidBenchmarkCase,
+        ModelTarget,
+        load_cases,
+        plan_matrix,
+    )
+
+    try:
+        selected = load_cases(only=list(cases) if cases else None)
+    except InvalidBenchmarkCase as exc:
+        typer.echo(f"Caso inválido: {exc}", err=True)
+        raise typer.Exit(2) from exc
+
+    targets = [ModelTarget.parse(raw) for raw in (models or ["mock"])]
+    planned = plan_matrix(selected, targets, repetitions)
+
+    service = _service()
+    runner = BenchmarkRunner(service, BenchmarkLedger(_ledger_path(suite)))
+    pending = runner.pending(planned)
+
+    typer.echo(
+        json.dumps(
+            {
+                "suite": suite,
+                "planned": len(planned),
+                "pending": len(pending),
+                "skipped": len(planned) - len(pending),
+                "runs": [
+                    {
+                        "case_id": run.case.id,
+                        "target": run.target.label,
+                        "repetition": run.repetition,
+                    }
+                    for run in pending
+                ],
+            },
+            indent=2,
+            ensure_ascii=False,
+        )
+    )
+    if dry_run or not pending:
+        return
+
+    def _echo(record: Any) -> None:
+        typer.echo(
+            f"  {record.case_id} · {record.provider}:{record.model} · "
+            f"#{record.repetition} → {record.category.value} "
+            f"({record.duration_seconds}s)"
+        )
+
+    asyncio.run(runner.execute(planned, on_progress=_echo))
+
+
+@benchmark_app.command("report")
+def benchmark_report(
+    suite: Annotated[str, typer.Option("--suite")] = "default",
+    output: Annotated[
+        Path | None,
+        typer.Option("--output", "-o", help="Directorio donde escribir el informe."),
+    ] = None,
+) -> None:
+    """Genera el informe desde el ledger, sin volver a ejecutar nada."""
+    from agentarium.benchmarks import (
+        BenchmarkLedger,
+        build_payload,
+        dump_json_report,
+        render_markdown,
+    )
+
+    ledger = BenchmarkLedger(_ledger_path(suite))
+    payload = build_payload(list(ledger.latest_by_key().values()))
+    markdown = render_markdown(payload)
+    destination = output or _ledger_path(suite).parent
+    dump_json_report(destination / "report.json", payload)
+    (destination / "report.md").write_text(markdown, encoding="utf-8")
+    typer.echo(markdown)
+    typer.echo(f"Informe escrito en {destination}")
+
+
+def _ledger_path(suite: str) -> Path:
+    safe = "".join(char for char in suite if char.isalnum() or char in {"-", "_"})
+    if not safe:
+        raise typer.BadParameter("Nombre de suite inválido")
+    return project_root() / "runtime" / "benchmarks" / safe / "ledger.jsonl"
 
 
 def _project_detail(project_id: str) -> dict[str, Any]:
