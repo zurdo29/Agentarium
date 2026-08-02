@@ -13,6 +13,7 @@ from pathlib import Path
 from pydantic import ValidationError
 
 from .contracts import BenchmarkRunRecord
+from .identity import RuntimeIdentity
 
 RunKey = tuple[str, str, str, int]
 
@@ -67,11 +68,14 @@ class BenchmarkLedger:
         *,
         case_versions: dict[str, int],
         prompt_versions: dict[str, str],
+        runtime_identity: RuntimeIdentity | None = None,
+        model_digests: dict[tuple[str, str], str | None] | None = None,
     ) -> None:
         """Refuse to append measurements that are not comparable to the rest.
 
         Resumability keys on (case, provider, model, repetition). If the case
-        definition or a prompt changed underneath, that key names a *different*
+        definition, a prompt, the Agentarium commit, the runtime or the weights
+        behind a model name changed underneath, that key names a *different*
         measurement, and skipping it as "already done" would quietly mix two
         baselines into one report. Fail early and ask for a new suite.
         """
@@ -84,6 +88,29 @@ class BenchmarkLedger:
                     f"schema_version={record.case_schema_version}, ahora es "
                     f"{expected_case}"
                 )
+            if runtime_identity is not None:
+                # `ollama_version` only belongs to a record's identity when
+                # that record used Ollama *and* its target is still in the
+                # matrix. Otherwise a mock-only suite would drift the moment
+                # Ollama is started or stopped, which has nothing to do with
+                # what it measured.
+                uses_ollama = record.provider == "ollama" and (
+                    model_digests is not None
+                    and (record.provider, record.model) in model_digests
+                )
+                changes = record.runtime_identity.differences(
+                    runtime_identity,
+                    include_ollama_version=uses_ollama,
+                )
+                if changes:
+                    drift.append("runtime: " + ", ".join(changes))
+            if model_digests is not None:
+                target = (record.provider, record.model)
+                if target in model_digests and model_digests[target] != record.model_digest:
+                    drift.append(
+                        f"modelo {record.provider}:{record.model}: el ledger tiene "
+                        f"digest {record.model_digest}, ahora es {model_digests[target]}"
+                    )
             if record.prompt_versions != prompt_versions:
                 changed = sorted(
                     f"{name}: {record.prompt_versions.get(name, '—')} → "

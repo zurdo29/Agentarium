@@ -53,7 +53,7 @@ repetibles.
 
 ### Evidencia disponible
 
-- Última verificación registrada: Ruff y MyPy limpios; 263/263 pruebas backend
+- Última verificación registrada: Ruff y MyPy limpios; 294/294 pruebas backend
   en verde, sin `xfail` ni exclusiones; lint y pruebas web reverificadas con
   `.\test.ps1` completo.
 - La concurrencia entre un `project run` y lecturas repetidas de
@@ -312,6 +312,48 @@ la entrega, al leer un fixture o al arrancar el proceso queda registrado
 como `infrastructure` en el ledger y la combinación siguiente continúa; el
 bucle de `execute()` además atrapa cualquier excepción inesperada por
 corrida. Con pruebas de ambas cosas.
+
+#### P1.2a — identidad real de la suite — CERRADO (2 de agosto de 2026)
+
+`prompt_versions` y `case_schema_version` congelan lo que *nosotros*
+declaramos. No dicen nada del código que corrió, de las pesas detrás de un
+nombre de modelo ni de la máquina. Un tag de Ollama es mutable: `ollama
+pull` reemplaza las pesas sin que el nombre cambie, así que dos corridas
+del "mismo modelo" pueden ser dos modelos distintos, y un baseline que los
+mezcla no es un baseline.
+
+Cada registro lleva ahora `runtime_identity` (commit de Agentarium más si
+el árbol estaba sucio, versión de Python, plataforma, concurrencia y
+versión de Ollama) y `model_digest` (el digest de las pesas que esa corrida
+usó). La reanudación falla con `SuiteDrift` si cambia cualquiera de ellos;
+los digests se comparan por `(proveedor, modelo)`, así que agregar un
+modelo nuevo a la matriz no invalida los registros del anterior.
+
+La identidad se congela **una vez por invocación** como referencia, y la
+versión y el digest de Ollama se **revalidan antes de cada corrida**: un
+`ollama pull` a mitad de matriz aborta con `SuiteDrift` en vez de quedar
+registrado como si nada hubiera cambiado. La deriva nunca se degrada a un
+dato `infrastructure`; detiene la matriz.
+
+Antes de empezar, si falta el digest de cualquier modelo pedido —Ollama
+apagado o tag no instalado— la corrida falla temprano en vez de
+descubrirlo en la corrida 14.
+
+`ollama_version` se compara **sólo** para registros que usaron Ollama y
+cuyo objetivo sigue en la matriz; el resto de la identidad se compara
+siempre. Si no, una suite medida enteramente con `mock` y Ollama apagado
+(`ollama_version: null`) se rompía al reanudarla con Ollama encendido,
+aunque Ollama nunca participó.
+
+Medir con el árbol de trabajo sucio se rechaza sin excepción: un booleano
+no distingue dos árboles sucios distintos, así que dos mediciones así
+compararían iguales midiendo código diferente. No hay `--allow-dirty`.
+
+`platform` es `Sistema-Arquitectura` (`Windows-AMD64`): identifica la
+**plataforma, no la máquina**. Dos hosts distintos con el mismo SO y
+arquitectura producen la misma cadena; un parche del SO no invalida un
+baseline, mudarse de SO o arquitectura sí. El ledger pasa a
+`schema_version: 2`.
 
 #### P1.2 — la matriz
 

@@ -22,12 +22,14 @@ from pydantic import (
 )
 
 from .functional import FunctionalCheck
+from .identity import RuntimeIdentity
 from .taxonomy import FailureCategory
 
 # 2 adds `functional`: a case may declare an exact CLI contract that is run
 # against a known fixture. Cases still on 1 stay valid.
 CASE_SCHEMA_VERSION = 2
-LEDGER_SCHEMA_VERSION: Literal[1] = 1
+# 2 adds runtime_identity and model_digest.
+LEDGER_SCHEMA_VERSION: Literal[2] = 2
 
 
 class BenchmarkModel(BaseModel):
@@ -123,7 +125,7 @@ class BenchmarkRunRecord(BenchmarkModel):
 
     # Pinned, not merely defaulted: a ledger written by a future format must be
     # refused loudly rather than half-read into today's fields.
-    schema_version: Literal[1] = LEDGER_SCHEMA_VERSION
+    schema_version: Literal[2] = LEDGER_SCHEMA_VERSION
     case_id: str
     case_schema_version: int
     provider: str
@@ -140,6 +142,11 @@ class BenchmarkRunRecord(BenchmarkModel):
     # freeze — a record without versions skipped the comparison and let two
     # baselines share one ledger.
     prompt_versions: dict[str, str] = Field(min_length=1)
+    runtime_identity: RuntimeIdentity
+    # The digest of the weights this run actually used. `None` for providers
+    # that have none (mock). Compared per (provider, model): a re-pulled tag
+    # keeps its name but changes here.
+    model_digest: str | None = None
     technical_result: bool
     semantic_result: bool
     technical_reports: int = 0

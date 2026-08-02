@@ -160,7 +160,9 @@ def benchmark_run(
     from agentarium.benchmarks import (
         BenchmarkLedger,
         BenchmarkRunner,
+        DirtyCheckout,
         InvalidBenchmarkCase,
+        MissingModelDigest,
         ModelTarget,
         SuiteDrift,
         load_cases,
@@ -182,7 +184,17 @@ def benchmark_run(
     service = _service()
     runner = BenchmarkRunner(service, BenchmarkLedger(_ledger_path(suite)))
     try:
+        asyncio.run(runner.freeze_identity())
+    except DirtyCheckout as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(4) from exc
+    identity = runner.identity
+    try:
+        runner.assert_digests_available(planned)
         pending = runner.pending(planned, rerun=rerun)
+    except MissingModelDigest as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(5) from exc
     except SuiteDrift as exc:
         typer.echo(str(exc), err=True)
         raise typer.Exit(3) from exc
@@ -191,6 +203,10 @@ def benchmark_run(
         json.dumps(
             {
                 "suite": suite,
+                "identity": identity.model_dump(mode="json"),
+                "model_digests": {
+                    target.label: runner.digest_for(target) for target in targets
+                },
                 "planned": len(planned),
                 "pending": len(pending),
                 "skipped": len(planned) - len(pending),
@@ -217,7 +233,16 @@ def benchmark_run(
             f"({record.duration_seconds}s)"
         )
 
-    asyncio.run(runner.execute(planned, rerun=rerun, on_progress=_echo))
+    try:
+        asyncio.run(runner.execute(planned, rerun=rerun, on_progress=_echo))
+    except SuiteDrift as exc:
+        # Drift can also surface mid-matrix, when the runtime is revalidated
+        # before a run. Same exit code as the preflight, not a traceback.
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(3) from exc
+    except MissingModelDigest as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(5) from exc
 
 
 @benchmark_app.command("report")
