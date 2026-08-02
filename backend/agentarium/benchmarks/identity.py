@@ -50,9 +50,23 @@ class RuntimeIdentity(BaseModel):
     concurrency: int = Field(ge=1)
     ollama_version: str | None = None
 
-    def differences(self, other: RuntimeIdentity) -> list[str]:
+    def differences(
+        self,
+        other: RuntimeIdentity,
+        *,
+        include_ollama_version: bool = True,
+    ) -> list[str]:
+        """Fields that moved.
+
+        `ollama_version` is opt-in because it is only part of a record's
+        identity when that record actually used Ollama. A suite measured
+        entirely on `mock` with Ollama down records `None`; starting Ollama
+        later must not make the resume look like drift.
+        """
         changes: list[str] = []
         for field in type(self).model_fields:
+            if field == "ollama_version" and not include_ollama_version:
+                continue
             mine = getattr(self, field)
             theirs = getattr(other, field)
             if mine != theirs:
@@ -126,7 +140,8 @@ async def capture_identity(settings: Settings) -> RuntimeIdentity:
         agentarium_dirty=dirty,
         python_version=sys.version.split()[0],
         # Deliberately coarse: a patch-level OS update should not invalidate a
-        # baseline, a different machine or architecture should.
+        # baseline, a different OS or architecture should. It does not identify
+        # the host — two machines with the same OS and architecture match.
         platform=f"{platform.system()}-{platform.machine()}",
         concurrency=settings.model_concurrency,
         ollama_version=await ollama_version(settings),

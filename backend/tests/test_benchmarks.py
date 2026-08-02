@@ -1056,3 +1056,66 @@ def test_there_is_no_escape_hatch_for_a_dirty_checkout(
     result = CliRunner().invoke(app, ["benchmark", "run", "--help"])
 
     assert "--allow-dirty" not in result.output
+
+
+def test_drift_during_the_matrix_exits_with_the_drift_code(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Drift can surface mid-matrix, when the runtime is revalidated before a
+    # run. That path is outside the preflight try, so without handling it the
+    # CLI would end in a traceback and exit 1 instead of the drift code.
+    from agentarium.benchmarks import SuiteDrift
+    from agentarium.cli import app
+
+    _cli_env(tmp_path, monkeypatch)
+
+    async def drifted(self, run):  # type: ignore[no-untyped-def]
+        raise SuiteDrift("Las pesas de ollama:qwen3:4b cambiaron durante la matriz")
+
+    monkeypatch.setattr(BenchmarkRunner, "execute_one", drifted)
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "benchmark",
+            "run",
+            "--suite",
+            "deriva",
+            "--case",
+            "architecture_document",
+            "--model",
+            "mock",
+        ],
+    )
+
+    assert result.exit_code == 3, result.output
+    assert "cambiaron durante la matriz" in result.output
+    assert "Traceback" not in result.output
+
+
+def test_a_missing_model_exits_with_its_own_code(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from agentarium.cli import app
+
+    _cli_env(tmp_path, monkeypatch)
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "benchmark",
+            "run",
+            "--suite",
+            "sin-modelo",
+            "--case",
+            "architecture_document",
+            "--model",
+            "ollama:no-instalado",
+            "--dry-run",
+        ],
+    )
+
+    assert result.exit_code == 5, result.output
+    assert "no-instalado" in result.output

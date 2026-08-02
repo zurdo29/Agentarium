@@ -233,7 +233,16 @@ def benchmark_run(
             f"({record.duration_seconds}s)"
         )
 
-    asyncio.run(runner.execute(planned, rerun=rerun, on_progress=_echo))
+    try:
+        asyncio.run(runner.execute(planned, rerun=rerun, on_progress=_echo))
+    except SuiteDrift as exc:
+        # Drift can also surface mid-matrix, when the runtime is revalidated
+        # before a run. Same exit code as the preflight, not a traceback.
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(3) from exc
+    except MissingModelDigest as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(5) from exc
 
 
 @benchmark_app.command("report")

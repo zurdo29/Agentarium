@@ -53,7 +53,7 @@ repetibles.
 
 ### Evidencia disponible
 
-- Última verificación registrada: Ruff y MyPy limpios; 289/289 pruebas backend
+- Última verificación registrada: Ruff y MyPy limpios; 294/294 pruebas backend
   en verde, sin `xfail` ni exclusiones; lint y pruebas web reverificadas con
   `.\test.ps1` completo.
 - La concurrencia entre un `project run` y lecturas repetidas de
@@ -338,6 +338,12 @@ dato `infrastructure`; detiene la matriz.
 Antes de empezar, si falta el digest de cualquier modelo pedido —Ollama
 apagado o tag no instalado— la corrida falla temprano en vez de
 descubrirlo en la corrida 14.
+
+`ollama_version` se compara **sólo** para registros que usaron Ollama y
+cuyo objetivo sigue en la matriz; el resto de la identidad se compara
+siempre. Si no, una suite medida enteramente con `mock` y Ollama apagado
+(`ollama_version: null`) se rompía al reanudarla con Ollama encendido,
+aunque Ollama nunca participó.
 
 Medir con el árbol de trabajo sucio se rechaza sin excepción: un booleano
 no distingue dos árboles sucios distintos, así que dos mediciones así

@@ -423,3 +423,75 @@ async def test_freezing_the_identity_refuses_a_dirty_checkout(
 
     with pytest.raises(DirtyCheckout, match="sin commitear"):
         await runner.freeze_identity()
+
+
+def test_a_mock_suite_resume_ignores_an_ollama_version_change(
+    service: ApplicationService,
+    tmp_path: Path,
+) -> None:
+    """Starting Ollama must not invalidate a suite that never used it.
+
+    A mock-only suite measured with Ollama down records `ollama_version=None`.
+    Turning Ollama on later says nothing about what that suite measured.
+    """
+    ledger = BenchmarkLedger(tmp_path / "ledger.jsonl")
+    ledger.append(
+        _record(
+            case_id="architecture_document",
+            provider="mock",
+            model="",
+            model_digest=None,
+            runtime_identity=IDENTITY.model_copy(
+                update={"ollama_version": None}
+            ).model_dump(),
+        )
+    )
+    # Same machine, same commit, Ollama now running.
+    runner = _runner(
+        service,
+        tmp_path,
+        identity=IDENTITY.model_copy(update={"ollama_version": "0.12.0"}),
+        digests={},
+    )
+
+    pending = runner.pending(plan_matrix([_case()], [ModelTarget.parse("mock")], 1))
+
+    assert pending == []
+
+
+def test_an_ollama_record_still_compares_its_version(
+    service: ApplicationService,
+    tmp_path: Path,
+) -> None:
+    # The exemption is scoped to records that did not use Ollama; one that did
+    # must still notice the server moving underneath it.
+    ledger = BenchmarkLedger(tmp_path / "ledger.jsonl")
+    ledger.append(_record(case_id="architecture_document"))
+    runner = _runner(
+        service,
+        tmp_path,
+        identity=IDENTITY.model_copy(update={"ollama_version": "0.33.0"}),
+    )
+
+    with pytest.raises(SuiteDrift, match="ollama_version"):
+        runner.pending(plan_matrix([_case()], [ModelTarget.parse("ollama:qwen3:4b")], 1))
+
+
+def test_an_ollama_record_outside_the_current_matrix_is_not_compared(
+    service: ApplicationService,
+    tmp_path: Path,
+) -> None:
+    # Resuming a narrower matrix must not drift on a model it no longer runs.
+    ledger = BenchmarkLedger(tmp_path / "ledger.jsonl")
+    ledger.append(_record(case_id="architecture_document", model="qwen3:8b"))
+    runner = _runner(
+        service,
+        tmp_path,
+        identity=IDENTITY.model_copy(update={"ollama_version": "0.33.0"}),
+    )
+
+    pending = runner.pending(
+        plan_matrix([_case()], [ModelTarget.parse("ollama:qwen3:4b")], 1)
+    )
+
+    assert [run.target.model for run in pending] == ["qwen3:4b"]

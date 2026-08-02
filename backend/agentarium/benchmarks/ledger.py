@@ -89,7 +89,19 @@ class BenchmarkLedger:
                     f"{expected_case}"
                 )
             if runtime_identity is not None:
-                changes = record.runtime_identity.differences(runtime_identity)
+                # `ollama_version` only belongs to a record's identity when
+                # that record used Ollama *and* its target is still in the
+                # matrix. Otherwise a mock-only suite would drift the moment
+                # Ollama is started or stopped, which has nothing to do with
+                # what it measured.
+                uses_ollama = record.provider == "ollama" and (
+                    model_digests is not None
+                    and (record.provider, record.model) in model_digests
+                )
+                changes = record.runtime_identity.differences(
+                    runtime_identity,
+                    include_ollama_version=uses_ollama,
+                )
                 if changes:
                     drift.append("runtime: " + ", ".join(changes))
             if model_digests is not None:
