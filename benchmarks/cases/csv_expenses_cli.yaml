@@ -1,12 +1,24 @@
-schema_version: 1
+schema_version: 2
 id: csv_expenses_cli
 title: CLI de gastos CSV
 goal: >-
   Crear una herramienta de línea de comandos en Python que lea un archivo CSV de
-  gastos y produzca un resumen por mes y por categoría, con instrucciones de uso.
+  gastos y produzca un resumen por mes y por categoría.
+
+  El programa debe llamarse exactamente `expenses.py` y ejecutarse así:
+  `python expenses.py input.csv --output result.json`.
+
+  El CSV de entrada tiene las columnas `fecha` (AAAA-MM-DD), `categoria`,
+  `descripcion` y `monto`. El archivo `result.json` debe contener exactamente
+  dos claves: `por_mes`, un objeto de `AAAA-MM` al total gastado ese mes, y
+  `por_categoria`, un objeto del nombre de categoría al total gastado en ella.
+  Los totales son números redondeados a dos decimales.
+
+  Usa únicamente la biblioteca estándar de Python. Incluye también un documento
+  Markdown con las instrucciones de uso.
 
 expected_artifacts:
-  - Un script Python ejecutable que procese el CSV
+  - Un script Python ejecutable llamado expenses.py
   - Un documento con instrucciones de uso
 
 # Los validadores leen los archivos entregados, nunca el resumen del agente.
@@ -14,8 +26,8 @@ expected_artifacts:
 # documentando `python expenses.py` sin que ese archivo existiera.
 validators:
   - kind: file_exists
-    description: Existe al menos un script Python en la entrega
-    path_glob: "**/*.py"
+    description: Existe el entrypoint declarado por el contrato
+    path_glob: "expenses.py"
 
   - kind: file_exists
     description: Existe documentación de uso en Markdown
@@ -29,4 +41,28 @@ validators:
   - kind: file_matches
     description: La documentación explica cómo ejecutarlo
     path_glob: "**/*.md"
-    pattern: "(?i)python[^\\n]*\\.py"
+    pattern: "(?i)python[^\\n]*expenses\\.py"
+
+# El único validador que distingue código que funciona de código convincente.
+# Interfaz idéntica para todos los modelos: el entrypoint es fijo, no se
+# descubre por glob, para que el resultado no dependa del orden de archivos.
+functional:
+  description: El programa procesa el CSV fixture y produce el resumen correcto
+  entrypoint: expenses.py
+  args:
+    - input.csv
+    - --output
+    - result.json
+  fixtures:
+    expenses_input.csv: input.csv
+  produces: result.json
+  timeout_seconds: 20
+  expect:
+    por_mes:
+      "2026-01": 35.75
+      "2026-02": 72.25
+      "2026-03": 90.25
+    por_categoria:
+      comida: 110.0
+      transporte: 13.0
+      servicios: 75.25

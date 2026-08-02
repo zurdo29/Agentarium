@@ -53,7 +53,7 @@ repetibles.
 
 ### Evidencia disponible
 
-- Última verificación registrada: Ruff y MyPy limpios; 245/245 pruebas backend
+- Última verificación registrada: Ruff y MyPy limpios; 263/263 pruebas backend
   en verde, sin `xfail` ni exclusiones; lint y pruebas web reverificadas con
   `.\test.ps1` completo.
 - La concurrencia entre un `project run` y lecturas repetidas de
@@ -261,23 +261,61 @@ repite nada.
    a cualquier caso futuro: un validador por presencia de palabra mide el
    enunciado, no la entrega.
 
-#### P1.1b — validación funcional del benchmark — BLOQUEANTE de P1.2
+#### P1.1b — validación funcional del benchmark — CERRADO (2 de agosto de 2026)
 
-Los validadores actuales comprueban archivos y estructura, no comportamiento.
-**Debe ejecutarse antes de iniciar la matriz**, no después: una matriz medida
-sólo con presencia de archivos no sostiene ninguna recomendación de modelo, y
-si queda para el final se convierte en opcional. Alcance acotado:
+Los validadores de P1.1 comprobaban archivos y estructura, no comportamiento.
+Un caso puede ahora declarar un bloque `functional` que ejecuta la entrega
+contra un fixture conocido, y **es lo único que distingue código que funciona
+de código convincente**.
 
-- fixture CSV conocido, versionado junto al caso;
-- interfaz CLI exacta declarada en el propio caso;
-- ejecución sin shell, con argumentos estructurados;
-- `SafeCommandExecutor`, timeout y directorio aislado;
-- comparación determinista de la salida;
-- pruebas positiva, negativa, de timeout y de comando rechazado.
+- Fixture versionado en `benchmarks/fixtures/<case_id>/`.
+- **Interfaz exacta e idéntica para todos los modelos**: el caso declara
+  `entrypoint` (`expenses.py`), `args` como lista y `produces`. No hay
+  descubrimiento por glob — el resultado no puede depender del orden de
+  archivos de una entrega.
+- Ejecución sin shell: `python -E -s -S -B expenses.py input.csv --output
+  result.json`, argumentos estructurados. **No `-I`**: el modo aislado
+  también saca del `sys.path` el directorio del propio script, así que una
+  entrega bien organizada en `expenses.py` + `helpers.py` fallaba en el
+  import en vez de en su lógica. `-E -s -S` ignora variables PYTHON*, el
+  directorio de usuario y `site` completo, así que los `site-packages` no
+  entran; `-B` no deja bytecode. Los imports locales funcionan, los de
+  terceros no.
+- Entrega y fixture se copian a un directorio desechable dentro de
+  `workspace_root` antes de ejecutar; el `produces` declarado se borra allí,
+  así que una entrega que trae la respuesta hecha no obtiene crédito.
+- Comparación de JSON parseado, no de texto: el orden de claves y los espacios
+  no son parte del contrato.
+- Sólo biblioteca estándar, para no adelantar el manifiesto de capacidades de
+  P2.
+- El caso CSV sube a `schema_version: 2`; los otros dos siguen en 1, cada caso
+  versiona por su cuenta.
+
+**Frontera de confianza, sin exageraciones:** reutiliza exactamente la que ya
+usa `SCRIPT_EXECUTION`. `SafeCommandExecutor` acota ejecutable, argumentos,
+entorno y `cwd`, y no hay shell — pero **no es un sandbox de sistema
+operativo**: el script entregado corre como este usuario y podría intentar
+rutas absolutas, red o subprocesos. Este PR no agrega aislamiento ni debe
+describirse como si lo hiciera; un sandbox real es otra decisión
+arquitectónica.
+
+**Pruebas:** positiva; salida incorrecta (un programa que agrupa por año en
+vez de por mes: corre bien, produce JSON válido y está mal); programa que
+crashea; entrega sin el entrypoint declarado (la forma exacta de ADR 0016);
+entrega que trae `result.json` hecho; entrega repartida en módulos locales
+(pasa) y entrega que importa un paquete de terceros instalado (falla);
+timeout; ejecutable fuera de la allowlist; y token denegado en los
+argumentos.
+
+**Un fallo del validador nunca aborta la matriz.** Un `OSError` al copiar
+la entrega, al leer un fixture o al arrancar el proceso queda registrado
+como `infrastructure` en el ledger y la combinación siguiente continúa; el
+bucle de `execute()` además atrapa cualquier excepción inesperada por
+corrida. Con pruebas de ambas cosas.
 
 #### P1.2 — la matriz
 
-**Sólo después de P1.1b.** Ejecutar la matriz inicial de 3 casos × 3 modelos ×
+**P1.1b ya está cerrada, así que la matriz está desbloqueada.** Ejecutar la matriz inicial de 3 casos × 3 modelos ×
 3 repeticiones. Las 27 corridas deben ser automatizadas; no supervisadas manualmente una por una:
 
 ```powershell

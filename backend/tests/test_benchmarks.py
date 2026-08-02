@@ -46,9 +46,15 @@ def test_the_three_versioned_cases_load_and_declare_their_schema() -> None:
         "library_api_sqlite",
     }
     for case in cases:
-        assert case.schema_version == CASE_SCHEMA_VERSION
+        # Cases version independently: only the one whose contract changed
+        # moves. A single shared version would force churn on the others.
+        assert 1 <= case.schema_version <= CASE_SCHEMA_VERSION, case.id
         assert case.validators, case.id
         assert case.goal.strip()
+
+    csv_case = next(case for case in cases if case.id == "csv_expenses_cli")
+    assert csv_case.schema_version == 2, "el contrato funcional exige la versión 2"
+    assert csv_case.functional is not None
 
 
 def test_every_case_file_is_named_after_its_id() -> None:
@@ -922,3 +928,66 @@ def test_the_architecture_case_accepts_a_document_with_real_structure(
     assert all(outcome.passed for outcome in outcomes), [
         outcome.description for outcome in outcomes if not outcome.passed
     ]
+
+
+# --- a failing validator must not take the matrix down ----------------------
+
+
+@pytest.mark.asyncio
+async def test_an_infrastructure_failure_is_recorded_and_the_matrix_continues(
+    service: ApplicationService,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """27 runs cannot die because one temp directory could not be copied."""
+    from agentarium.benchmarks import functional as functional_module
+
+    case = load_cases(only=["csv_expenses_cli"])[0]
+    ledger = BenchmarkLedger(tmp_path / "ledger.jsonl")
+    runner = BenchmarkRunner(service, ledger)
+    planned = plan_matrix([case], [ModelTarget.parse("mock")], 2)
+
+    # Injected at the staging step itself, so the failure does not depend on
+    # what the provider happened to deliver.
+    def broken_prepare(*args, **kwargs):  # type: ignore[no-untyped-def]
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(functional_module, "_prepare_run", broken_prepare)
+
+    records = await runner.execute(planned)
+
+    # Both combinations ran: the first failure did not abort the second.
+    assert len(records) == 2
+    assert [record.repetition for record in records] == [1, 2]
+    assert all(record.category is FailureCategory.INFRASTRUCTURE for record in records)
+    assert all("No space left" in record.evidence for record in records)
+
+    # And both are on disk, so a resumed matrix does not repeat them.
+    assert len(ledger.records()) == 2
+    assert ledger.completed_keys() == {
+        ("csv_expenses_cli", "mock", "", 1),
+        ("csv_expenses_cli", "mock", "", 2),
+    }
+    assert runner.pending(planned) == []
+
+
+@pytest.mark.asyncio
+async def test_an_unexpected_crash_in_one_run_does_not_abort_the_rest(
+    service: ApplicationService,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ledger = BenchmarkLedger(tmp_path / "ledger.jsonl")
+    runner = BenchmarkRunner(service, ledger)
+    planned = plan_matrix([_case()], [ModelTarget.parse("mock")], 2)
+
+    async def explode(self, run):  # type: ignore[no-untyped-def]
+        raise RuntimeError("algo inesperado")
+
+    monkeypatch.setattr(BenchmarkRunner, "execute_one", explode)
+
+    records = await runner.execute(planned)
+
+    assert len(records) == 2
+    assert all(record.category is FailureCategory.INFRASTRUCTURE for record in records)
+    assert all("algo inesperado" in str(record.error) for record in records)

@@ -21,9 +21,12 @@ from pydantic import (
     model_validator,
 )
 
+from .functional import FunctionalCheck
 from .taxonomy import FailureCategory
 
-CASE_SCHEMA_VERSION = 1
+# 2 adds `functional`: a case may declare an exact CLI contract that is run
+# against a known fixture. Cases still on 1 stay valid.
+CASE_SCHEMA_VERSION = 2
 LEDGER_SCHEMA_VERSION: Literal[1] = 1
 
 
@@ -87,6 +90,13 @@ class BenchmarkCase(BenchmarkModel):
     goal: str = Field(min_length=1)
     expected_artifacts: list[str] = Field(min_length=1)
     validators: list[CaseValidator] = Field(min_length=1)
+    functional: FunctionalCheck | None = None
+
+    @model_validator(mode="after")
+    def validate_functional_needs_schema_two(self) -> BenchmarkCase:
+        if self.functional is not None and self.schema_version < 2:
+            raise ValueError("functional requires schema_version 2")
+        return self
 
     @field_validator("validators")
     @classmethod

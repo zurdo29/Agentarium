@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -14,7 +15,9 @@ from agentarium.llm import (
 )
 from agentarium.services import ApplicationService
 
+from .cases import fixtures_root
 from .contracts import BenchmarkCase, BenchmarkRunRecord, ValidatorOutcome
+from .functional import run_functional_check
 from .gates import gate_results
 from .ledger import BenchmarkLedger
 from .taxonomy import Classification, FailureCategory, classify
@@ -105,7 +108,20 @@ class BenchmarkRunner:
     ) -> list[BenchmarkRunRecord]:
         records: list[BenchmarkRunRecord] = []
         for run in self.pending(planned, rerun=rerun):
-            record = await self.execute_one(run)
+            try:
+                record = await self.execute_one(run)
+            except Exception as exc:
+                # Last line of defence. A matrix is hours of inference; no
+                # single combination may take the rest of it down. Whatever
+                # went wrong is recorded as infrastructure and the loop moves
+                # on, so a resumed run does not repeat what already ran.
+                detail = f"{type(exc).__name__}: {exc}"
+                record = self._failed_record(
+                    run,
+                    time.monotonic(),
+                    Classification(FailureCategory.INFRASTRUCTURE, detail),
+                    error=detail,
+                )
             self.ledger.append(record)
             records.append(record)
             if callable(on_progress):
@@ -144,7 +160,39 @@ class BenchmarkRunner:
                     error=error,
                 )
 
-        return self._observe(run, project_id, started, error)
+        functional = await self.run_functional(run.case, project_id)
+        return self._observe(run, project_id, started, error, functional)
+
+    async def run_functional(
+        self,
+        case: BenchmarkCase,
+        project_id: str,
+    ) -> tuple[ValidatorOutcome, bool] | None:
+        """Execute the delivery against the case's fixture, if it declares one.
+
+        Returns the outcome and whether it failed for infrastructure reasons,
+        which is not something the measured model should be blamed for.
+        """
+        if case.functional is None:
+            return None
+        outcome = await run_functional_check(
+            case.functional,
+            delivery_root=self.delivery_root(project_id),
+            fixtures_root=fixtures_root(case.id),
+            workspace_root=self.service.settings.workspace_root,
+            # The same executor SCRIPT_EXECUTION uses: identical trust
+            # boundary, no extra isolation claimed.
+            executor=self.service.orchestrator.validations.executor,
+            python_executable=sys.executable,
+        )
+        return (
+            ValidatorOutcome(
+                description=case.functional.description,
+                passed=outcome.passed,
+                detail=outcome.detail,
+            ),
+            outcome.infrastructure,
+        )
 
     def _observe(
         self,
@@ -152,6 +200,7 @@ class BenchmarkRunner:
         project_id: str,
         started: float,
         error: str | None,
+        functional: tuple[ValidatorOutcome, bool] | None = None,
     ) -> BenchmarkRunRecord:
         repository = self.service.repository
         project = repository.get_project(project_id)
@@ -161,15 +210,27 @@ class BenchmarkRunner:
         test_reports = repository.list_test_reports(project_id)
 
         outcomes = self.validate_delivery(run.case, self.delivery_root(project_id))
+        functional_infrastructure = False
+        if functional is not None:
+            functional_outcome, functional_infrastructure = functional
+            outcomes.append(functional_outcome)
         validation_passed = all(outcome.passed for outcome in outcomes)
-        classification = classify(
-            project,
-            items,
-            events,
-            validation_passed=validation_passed,
-            reviews=reviews,
-            test_reports=test_reports,
-        )
+        if functional_infrastructure:
+            # The check never got to measure anything, so the project's own
+            # state cannot explain this run.
+            classification = Classification(
+                FailureCategory.INFRASTRUCTURE,
+                outcomes[-1].detail,
+            )
+        else:
+            classification = classify(
+                project,
+                items,
+                events,
+                validation_passed=validation_passed,
+                reviews=reviews,
+                test_reports=test_reports,
+            )
         gates = gate_results(items, reviews, test_reports)
 
         return BenchmarkRunRecord(

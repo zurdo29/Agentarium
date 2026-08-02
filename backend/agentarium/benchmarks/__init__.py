@@ -1,6 +1,6 @@
 """Reproducible benchmark suite: versioned cases, one taxonomy, resumable runs."""
 
-from .cases import InvalidBenchmarkCase, cases_root, load_case, load_cases
+from .cases import InvalidBenchmarkCase, cases_root, fixtures_root, load_case, load_cases
 from .contracts import (
     CASE_SCHEMA_VERSION,
     LEDGER_SCHEMA_VERSION,
@@ -9,6 +9,7 @@ from .contracts import (
     CaseValidator,
     ValidatorOutcome,
 )
+from .functional import FunctionalCheck, FunctionalOutcome, run_functional_check
 from .gates import GateResults, gate_results
 from .ledger import BenchmarkLedger, SuiteDrift, dump_json_report
 from .report import build_payload, render_markdown
@@ -24,6 +25,8 @@ __all__ = [
     "CaseValidator",
     "Classification",
     "FailureCategory",
+    "FunctionalCheck",
+    "FunctionalOutcome",
     "GateResults",
     "InvalidBenchmarkCase",
     "LEDGER_SCHEMA_VERSION",
@@ -34,7 +37,9 @@ __all__ = [
     "build_payload",
     "cases_root",
     "classify",
+    "fixtures_root",
     "gate_results",
+    "run_functional_check",
     "dump_json_report",
     "load_case",
     "load_cases",
