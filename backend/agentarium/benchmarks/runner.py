@@ -19,8 +19,15 @@ from .cases import fixtures_root
 from .contracts import BenchmarkCase, BenchmarkRunRecord, ValidatorOutcome
 from .functional import run_functional_check
 from .gates import gate_results
-from .identity import RuntimeIdentity, capture_identity, ollama_model_digests
-from .ledger import BenchmarkLedger
+from .identity import (
+    MissingModelDigest,
+    RuntimeIdentity,
+    assert_clean,
+    capture_identity,
+    ollama_model_digests,
+    ollama_version,
+)
+from .ledger import BenchmarkLedger, SuiteDrift
 from .taxonomy import Classification, FailureCategory, classify
 
 
@@ -90,14 +97,63 @@ class BenchmarkRunner:
         self._model_digests = model_digests or {}
 
     async def freeze_identity(self) -> None:
-        """Capture what this invocation is measuring, once, before running.
+        """Capture the reference this invocation measures against.
 
-        Probing per run would let the environment shift mid-matrix without the
-        ledger noticing.
+        Frozen once so every record carries the same reference, and revalidated
+        before each run so a mid-matrix change is caught rather than silently
+        recorded run by run.
         """
         settings = self.service.settings
         self._identity = await capture_identity(settings)
+        assert_clean(self._identity)
         self._model_digests = await ollama_model_digests(settings)
+
+    def assert_digests_available(self, planned: list[PlannedRun]) -> None:
+        """Every model the matrix asks for must exist before spending hours.
+
+        A missing digest means Ollama is not running or the tag is not
+        installed. Discovering that on run 14 wastes the 13 before it.
+        """
+        missing = sorted(
+            {
+                run.target.label
+                for run in planned
+                if run.target.provider == "ollama" and self.digest_for(run.target) is None
+            }
+        )
+        if missing:
+            raise MissingModelDigest(
+                "No se pudo obtener el digest de: " + ", ".join(missing) + ". "
+                "Verificá que Ollama esté corriendo y que los modelos estén "
+                "instalados (`ollama list`) antes de lanzar la matriz."
+            )
+
+    async def revalidate_runtime(self, target: ModelTarget) -> None:
+        """Re-probe Ollama right before a run and abort if it moved.
+
+        The frozen identity is the reference, not a snapshot to trust for
+        hours: `ollama pull` mid-matrix would otherwise be recorded as if
+        nothing had changed.
+        """
+        if target.provider != "ollama":
+            return
+        settings = self.service.settings
+        version = await ollama_version(settings)
+        if version != self.identity.ollama_version:
+            raise SuiteDrift(
+                f"Ollama cambió de versión durante la matriz: "
+                f"{self.identity.ollama_version} → {version}. La suite deja de "
+                "ser comparable; usá --suite con un nombre nuevo."
+            )
+        digests = await ollama_model_digests(settings)
+        current = digests.get(target.model)
+        frozen = self.digest_for(target)
+        if current != frozen:
+            raise SuiteDrift(
+                f"Las pesas de {target.label} cambiaron durante la matriz: "
+                f"{frozen} → {current}. La suite deja de ser comparable; usá "
+                "--suite con un nombre nuevo."
+            )
 
     @property
     def identity(self) -> RuntimeIdentity:
@@ -140,10 +196,18 @@ class BenchmarkRunner:
     ) -> list[BenchmarkRunRecord]:
         if self._identity is None:
             await self.freeze_identity()
+        self.assert_digests_available(planned)
         records: list[BenchmarkRunRecord] = []
         for run in self.pending(planned, rerun=rerun):
+            # Before, not after: a run measured against moved weights should
+            # never reach the ledger.
+            await self.revalidate_runtime(run.target)
             try:
                 record = await self.execute_one(run)
+            except SuiteDrift:
+                # Never demoted to an `infrastructure` data point: drift means
+                # the matrix must stop, not carry on with a note.
+                raise
             except Exception as exc:
                 # Last line of defence. A matrix is hours of inference; no
                 # single combination may take the rest of it down. Whatever

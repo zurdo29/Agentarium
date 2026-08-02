@@ -28,7 +28,8 @@ from .taxonomy import FailureCategory
 # 2 adds `functional`: a case may declare an exact CLI contract that is run
 # against a known fixture. Cases still on 1 stay valid.
 CASE_SCHEMA_VERSION = 2
-LEDGER_SCHEMA_VERSION: Literal[1] = 1
+# 2 adds runtime_identity and model_digest.
+LEDGER_SCHEMA_VERSION: Literal[2] = 2
 
 
 class BenchmarkModel(BaseModel):
@@ -124,7 +125,7 @@ class BenchmarkRunRecord(BenchmarkModel):
 
     # Pinned, not merely defaulted: a ledger written by a future format must be
     # refused loudly rather than half-read into today's fields.
-    schema_version: Literal[1] = LEDGER_SCHEMA_VERSION
+    schema_version: Literal[2] = LEDGER_SCHEMA_VERSION
     case_id: str
     case_schema_version: int
     provider: str

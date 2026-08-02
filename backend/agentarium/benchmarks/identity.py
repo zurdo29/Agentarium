@@ -22,17 +22,30 @@ from pydantic import BaseModel, ConfigDict, Field
 from agentarium.config.settings import Settings, project_root
 
 
+class DirtyCheckout(ValueError):
+    """The commit does not identify what would be measured."""
+
+
+class MissingModelDigest(ValueError):
+    """A model the matrix asks for is not installed, or Ollama is not there."""
+
+
 class RuntimeIdentity(BaseModel):
     """The environment-wide half of a run's identity."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     agentarium_commit: str = Field(min_length=1)
-    # A dirty tree means the commit does not identify what ran, so a dirty run
-    # is never comparable with a clean one — the flag is part of the identity,
-    # not a footnote.
+    # Always false in a recorded run: measuring a dirty tree is refused
+    # outright, because a boolean cannot tell two different dirty trees apart
+    # and two such runs would compare equal while measuring different code.
+    # Kept in the identity so a hand-edited ledger is still detectable.
     agentarium_dirty: bool
     python_version: str = Field(min_length=1)
+    # OS family and CPU architecture — `Windows-AMD64`. It identifies the
+    # platform, NOT the host: two different machines with the same OS and
+    # architecture produce the same string. A patch-level OS update does not
+    # invalidate a baseline; moving to another OS or architecture does.
     platform: str = Field(min_length=1)
     concurrency: int = Field(ge=1)
     ollama_version: str | None = None
@@ -118,3 +131,14 @@ async def capture_identity(settings: Settings) -> RuntimeIdentity:
         concurrency=settings.model_concurrency,
         ollama_version=await ollama_version(settings),
     )
+
+
+def assert_clean(identity: RuntimeIdentity) -> None:
+    if identity.agentarium_dirty:
+        raise DirtyCheckout(
+            "El árbol de trabajo tiene cambios sin commitear, así que el commit "
+            f"({identity.agentarium_commit[:12]}) no identifica lo que se va a "
+            "medir. Commiteá primero: no hay forma de distinguir dos árboles "
+            "sucios distintos, así que dos mediciones así compararían iguales "
+            "midiendo código diferente."
+        )

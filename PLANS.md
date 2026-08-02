@@ -53,7 +53,7 @@ repetibles.
 
 ### Evidencia disponible
 
-- Última verificación registrada: Ruff y MyPy limpios; 280/280 pruebas backend
+- Última verificación registrada: Ruff y MyPy limpios; 289/289 pruebas backend
   en verde, sin `xfail` ni exclusiones; lint y pruebas web reverificadas con
   `.\test.ps1` completo.
 - La concurrencia entre un `project run` y lecturas repetidas de
@@ -329,12 +329,25 @@ usó). La reanudación falla con `SuiteDrift` si cambia cualquiera de ellos;
 los digests se comparan por `(proveedor, modelo)`, así que agregar un
 modelo nuevo a la matriz no invalida los registros del anterior.
 
-La identidad se congela **una vez por invocación**, antes de medir:
-sondearla por corrida dejaría que el entorno cambie a mitad de matriz sin
-que el ledger se entere. `benchmark run` se niega a medir con el árbol de
-trabajo sucio (el commit no identificaría lo que corre) salvo
-`--allow-dirty`, y en ese caso el registro queda marcado y nunca compara
-igual contra una corrida limpia.
+La identidad se congela **una vez por invocación** como referencia, y la
+versión y el digest de Ollama se **revalidan antes de cada corrida**: un
+`ollama pull` a mitad de matriz aborta con `SuiteDrift` en vez de quedar
+registrado como si nada hubiera cambiado. La deriva nunca se degrada a un
+dato `infrastructure`; detiene la matriz.
+
+Antes de empezar, si falta el digest de cualquier modelo pedido —Ollama
+apagado o tag no instalado— la corrida falla temprano en vez de
+descubrirlo en la corrida 14.
+
+Medir con el árbol de trabajo sucio se rechaza sin excepción: un booleano
+no distingue dos árboles sucios distintos, así que dos mediciones así
+compararían iguales midiendo código diferente. No hay `--allow-dirty`.
+
+`platform` es `Sistema-Arquitectura` (`Windows-AMD64`): identifica la
+**plataforma, no la máquina**. Dos hosts distintos con el mismo SO y
+arquitectura producen la misma cadena; un parche del SO no invalida un
+baseline, mudarse de SO o arquitectura sí. El ledger pasa a
+`schema_version: 2`.
 
 #### P1.2 — la matriz
 

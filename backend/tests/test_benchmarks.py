@@ -617,8 +617,10 @@ def test_a_corrupt_ledger_line_is_reported_not_ignored(tmp_path: Path) -> None:
 
 def test_the_ledger_rejects_a_record_from_another_schema_version(tmp_path: Path) -> None:
     path = tmp_path / "ledger.jsonl"
+    # A version from the future: refused loudly rather than half-read into
+    # today's fields.
     payload = _record("demo", 1).model_dump(mode="json")
-    payload["schema_version"] = 2
+    payload["schema_version"] = 3
     path.write_text(__import__("json").dumps(payload) + "\n", encoding="utf-8")
 
     with pytest.raises(ValueError, match="línea 1"):
@@ -788,8 +790,15 @@ async def test_smoke_one_case_one_model_one_repetition(
 
 
 def _cli_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Point the CLI at a throwaway project root."""
+    """Point the CLI at a throwaway project root, on a clean tree.
+
+    Measuring a dirty checkout is refused outright, and this checkout is
+    usually dirty while developing; these tests are about the commands.
+    """
+    from agentarium.benchmarks import identity as identity_module
     from agentarium.config import settings as settings_module
+
+    monkeypatch.setattr(identity_module, "git_commit", lambda *_: ("d" * 40, False))
 
     database = (tmp_path / "db.sqlite").as_posix()
     monkeypatch.setenv("AGENTARIUM_DATABASE_URL", f"sqlite:///{database}")
@@ -839,7 +848,6 @@ def test_the_cli_dry_run_lists_what_is_missing_without_executing(
             "--model",
             "mock",
             "--dry-run",
-            "--allow-dirty",
         ],
     )
 
@@ -869,7 +877,6 @@ def test_the_cli_runs_reports_and_then_skips_what_is_done(
         "architecture_document",
         "--model",
         "mock",
-        "--allow-dirty",
     ]
 
     first = runner.invoke(app, command)
@@ -1035,33 +1042,17 @@ def test_the_cli_refuses_to_measure_a_dirty_checkout(
 
     assert result.exit_code == 4
     assert "sin commitear" in result.output
-    assert "--allow-dirty" in result.output
 
 
-def test_the_cli_measures_a_dirty_checkout_when_told_to(
+def test_there_is_no_escape_hatch_for_a_dirty_checkout(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from agentarium.benchmarks import identity as identity_module
+    # A boolean cannot tell two different dirty trees apart, so an override
+    # would produce records that compare equal while measuring different code.
     from agentarium.cli import app
 
     _cli_env(tmp_path, monkeypatch)
-    monkeypatch.setattr(identity_module, "git_commit", lambda *_: ("c" * 40, True))
+    result = CliRunner().invoke(app, ["benchmark", "run", "--help"])
 
-    result = CliRunner().invoke(
-        app,
-        [
-            "benchmark",
-            "run",
-            "--suite",
-            "sucia",
-            "--model",
-            "mock",
-            "--dry-run",
-            "--allow-dirty",
-        ],
-    )
-
-    assert result.exit_code == 0, result.output
-    # And the record will say so, so it never compares equal to a clean run.
-    assert '"agentarium_dirty": true' in result.output
+    assert "--allow-dirty" not in result.output
