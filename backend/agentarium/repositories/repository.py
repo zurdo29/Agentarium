@@ -186,6 +186,7 @@ class Repository:
                     owned_paths_json=item.owned_paths,
                     shared_component=item.shared_component,
                     output_strategy=item.output_strategy.value,
+                    split_depth=item.split_depth,
                     created_at=item.created_at,
                     updated_at=item.updated_at,
                 )
@@ -774,6 +775,7 @@ class Repository:
             owned_paths=row.owned_paths_json,
             shared_component=row.shared_component,
             output_strategy=OutputStrategy(row.output_strategy),
+            split_depth=row.split_depth,
             created_at=row.created_at,
             updated_at=row.updated_at,
         )

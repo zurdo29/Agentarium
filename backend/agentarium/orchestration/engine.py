@@ -38,8 +38,10 @@ from agentarium.execution import (
     ValidationProfileExecutor,
     WorkArtifactProposal,
     WorkspaceFileEvidence,
+    WorkspaceInfrastructureRejected,
     WorkspaceMaterializer,
     WorkspaceRejected,
+    WorkspaceSecurityRejected,
 )
 from agentarium.isolation import (
     GitChangeSet,
@@ -49,7 +51,15 @@ from agentarium.isolation import (
 )
 from agentarium.llm import ModelRequest, ProviderResponse
 from agentarium.memory import ContextBuilder
-from agentarium.planning import BriefProposal, DecomposeProposal, PlanProposal, TaskProposal
+from agentarium.planning import (
+    BriefProposal,
+    DecomposeProposal,
+    PlanProposal,
+    SubtaskProposal,
+    TaskProposal,
+    acceptance_criteria_index,
+    merge_path_claims,
+)
 from agentarium.repositories import Repository
 
 TERMINAL_TASK_STATES = {
@@ -69,6 +79,10 @@ class InvalidPlan(ValueError):
 
 
 class Orchestrator:
+    # A planned task may be split once. Its children and their consolidation
+    # inherit depth 1 and are terminal: see ADR 0021.
+    MAX_SPLIT_DEPTH = 1
+
     def __init__(
         self,
         repository: Repository,
@@ -448,8 +462,13 @@ class Orchestrator:
             )
             changes = await self.isolation.collect(session)
         except (InvalidPlan, WorkspaceRejected, IsolationError) as exc:
+            # The rejected worktree is released here, before any split can
+            # create children: a subtask must never inherit an attempt's
+            # abandoned worktree. attempt_count was already incremented once
+            # at the top of this method and is not touched again on this path.
             if session is not None:
                 await self.isolation.discard(session)
+            may_retry, may_split = self._candidate_failure_policy(exc)
             self._event(
                 item.project_id,
                 "workspace_action_rejected",
@@ -457,17 +476,25 @@ class Orchestrator:
                 work_item_id=item.id,
                 attempt=item.attempt_count,
                 error=str(exc),
+                metadata={"may_retry": may_retry, "may_split": may_split},
                 correlation_id=correlation_id,
             )
-            if item.attempt_count < item.max_attempts:
+            if may_retry and item.attempt_count < item.max_attempts:
                 self._transition(
                     item,
                     WorkItemStatus.READY,
                     correlation_id,
                     error=str(exc),
                 )
-            else:
+            elif may_split:
                 await self._on_attempts_exhausted(item, correlation_id, str(exc))
+            else:
+                self._transition(
+                    item,
+                    WorkItemStatus.FAILED,
+                    correlation_id,
+                    error=str(exc),
+                )
             return
 
         assert session is not None
@@ -698,11 +725,35 @@ class Orchestrator:
             correlation_id,
         )
 
-        workspace_checks = [
-            evidence.as_check(verified=self.workspace.verify(evidence))
-            for evidence in workspace_evidence
-        ]
-        control_verified = self.artifacts.verify(path, checksum)
+        # Reading the files back can fail for reasons that have nothing to do
+        # with the candidate (full disk, revoked permission, I/O error). This
+        # runs after the task already moved to AWAITING_REVIEW, outside the
+        # rejection routing of _execute_work_item, so an escaping error here
+        # would take the whole request down. Treat it as an unverified check
+        # and let the technical gate decide, with the cause on the record.
+        try:
+            workspace_checks = [
+                evidence.as_check(verified=self.workspace.verify(evidence))
+                for evidence in workspace_evidence
+            ]
+            control_verified = self.artifacts.verify(path, checksum)
+        except (WorkspaceInfrastructureRejected, OSError) as exc:
+            self._event(
+                item.project_id,
+                "workspace_verification_unavailable",
+                (
+                    "No se pudieron releer los archivos para verificar su "
+                    f"checksum: {exc}"
+                ),
+                work_item_id=item.id,
+                attempt=item.attempt_count,
+                error=str(exc),
+                correlation_id=correlation_id,
+            )
+            workspace_checks = [
+                evidence.as_check(verified=False) for evidence in workspace_evidence
+            ]
+            control_verified = False
         try:
             validation_results = await self.validations.validate(
                 item.project_id,
@@ -1129,6 +1180,30 @@ class Orchestrator:
         else:
             await self._on_attempts_exhausted(item, correlation_id, reason)
 
+    @staticmethod
+    def _candidate_failure_policy(exc: Exception) -> tuple[bool, bool]:
+        """`(may_retry, may_split)` for a rejected candidate.
+
+        Splitting a task is a *planning* answer: it only makes sense when the
+        proposed content was wrong in a way a smaller scope could fix. A
+        boundary violation and a broken disk are not planning problems, and
+        letting either reach `_attempt_split` would spawn subtasks in response
+        to something no subtask can fix.
+        """
+        if isinstance(exc, WorkspaceSecurityRejected):
+            # Escaping path or symlink: retrying repeats the violation and
+            # decomposing it invents work that was never the problem.
+            return False, False
+        if isinstance(exc, (WorkspaceInfrastructureRejected, IsolationError)):
+            # The machine failed, not the proposal. A retry can genuinely
+            # succeed, but the task itself was never too broad.
+            return True, False
+        # InvalidPlan (malformed artifact, unsafe path in the proposal,
+        # repeated candidate, colliding paths) and the plain content-limit
+        # WorkspaceRejected: the model can plausibly do better, and once it
+        # has stopped doing better, a narrower scope is the next lever.
+        return True, True
+
     async def _on_attempts_exhausted(
         self,
         item: WorkItem,
@@ -1152,7 +1227,25 @@ class Orchestrator:
     ) -> bool:
         if len(item.acceptance_criteria) < 2:
             return False
-        if item.title.startswith("[subtarea] "):
+        if item.split_depth >= self.MAX_SPLIT_DEPTH:
+            # One automatic split per lineage. Anything a split produced —
+            # subtask or consolidation alike — fails instead of splitting
+            # again, so an exhausted lineage stops and waits for a human
+            # instead of breeding generations of ever-smaller tasks.
+            # Deliberately reads the persisted depth, never the title: the
+            # title is model-authored text, not a type.
+            self._event(
+                item.project_id,
+                "task_split_depth_exhausted",
+                (
+                    "La tarea ya proviene de una división automática; no se "
+                    "vuelve a dividir. Queda fallida para reparación manual."
+                ),
+                work_item_id=item.id,
+                attempt=item.attempt_count,
+                metadata={"split_depth": item.split_depth},
+                correlation_id=correlation_id,
+            )
             return False
 
         retry_guidance = self.memory.operational(item).get("retry_guidance", {})
@@ -1166,6 +1259,9 @@ class Orchestrator:
                     attempt=item.attempt_count,
                     payload={
                         "task": item.model_dump(mode="json"),
+                        "acceptance_criteria_index": acceptance_criteria_index(
+                            item.acceptance_criteria
+                        ),
                         "prior_review_feedback": retry_guidance.get(
                             "prior_review_feedback", []
                         ),
@@ -1179,54 +1275,120 @@ class Orchestrator:
         except RoleExecutionError:
             return False
 
-        try:
-            decompose_proposal = DecomposeProposal.model_validate(
-                decompose_response.content
-            )
-        except ValidationError:
-            return False
-
-        original_criteria = {
-            self._planning_entry_key(criterion)
-            for criterion in item.acceptance_criteria
-        }
-        covered_criteria = {
-            self._planning_entry_key(criterion)
-            for subtask in decompose_proposal.subtasks
-            for criterion in subtask.acceptance_criteria
-        }
-        if not original_criteria.issubset(covered_criteria):
-            return False
-
         # Give this split its own sharing group: if the parent already had
         # one, its children extend it; otherwise a fresh one scoped to this
         # split keeps its own 2-4 children from colliding with each other,
         # independent of whatever any other split of a sibling task does.
         shared_component = item.shared_component or f"split-{item.id}"
 
-        children: list[WorkItem] = []
-        for subtask in decompose_proposal.subtasks:
-            child = WorkItem(
-                project_id=item.project_id,
-                milestone_id=item.milestone_id,
-                title=f"[subtarea] {subtask.title}",
-                description=subtask.description,
-                dependency_ids=list(item.dependency_ids),
-                expected_outputs=subtask.expected_outputs,
-                acceptance_criteria=subtask.acceptance_criteria,
-                allowed_tools=list(item.allowed_tools),
-                authorized_files=list(item.authorized_files),
-                max_attempts=3,
-                risk=item.risk,
-                requires_approval=item.requires_approval,
-                priority=item.priority,
-                status=WorkItemStatus.READY,
-                owned_paths=list(subtask.owned_paths),
-                shared_component=shared_component,
-                output_strategy=OutputStrategy.FRAGMENT,
+        try:
+            decompose_proposal = DecomposeProposal.model_validate(
+                self._normalized_decompose_content(
+                    decompose_response.content, shared_component, item
+                )
             )
-            self.repository.add_work_item(child)
-            children.append(child)
+        except ValidationError:
+            return False
+
+        # Criteria come from the parent by id, never from the model's rewritten
+        # text: a small model restates them almost every time, and comparing
+        # that text is what used to abandon otherwise usable splits. If the
+        # mapping is unusable, a deterministic partition still covers every
+        # criterion exactly once, so coverage holds by construction.
+        assignment = self._resolve_criteria_assignment(
+            item.acceptance_criteria,
+            decompose_proposal.subtasks,
+        )
+        if assignment is None:
+            assignment = self._deterministic_criteria_assignment(
+                len(item.acceptance_criteria),
+                len(decompose_proposal.subtasks),
+            )
+            self._event(
+                item.project_id,
+                "task_split_criteria_partitioned",
+                (
+                    "El mapeo de criterios devuelto por el modelo no era usable; "
+                    "se repartieron los criterios del padre de forma "
+                    "determinista entre las subtareas."
+                ),
+                work_item_id=item.id,
+                attempt=item.attempt_count,
+                metadata={"criteria": len(item.acceptance_criteria)},
+                correlation_id=correlation_id,
+            )
+
+        # Subtasks that claim the same file cannot run in parallel: nothing
+        # merges content at integration time (WorkspaceMaterializer.stage
+        # replaces the file), and the shared_component exemption in
+        # _colliding_dependency_paths would let the second one overwrite the
+        # first silently. Chain exactly those, leave the rest parallel.
+        # A deterministic partition can use fewer subtasks than the model
+        # proposed (never more criteria than there are to hand out), so the
+        # assignment decides how many children there are.
+        subtasks = decompose_proposal.subtasks[: len(assignment)]
+        groups = self._group_overlapping_claims(
+            [
+                {path.casefold() for path in subtask.claimed_paths()}
+                for subtask in subtasks
+            ]
+        )
+
+        children: list[WorkItem] = []
+        chain_tails: list[WorkItem] = []
+        chains: list[list[str]] = []
+        for group in groups:
+            previous: WorkItem | None = None
+            chain: list[str] = []
+            for index in group:
+                subtask = subtasks[index]
+                child = WorkItem(
+                    project_id=item.project_id,
+                    milestone_id=item.milestone_id,
+                    title=f"[subtarea] {subtask.title}",
+                    description=subtask.description,
+                    # The parent's own dependencies stay on every child (they
+                    # are COMPLETED by construction); a chained child adds the
+                    # previous link so it sees the content it must extend.
+                    dependency_ids=(
+                        list(item.dependency_ids)
+                        if previous is None
+                        else [*item.dependency_ids, previous.id]
+                    ),
+                    expected_outputs=subtask.expected_outputs,
+                    # Always the parent's own wording, never the model's.
+                    acceptance_criteria=[
+                        item.acceptance_criteria[position]
+                        for position in assignment[index]
+                    ],
+                    allowed_tools=list(item.allowed_tools),
+                    authorized_files=list(item.authorized_files),
+                    max_attempts=3,
+                    risk=item.risk,
+                    requires_approval=item.requires_approval,
+                    priority=item.priority,
+                    status=(
+                        WorkItemStatus.READY
+                        if previous is None
+                        else WorkItemStatus.BLOCKED
+                    ),
+                    owned_paths=list(subtask.owned_paths),
+                    shared_component=shared_component,
+                    output_strategy=(
+                        OutputStrategy.FRAGMENT
+                        if previous is None
+                        else OutputStrategy.PATCH
+                    ),
+                    split_depth=item.split_depth + 1,
+                )
+                self.repository.add_work_item(child)
+                children.append(child)
+                chain.append(child.id)
+                previous = child
+            # A group always has at least one member, so the last child added
+            # is this chain's tail (an ungrouped subtask is its own tail).
+            chain_tails.append(children[-1])
+            chains.append(chain)
 
         consolidation_owned_paths = list(item.owned_paths) or sorted(
             {path for child in children for path in child.owned_paths}
@@ -1239,7 +1401,10 @@ class Orchestrator:
                 "Confirmar que las subtareas cubren completamente el "
                 f"contrato original: {item.description}"
             ),
-            dependency_ids=[child.id for child in children],
+            # The tail of each chain transitively covers the links before it,
+            # so depending on tails plus ungrouped subtasks waits for all of
+            # them without duplicating edges.
+            dependency_ids=[tail.id for tail in chain_tails],
             expected_outputs=list(item.expected_outputs),
             acceptance_criteria=list(item.acceptance_criteria),
             allowed_tools=list(item.allowed_tools),
@@ -1252,6 +1417,9 @@ class Orchestrator:
             owned_paths=consolidation_owned_paths,
             shared_component=shared_component,
             output_strategy=OutputStrategy.CONSOLIDATION,
+            # Same lineage as the children it consolidates: an exhausted
+            # consolidation is terminal too, not a new decomposition round.
+            split_depth=item.split_depth + 1,
         )
         self.repository.add_work_item(consolidation)
 
@@ -1278,11 +1446,175 @@ class Orchestrator:
             metadata={
                 "child_ids": [child.id for child in children],
                 "consolidation_id": consolidation.id,
+                "chains": chains,
                 "reason": reason,
             },
             correlation_id=correlation_id,
         )
+        chained = [chain for chain in chains if len(chain) > 1]
+        if chained:
+            self._event(
+                item.project_id,
+                "task_split_chained_overlapping_paths",
+                (
+                    f"{len(chained)} grupo(s) de subtareas reclamaron el mismo "
+                    "archivo; se encadenaron en secuencia con estrategia "
+                    "'patch' en vez de ejecutarse en paralelo."
+                ),
+                work_item_id=item.id,
+                attempt=item.attempt_count,
+                metadata={
+                    "chains": chained,
+                    "claims": {
+                        child.id: child.owned_paths
+                        for child in children
+                        if any(child.id in chain for chain in chained)
+                    },
+                },
+                correlation_id=correlation_id,
+            )
         return True
+
+    @staticmethod
+    def _normalized_decompose_content(
+        content: dict[str, Any],
+        shared_component: str,
+        item: WorkItem,
+    ) -> dict[str, Any]:
+        """Fill in the contract the model keeps leaving unset.
+
+        `_attempt_split` regroups every subtask under one `shared_component`
+        anyway, so validating the raw response would only turn the model's
+        default `exclusive` into a hard failure of an otherwise usable split.
+        Normalizing first also promotes the file-like `expected_outputs` the
+        model does use into real `owned_paths`, and falls back to the parent's
+        own outputs and claims when the model leaves them out entirely — the
+        contract still demands at least one output, it just no longer has to
+        come from the model. Children that end up inheriting the same file are
+        chained, not run in parallel, by the grouping further down.
+        """
+        subtasks = content.get("subtasks")
+        if not isinstance(subtasks, list):
+            return content
+        inherited_outputs = list(item.expected_outputs)
+        inherited_claims = merge_path_claims(
+            list(item.owned_paths),
+            list(item.expected_outputs),
+        )
+        normalized: list[Any] = []
+        for subtask in subtasks:
+            if not isinstance(subtask, dict):
+                return content
+            owned = subtask.get("owned_paths") or []
+            outputs = subtask.get("expected_outputs") or []
+            if not isinstance(owned, list) or not isinstance(outputs, list):
+                return content
+            owned = [str(value) for value in owned]
+            outputs = [str(value) for value in outputs if str(value).strip()]
+            if outputs:
+                claims = merge_path_claims(owned, outputs)
+            else:
+                # Only when the subtask declared no output at all. A declared
+                # but non-file output ("un informe en prosa") is a real answer
+                # and must not silently inherit the parent's file, which would
+                # chain subtasks that never touch the same path.
+                outputs = inherited_outputs
+                claims = merge_path_claims(owned, outputs) or inherited_claims
+            normalized.append(
+                {
+                    **subtask,
+                    "expected_outputs": outputs,
+                    "owned_paths": claims[:20],
+                    "shared_component": shared_component,
+                    "output_strategy": OutputStrategy.FRAGMENT.value,
+                }
+            )
+        return {**content, "subtasks": normalized}
+
+    @staticmethod
+    def _resolve_criteria_assignment(
+        criteria: list[str],
+        subtasks: list[SubtaskProposal],
+    ) -> list[list[int]] | None:
+        """Parent criterion positions per subtask, or `None` if unusable.
+
+        Unusable means anything that would silently drop or duplicate work:
+        an id that names no parent criterion, the same id handed to two
+        subtasks, a subtask left with nothing to do, or a parent criterion
+        nobody picked up.
+        """
+        by_id = {
+            entry["id"]: position
+            for position, entry in enumerate(acceptance_criteria_index(criteria))
+        }
+        assignment: list[list[int]] = []
+        claimed: set[int] = set()
+        for subtask in subtasks:
+            positions: list[int] = []
+            for criterion_id in subtask.acceptance_criteria_ids:
+                position = by_id.get(criterion_id)
+                if position is None or position in claimed:
+                    return None  # unknown or already handed to another subtask
+                claimed.add(position)
+                positions.append(position)
+            if not positions:
+                return None  # a subtask with no criterion has nothing to verify
+            assignment.append(positions)
+        if len(claimed) != len(criteria):
+            return None  # something the parent had to satisfy went missing
+        return assignment
+
+    @staticmethod
+    def _deterministic_criteria_assignment(
+        criteria_count: int,
+        subtask_count: int,
+    ) -> list[list[int]]:
+        """Contiguous, balanced partition of every parent criterion.
+
+        The fallback for when the model's mapping is unusable. Never leaves a
+        child empty, so the number of children drops to the number of criteria
+        when the model proposed more subtasks than there is work to split.
+        """
+        buckets = max(2, min(subtask_count, criteria_count))
+        base, remainder = divmod(criteria_count, buckets)
+        assignment: list[list[int]] = []
+        position = 0
+        for bucket in range(buckets):
+            size = base + (1 if bucket < remainder else 0)
+            assignment.append(list(range(position, position + size)))
+            position += size
+        return assignment
+
+    @staticmethod
+    def _group_overlapping_claims(claims: list[set[str]]) -> list[list[int]]:
+        """Connected components of subtasks that claim a path in common.
+
+        Transitive on purpose: if A and B share `api.py` and B and C share
+        `models.py`, all three end up in one chain — running B twice in two
+        different chains would reintroduce the overwrite this prevents.
+        """
+        parent = list(range(len(claims)))
+
+        def find(node: int) -> int:
+            while parent[node] != node:
+                parent[node] = parent[parent[node]]
+                node = parent[node]
+            return node
+
+        for index, claim in enumerate(claims):
+            if not claim:
+                continue
+            for other in range(index + 1, len(claims)):
+                if not claim & claims[other]:
+                    continue
+                root, other_root = find(index), find(other)
+                if root != other_root:
+                    parent[max(root, other_root)] = min(root, other_root)
+
+        groups: dict[int, list[int]] = {}
+        for index in range(len(claims)):
+            groups.setdefault(find(index), []).append(index)
+        return [groups[key] for key in sorted(groups)]
 
     async def _call_role(
         self,
@@ -1538,8 +1870,12 @@ class Orchestrator:
                     or task_a.key in closures[task_b.key]
                 ):
                     continue  # real dependency edge, not siblings
-                by_key_a = {path.casefold(): path for path in task_a.owned_paths}
-                by_key_b = {path.casefold(): path for path in task_b.owned_paths}
+                # Claims come from owned_paths *and* file-like expected_outputs:
+                # models keep declaring the file they will write in the second
+                # field and leave the first empty (ADR 0023 live evidence), so
+                # reading only owned_paths made this preflight unreachable.
+                by_key_a = {path.casefold(): path for path in task_a.claimed_paths()}
+                by_key_b = {path.casefold(): path for path in task_b.claimed_paths()}
                 overlap = set(by_key_a) & set(by_key_b)
                 if not overlap:
                     continue
@@ -1551,11 +1887,20 @@ class Orchestrator:
                 )
                 if grouped:
                     continue
+                explicit = {path.casefold() for path in task_a.owned_paths} & {
+                    path.casefold() for path in task_b.owned_paths
+                }
                 conflicts.append(
                     {
                         "task_a": task_a.key,
                         "task_b": task_b.key,
                         "paths": sorted(by_key_a[key] for key in overlap),
+                        "declared_via": sorted(
+                            {
+                                "owned_paths" if key in explicit else "expected_outputs"
+                                for key in overlap
+                            }
+                        ),
                     }
                 )
         return conflicts

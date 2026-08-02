@@ -14,7 +14,13 @@ from .validation import (
     ValidationProfileExecutor,
     ValidationProfileResult,
 )
-from .workspace import WorkspaceFileEvidence, WorkspaceMaterializer, WorkspaceRejected
+from .workspace import (
+    WorkspaceFileEvidence,
+    WorkspaceInfrastructureRejected,
+    WorkspaceMaterializer,
+    WorkspaceRejected,
+    WorkspaceSecurityRejected,
+)
 
 __all__ = [
     "CommandRejected",
@@ -31,6 +37,8 @@ __all__ = [
     "WorkspacePreview",
     "WorkspaceFileEvidence",
     "WorkspaceFileProposal",
+    "WorkspaceInfrastructureRejected",
     "WorkspaceMaterializer",
     "WorkspaceRejected",
+    "WorkspaceSecurityRejected",
 ]

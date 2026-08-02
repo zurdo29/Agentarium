@@ -191,10 +191,15 @@ class MockProvider(LLMProvider):
             criteria = list(task["acceptance_criteria"])
             outputs = list(task["expected_outputs"]) or ["deliverable"]
             split = max(1, len(criteria) // 2)
-            criteria_halves = [criteria[:split], criteria[split:]] or [criteria]
-            criteria_halves = [half for half in criteria_halves if half]
-            if len(criteria_halves) < 2:
-                criteria_halves = [criteria, list(criteria)]
+            # Positions, so the deterministic provider can hand back the
+            # ac-N mapping a well-behaved model is expected to produce.
+            halves = [
+                list(range(0, split)),
+                list(range(split, len(criteria))),
+            ]
+            halves = [half for half in halves if half]
+            if len(halves) < 2:
+                halves = [list(range(len(criteria))), list(range(len(criteria)))]
             return {
                 "subtasks": [
                     {
@@ -206,13 +211,18 @@ class MockProvider(LLMProvider):
                         "expected_outputs": [
                             f"{name}_part_{index + 1}" for name in outputs
                         ],
-                        "acceptance_criteria": half,
+                        "acceptance_criteria": [
+                            criteria[position] for position in half
+                        ],
+                        "acceptance_criteria_ids": [
+                            f"ac-{position + 1}" for position in half
+                        ],
                         "owned_paths": [
                             f"deliverables/{name}_part_{index + 1}.md"
                             for name in outputs
                         ],
                     }
-                    for index, half in enumerate(criteria_halves)
+                    for index, half in enumerate(halves)
                 ]
             }
         if operation == "plan_revision":

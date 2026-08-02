@@ -54,7 +54,32 @@ class Database:
         ("owned_paths_json", "JSON NOT NULL DEFAULT '[]'"),
         ("shared_component", "VARCHAR(120)"),
         ("output_strategy", "VARCHAR(20) NOT NULL DEFAULT 'exclusive'"),
+        ("split_depth", "INTEGER NOT NULL DEFAULT 0"),
     )
+
+    # A plain `DEFAULT 0` would tell every task in an existing database that it
+    # descends from no split, including the subtasks and consolidations a
+    # previous version already created — which would let those split a second
+    # time, the exact recursion `split_depth` exists to stop. These statements
+    # run once, in the same transaction that adds the column, to reconstruct
+    # the depth of lineages that predate it.
+    #
+    # They match on the literal title prefixes and the `split-<id>` sharing
+    # group that `Orchestrator._attempt_split` wrote, because on a legacy row
+    # that is the only surviving evidence. This is a one-time repair of rows
+    # produced by a known code version, not runtime type inference: no control
+    # flow reads a title (see ADR 0021, revisión 2026-08-02).
+    _WORK_ITEM_COLUMN_BACKFILLS: dict[str, tuple[str, ...]] = {
+        "split_depth": (
+            """
+            UPDATE work_items SET split_depth = 1
+             WHERE split_depth = 0
+               AND (title LIKE '[subtarea] %'
+                    OR title LIKE 'Consolidar subtareas: %'
+                    OR shared_component LIKE 'split-%')
+            """,
+        ),
+    }
 
     def _ensure_work_item_columns(self) -> None:
         with self.engine.connect() as connection:
@@ -62,10 +87,13 @@ class Database:
                 row[1] for row in connection.execute(text("PRAGMA table_info(work_items)"))
             }
             for name, definition in self._WORK_ITEM_COLUMN_MIGRATIONS:
-                if name not in columns:
-                    connection.execute(
-                        text(f"ALTER TABLE work_items ADD COLUMN {name} {definition}")
-                    )
+                if name in columns:
+                    continue
+                connection.execute(
+                    text(f"ALTER TABLE work_items ADD COLUMN {name} {definition}")
+                )
+                for statement in self._WORK_ITEM_COLUMN_BACKFILLS.get(name, ()):
+                    connection.execute(text(statement))
             connection.commit()
 
     @contextmanager
