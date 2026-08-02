@@ -22,6 +22,7 @@ from pydantic import (
 )
 
 from .functional import FunctionalCheck
+from .identity import RuntimeIdentity
 from .taxonomy import FailureCategory
 
 # 2 adds `functional`: a case may declare an exact CLI contract that is run
@@ -140,6 +141,11 @@ class BenchmarkRunRecord(BenchmarkModel):
     # freeze — a record without versions skipped the comparison and let two
     # baselines share one ledger.
     prompt_versions: dict[str, str] = Field(min_length=1)
+    runtime_identity: RuntimeIdentity
+    # The digest of the weights this run actually used. `None` for providers
+    # that have none (mock). Compared per (provider, model): a re-pulled tag
+    # keeps its name but changes here.
+    model_digest: str | None = None
     technical_result: bool
     semantic_result: bool
     technical_reports: int = 0

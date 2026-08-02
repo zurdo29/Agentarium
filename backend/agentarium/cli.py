@@ -155,6 +155,13 @@ def benchmark_run(
         bool,
         typer.Option("--rerun", help="Repetir combinaciones ya registradas."),
     ] = False,
+    allow_dirty: Annotated[
+        bool,
+        typer.Option(
+            "--allow-dirty",
+            help="Medir con cambios sin commitear (la corrida no será comparable).",
+        ),
+    ] = False,
 ) -> None:
     """Ejecuta la matriz de casos. Reanudable: omite lo ya registrado."""
     from agentarium.benchmarks import (
@@ -181,6 +188,17 @@ def benchmark_run(
 
     service = _service()
     runner = BenchmarkRunner(service, BenchmarkLedger(_ledger_path(suite)))
+    asyncio.run(runner.freeze_identity())
+    identity = runner.identity
+    if identity.agentarium_dirty and not allow_dirty:
+        typer.echo(
+            "El árbol de trabajo tiene cambios sin commitear, así que el commit "
+            f"({identity.agentarium_commit[:12]}) no identifica lo que se va a "
+            "medir. Commiteá primero, o usá --allow-dirty asumiendo que la "
+            "corrida no será comparable con una limpia.",
+            err=True,
+        )
+        raise typer.Exit(4)
     try:
         pending = runner.pending(planned, rerun=rerun)
     except SuiteDrift as exc:
@@ -191,6 +209,10 @@ def benchmark_run(
         json.dumps(
             {
                 "suite": suite,
+                "identity": identity.model_dump(mode="json"),
+                "model_digests": {
+                    target.label: runner.digest_for(target) for target in targets
+                },
                 "planned": len(planned),
                 "pending": len(pending),
                 "skipped": len(planned) - len(pending),

@@ -53,7 +53,7 @@ repetibles.
 
 ### Evidencia disponible
 
-- Última verificación registrada: Ruff y MyPy limpios; 263/263 pruebas backend
+- Última verificación registrada: Ruff y MyPy limpios; 280/280 pruebas backend
   en verde, sin `xfail` ni exclusiones; lint y pruebas web reverificadas con
   `.\test.ps1` completo.
 - La concurrencia entre un `project run` y lecturas repetidas de
@@ -312,6 +312,29 @@ la entrega, al leer un fixture o al arrancar el proceso queda registrado
 como `infrastructure` en el ledger y la combinación siguiente continúa; el
 bucle de `execute()` además atrapa cualquier excepción inesperada por
 corrida. Con pruebas de ambas cosas.
+
+#### P1.2a — identidad real de la suite — CERRADO (2 de agosto de 2026)
+
+`prompt_versions` y `case_schema_version` congelan lo que *nosotros*
+declaramos. No dicen nada del código que corrió, de las pesas detrás de un
+nombre de modelo ni de la máquina. Un tag de Ollama es mutable: `ollama
+pull` reemplaza las pesas sin que el nombre cambie, así que dos corridas
+del "mismo modelo" pueden ser dos modelos distintos, y un baseline que los
+mezcla no es un baseline.
+
+Cada registro lleva ahora `runtime_identity` (commit de Agentarium más si
+el árbol estaba sucio, versión de Python, plataforma, concurrencia y
+versión de Ollama) y `model_digest` (el digest de las pesas que esa corrida
+usó). La reanudación falla con `SuiteDrift` si cambia cualquiera de ellos;
+los digests se comparan por `(proveedor, modelo)`, así que agregar un
+modelo nuevo a la matriz no invalida los registros del anterior.
+
+La identidad se congela **una vez por invocación**, antes de medir:
+sondearla por corrida dejaría que el entorno cambie a mitad de matriz sin
+que el ledger se entere. `benchmark run` se niega a medir con el árbol de
+trabajo sucio (el commit no identificaría lo que corre) salvo
+`--allow-dirty`, y en ese caso el registro queda marcado y nunca compara
+igual contra una corrida limpia.
 
 #### P1.2 — la matriz
 

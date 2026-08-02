@@ -18,6 +18,7 @@ from agentarium.benchmarks import (
     FailureCategory,
     InvalidBenchmarkCase,
     ModelTarget,
+    RuntimeIdentity,
     build_payload,
     cases_root,
     load_cases,
@@ -538,6 +539,21 @@ def test_a_target_carries_provider_and_model() -> None:
     assert ModelTarget.parse("mock").model == ""
 
 
+def _identity() -> RuntimeIdentity:
+    """A fixed identity, so these tests are about the ledger, not the machine."""
+    return RuntimeIdentity(
+        agentarium_commit="a" * 40,
+        agentarium_dirty=False,
+        python_version="3.14.0",
+        platform="Windows-AMD64",
+        concurrency=1,
+    )
+
+
+def _runner(service: ApplicationService, ledger: BenchmarkLedger) -> BenchmarkRunner:
+    return BenchmarkRunner(service, ledger, identity=_identity())
+
+
 def _record(case_id: str, repetition: int, **overrides: object) -> BenchmarkRunRecord:
     payload: dict[str, object] = {
         "case_id": case_id,
@@ -559,6 +575,7 @@ def _record(case_id: str, repetition: int, **overrides: object) -> BenchmarkRunR
         "evidence": "ok",
         # Current by default: drift is something a test opts into.
         "prompt_versions": prompt_versions(),
+        "runtime_identity": _identity().model_dump(),
     }
     payload.update(overrides)
     return BenchmarkRunRecord.model_validate(payload)
@@ -570,7 +587,7 @@ def test_pending_skips_combinations_already_in_the_ledger(
 ) -> None:
     ledger = BenchmarkLedger(tmp_path / "ledger.jsonl")
     ledger.append(_record("demo", 1))
-    runner = BenchmarkRunner(service, ledger)
+    runner = _runner(service, ledger)
     planned = plan_matrix([_case()], [ModelTarget.parse("mock")], 3)
 
     pending = runner.pending(planned)
@@ -627,7 +644,7 @@ def test_a_case_version_change_refuses_to_reuse_the_suite(
 
     ledger = BenchmarkLedger(tmp_path / "ledger.jsonl")
     ledger.append(_record("demo", 1, case_schema_version=99))
-    runner = BenchmarkRunner(service, ledger)
+    runner = _runner(service, ledger)
 
     with pytest.raises(SuiteDrift, match="--suite"):
         runner.pending(plan_matrix([_case()], [ModelTarget.parse("mock")], 1))
@@ -641,7 +658,7 @@ def test_a_prompt_version_change_refuses_to_reuse_the_suite(
 
     ledger = BenchmarkLedger(tmp_path / "ledger.jsonl")
     ledger.append(_record("demo", 1, prompt_versions={"planning": "planning-v1"}))
-    runner = BenchmarkRunner(service, ledger)
+    runner = _runner(service, ledger)
 
     with pytest.raises(SuiteDrift, match="prompts"):
         runner.pending(plan_matrix([_case()], [ModelTarget.parse("mock")], 1))
@@ -655,7 +672,7 @@ def test_an_unchanged_suite_is_comparable(
 
     ledger = BenchmarkLedger(tmp_path / "ledger.jsonl")
     ledger.append(_record("demo", 1, prompt_versions=prompt_versions()))
-    runner = BenchmarkRunner(service, ledger)
+    runner = _runner(service, ledger)
 
     assert runner.pending(plan_matrix([_case()], [ModelTarget.parse("mock")], 1)) == []
 
@@ -668,7 +685,7 @@ def test_rerun_replans_a_combination_already_recorded(
 
     ledger = BenchmarkLedger(tmp_path / "ledger.jsonl")
     ledger.append(_record("demo", 1, prompt_versions=prompt_versions()))
-    runner = BenchmarkRunner(service, ledger)
+    runner = _runner(service, ledger)
     planned = plan_matrix([_case()], [ModelTarget.parse("mock")], 1)
 
     assert runner.pending(planned) == []
@@ -729,7 +746,7 @@ async def test_smoke_one_case_one_model_one_repetition(
 ) -> None:
     """P1.1's exit criterion: a full reproducible report with no real inference."""
     ledger = BenchmarkLedger(tmp_path / "ledger.jsonl")
-    runner = BenchmarkRunner(service, ledger)
+    runner = _runner(service, ledger)
     case = _case(
         validators=[
             {
@@ -822,12 +839,16 @@ def test_the_cli_dry_run_lists_what_is_missing_without_executing(
             "--model",
             "mock",
             "--dry-run",
+            "--allow-dirty",
         ],
     )
 
     assert result.exit_code == 0, result.output
     payload = json_module.loads(result.output[result.output.index("{"):])
     assert payload["pending"] == 1
+    # The frozen identity is reported before anything runs.
+    assert payload["identity"]["agentarium_commit"]
+    assert "mock" in payload["model_digests"]
     assert not (tmp_path / "runtime" / "benchmarks" / "cli-smoke" / "ledger.jsonl").exists()
 
 
@@ -848,6 +869,7 @@ def test_the_cli_runs_reports_and_then_skips_what_is_done(
         "architecture_document",
         "--model",
         "mock",
+        "--allow-dirty",
     ]
 
     first = runner.invoke(app, command)
@@ -944,7 +966,7 @@ async def test_an_infrastructure_failure_is_recorded_and_the_matrix_continues(
 
     case = load_cases(only=["csv_expenses_cli"])[0]
     ledger = BenchmarkLedger(tmp_path / "ledger.jsonl")
-    runner = BenchmarkRunner(service, ledger)
+    runner = _runner(service, ledger)
     planned = plan_matrix([case], [ModelTarget.parse("mock")], 2)
 
     # Injected at the staging step itself, so the failure does not depend on
@@ -978,7 +1000,7 @@ async def test_an_unexpected_crash_in_one_run_does_not_abort_the_rest(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     ledger = BenchmarkLedger(tmp_path / "ledger.jsonl")
-    runner = BenchmarkRunner(service, ledger)
+    runner = _runner(service, ledger)
     planned = plan_matrix([_case()], [ModelTarget.parse("mock")], 2)
 
     async def explode(self, run):  # type: ignore[no-untyped-def]
@@ -991,3 +1013,55 @@ async def test_an_unexpected_crash_in_one_run_does_not_abort_the_rest(
     assert len(records) == 2
     assert all(record.category is FailureCategory.INFRASTRUCTURE for record in records)
     assert all("algo inesperado" in str(record.error) for record in records)
+
+
+def test_the_cli_refuses_to_measure_a_dirty_checkout(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A dirty tree means the recorded commit does not identify what ran, so the
+    # measurement would be unattributable. Forced here instead of depending on
+    # the state of this checkout.
+    from agentarium.benchmarks import identity as identity_module
+    from agentarium.cli import app
+
+    _cli_env(tmp_path, monkeypatch)
+    monkeypatch.setattr(identity_module, "git_commit", lambda *_: ("c" * 40, True))
+
+    result = CliRunner().invoke(
+        app,
+        ["benchmark", "run", "--suite", "sucia", "--model", "mock", "--dry-run"],
+    )
+
+    assert result.exit_code == 4
+    assert "sin commitear" in result.output
+    assert "--allow-dirty" in result.output
+
+
+def test_the_cli_measures_a_dirty_checkout_when_told_to(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from agentarium.benchmarks import identity as identity_module
+    from agentarium.cli import app
+
+    _cli_env(tmp_path, monkeypatch)
+    monkeypatch.setattr(identity_module, "git_commit", lambda *_: ("c" * 40, True))
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "benchmark",
+            "run",
+            "--suite",
+            "sucia",
+            "--model",
+            "mock",
+            "--dry-run",
+            "--allow-dirty",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    # And the record will say so, so it never compares equal to a clean run.
+    assert '"agentarium_dirty": true' in result.output

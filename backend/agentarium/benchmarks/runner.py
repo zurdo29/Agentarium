@@ -19,6 +19,7 @@ from .cases import fixtures_root
 from .contracts import BenchmarkCase, BenchmarkRunRecord, ValidatorOutcome
 from .functional import run_functional_check
 from .gates import gate_results
+from .identity import RuntimeIdentity, capture_identity, ollama_model_digests
 from .ledger import BenchmarkLedger
 from .taxonomy import Classification, FailureCategory, classify
 
@@ -79,9 +80,35 @@ class BenchmarkRunner:
         self,
         service: ApplicationService,
         ledger: BenchmarkLedger,
+        *,
+        identity: RuntimeIdentity | None = None,
+        model_digests: dict[str, str] | None = None,
     ) -> None:
         self.service = service
         self.ledger = ledger
+        self._identity = identity
+        self._model_digests = model_digests or {}
+
+    async def freeze_identity(self) -> None:
+        """Capture what this invocation is measuring, once, before running.
+
+        Probing per run would let the environment shift mid-matrix without the
+        ledger noticing.
+        """
+        settings = self.service.settings
+        self._identity = await capture_identity(settings)
+        self._model_digests = await ollama_model_digests(settings)
+
+    @property
+    def identity(self) -> RuntimeIdentity:
+        if self._identity is None:
+            raise RuntimeError("freeze_identity() debe ejecutarse antes de medir")
+        return self._identity
+
+    def digest_for(self, target: ModelTarget) -> str | None:
+        if target.provider != "ollama" or not target.model:
+            return None
+        return self._model_digests.get(target.model)
 
     def pending(
         self,
@@ -93,6 +120,11 @@ class BenchmarkRunner:
         self.ledger.assert_comparable(
             case_versions={run.case.id: run.case.schema_version for run in planned},
             prompt_versions=prompt_versions(),
+            runtime_identity=self.identity,
+            model_digests={
+                (run.target.provider, run.target.model): self.digest_for(run.target)
+                for run in planned
+            },
         )
         if rerun:
             return list(planned)
@@ -106,6 +138,8 @@ class BenchmarkRunner:
         rerun: bool = False,
         on_progress: object = None,
     ) -> list[BenchmarkRunRecord]:
+        if self._identity is None:
+            await self.freeze_identity()
         records: list[BenchmarkRunRecord] = []
         for run in self.pending(planned, rerun=rerun):
             try:
@@ -247,6 +281,8 @@ class BenchmarkRunner:
             splits=sum(1 for event in events if event.get("action") == "task_split_created"),
             human_intervention=False,
             prompt_versions=prompt_versions(),
+            runtime_identity=self.identity,
+            model_digest=self.digest_for(run.target),
             technical_result=gates.technical,
             semantic_result=gates.semantic,
             technical_reports=gates.technical_reports,
@@ -305,6 +341,8 @@ class BenchmarkRunner:
             attempts=0,
             splits=0,
             prompt_versions=prompt_versions(),
+            runtime_identity=self.identity,
+            model_digest=self.digest_for(run.target),
             technical_result=False,
             semantic_result=False,
             validation_passed=False,
