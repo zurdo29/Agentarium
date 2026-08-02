@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -14,7 +15,9 @@ from agentarium.llm import (
 )
 from agentarium.services import ApplicationService
 
+from .cases import fixtures_root
 from .contracts import BenchmarkCase, BenchmarkRunRecord, ValidatorOutcome
+from .functional import run_functional_check
 from .gates import gate_results
 from .ledger import BenchmarkLedger
 from .taxonomy import Classification, FailureCategory, classify
@@ -144,7 +147,32 @@ class BenchmarkRunner:
                     error=error,
                 )
 
-        return self._observe(run, project_id, started, error)
+        functional_outcome = await self.run_functional(run.case, project_id)
+        return self._observe(run, project_id, started, error, functional_outcome)
+
+    async def run_functional(
+        self,
+        case: BenchmarkCase,
+        project_id: str,
+    ) -> ValidatorOutcome | None:
+        """Execute the delivery against the case's fixture, if it declares one."""
+        if case.functional is None:
+            return None
+        outcome = await run_functional_check(
+            case.functional,
+            delivery_root=self.delivery_root(project_id),
+            fixtures_root=fixtures_root(case.id),
+            workspace_root=self.service.settings.workspace_root,
+            # The same executor SCRIPT_EXECUTION uses: identical trust
+            # boundary, no extra isolation claimed.
+            executor=self.service.orchestrator.validations.executor,
+            python_executable=sys.executable,
+        )
+        return ValidatorOutcome(
+            description=case.functional.description,
+            passed=outcome.passed,
+            detail=outcome.detail,
+        )
 
     def _observe(
         self,
@@ -152,6 +180,7 @@ class BenchmarkRunner:
         project_id: str,
         started: float,
         error: str | None,
+        functional_outcome: ValidatorOutcome | None = None,
     ) -> BenchmarkRunRecord:
         repository = self.service.repository
         project = repository.get_project(project_id)
@@ -161,6 +190,8 @@ class BenchmarkRunner:
         test_reports = repository.list_test_reports(project_id)
 
         outcomes = self.validate_delivery(run.case, self.delivery_root(project_id))
+        if functional_outcome is not None:
+            outcomes.append(functional_outcome)
         validation_passed = all(outcome.passed for outcome in outcomes)
         classification = classify(
             project,

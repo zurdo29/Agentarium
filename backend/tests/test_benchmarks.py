@@ -46,9 +46,15 @@ def test_the_three_versioned_cases_load_and_declare_their_schema() -> None:
         "library_api_sqlite",
     }
     for case in cases:
-        assert case.schema_version == CASE_SCHEMA_VERSION
+        # Cases version independently: only the one whose contract changed
+        # moves. A single shared version would force churn on the others.
+        assert 1 <= case.schema_version <= CASE_SCHEMA_VERSION, case.id
         assert case.validators, case.id
         assert case.goal.strip()
+
+    csv_case = next(case for case in cases if case.id == "csv_expenses_cli")
+    assert csv_case.schema_version == 2, "el contrato funcional exige la versión 2"
+    assert csv_case.functional is not None
 
 
 def test_every_case_file_is_named_after_its_id() -> None:

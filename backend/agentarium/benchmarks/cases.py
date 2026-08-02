@@ -20,6 +20,11 @@ def cases_root() -> Path:
     return project_root() / "benchmarks" / "cases"
 
 
+def fixtures_root(case_id: str) -> Path:
+    """Inputs versioned next to the case they belong to."""
+    return project_root() / "benchmarks" / "fixtures" / case_id
+
+
 def load_case(path: Path) -> BenchmarkCase:
     try:
         raw = yaml.safe_load(path.read_text(encoding="utf-8"))
