@@ -22,6 +22,7 @@ from agentarium.benchmarks import (
     cases_root,
     load_cases,
     plan_matrix,
+    prompt_versions,
     render_markdown,
 )
 from agentarium.benchmarks.contracts import CASE_SCHEMA_VERSION, BenchmarkRunRecord
@@ -435,6 +436,52 @@ def test_only_the_last_verdict_per_task_counts() -> None:
     assert gates.semantic is True
 
 
+def test_a_red_technical_report_is_not_filed_as_a_semantic_rejection() -> None:
+    # `_apply_technical_review_gate` forces the review to CHANGES_REQUESTED
+    # whenever the technical gate failed, so a red report always arrives with a
+    # rejected review. The technical cause has to win.
+    from agentarium.benchmarks import classify
+
+    item = _item(WorkItemStatus.FAILED, "La compuerta técnica fija rechazó la entrega")
+    review = _review(item.id, ReviewVerdict.CHANGES_REQUESTED)
+    review = review.model_copy(
+        update={"reasons": ["La compuerta técnica fija rechazó la entrega"]}
+    )
+
+    result = classify(
+        _project(ProjectStatus.FAILED),
+        [item],
+        [],
+        validation_passed=False,
+        reviews=[review],
+        test_reports=[_report(item.id, False)],
+    )
+
+    assert result.category is FailureCategory.TECHNICAL_VALIDATION
+
+
+def test_a_rejection_the_technical_gate_did_not_cause_is_semantic() -> None:
+    from agentarium.benchmarks import classify
+
+    item = _item(WorkItemStatus.FAILED, "El revisor rechazó la entrega")
+    review = _review(item.id, ReviewVerdict.CHANGES_REQUESTED)
+    review = review.model_copy(
+        update={"reasons": ["No cubre el criterio de préstamo"]}
+    )
+
+    result = classify(
+        _project(ProjectStatus.FAILED),
+        [item],
+        [],
+        validation_passed=False,
+        reviews=[review],
+        test_reports=[_report(item.id, True)],
+    )
+
+    assert result.category is FailureCategory.SEMANTIC_REJECTION
+    assert "préstamo" in result.evidence
+
+
 def test_a_parent_cancelled_by_a_split_does_not_count_against_the_gates() -> None:
     from agentarium.benchmarks import gate_results
 
@@ -504,6 +551,8 @@ def _record(case_id: str, repetition: int, **overrides: object) -> BenchmarkRunR
         "validators": [],
         "category": FailureCategory.COMPLETED,
         "evidence": "ok",
+        # Current by default: drift is something a test opts into.
+        "prompt_versions": prompt_versions(),
     }
     payload.update(overrides)
     return BenchmarkRunRecord.model_validate(payload)

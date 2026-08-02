@@ -84,7 +84,7 @@ class BenchmarkLedger:
                     f"schema_version={record.case_schema_version}, ahora es "
                     f"{expected_case}"
                 )
-            if record.prompt_versions and record.prompt_versions != prompt_versions:
+            if record.prompt_versions != prompt_versions:
                 changed = sorted(
                     f"{name}: {record.prompt_versions.get(name, '—')} → "
                     f"{prompt_versions.get(name, '—')}"

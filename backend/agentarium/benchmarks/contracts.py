@@ -126,7 +126,10 @@ class BenchmarkRunRecord(BenchmarkModel):
     attempts: int
     splits: int
     human_intervention: bool = False
-    prompt_versions: dict[str, str] = Field(default_factory=dict)
+    # Required and non-empty: an optional field here was a hole in the suite
+    # freeze — a record without versions skipped the comparison and let two
+    # baselines share one ledger.
+    prompt_versions: dict[str, str] = Field(min_length=1)
     technical_result: bool
     semantic_result: bool
     technical_reports: int = 0

@@ -146,19 +146,25 @@ def _classify_item(
     if matched is not None:
         return Classification(matched, label)
 
+    # Technical first, and the order is load-bearing:
+    # `_apply_technical_review_gate` forces the review to CHANGES_REQUESTED
+    # whenever the technical gate failed, so a red report always comes with a
+    # rejected review. Reading the review first would file every technical
+    # failure as a semantic one.
+    last_report = _last_for_item(test_reports, item.id)
+    if last_report is not None and not last_report.passed:
+        return Classification(
+            FailureCategory.TECHNICAL_VALIDATION,
+            f"{item.title}: {last_report.summary}",
+        )
+
+    # Only a rejection the technical gate did not cause is semantic.
     last_review = _last_for_item(reviews, item.id)
     if last_review is not None and last_review.verdict is not ReviewVerdict.APPROVED:
         reasons = "; ".join(last_review.reasons) or "sin motivo declarado"
         return Classification(
             FailureCategory.SEMANTIC_REJECTION,
             f"{item.title}: {reasons}",
-        )
-
-    last_report = _last_for_item(test_reports, item.id)
-    if last_report is not None and not last_report.passed:
-        return Classification(
-            FailureCategory.TECHNICAL_VALIDATION,
-            f"{item.title}: {last_report.summary}",
         )
 
     return Classification(FailureCategory.TECHNICAL_VALIDATION, label)

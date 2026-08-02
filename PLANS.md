@@ -53,7 +53,7 @@ repetibles.
 
 ### Evidencia disponible
 
-- Última verificación registrada: Ruff y MyPy limpios; 243/243 pruebas backend
+- Última verificación registrada: Ruff y MyPy limpios; 245/245 pruebas backend
   en verde, sin `xfail` ni exclusiones; lint y pruebas web reverificadas con
   `.\test.ps1` completo.
 - La concurrencia entre un `project run` y lecturas repetidas de
@@ -261,17 +261,24 @@ repite nada.
    a cualquier caso futuro: un validador por presencia de palabra mide el
    enunciado, no la entrega.
 
-**Prerrequisito de P1.2, no implementado:** los validadores comprueban
-archivos y estructura, no comportamiento. Antes de convertir la matriz en una
-recomendación de modelo conviene ejecutar el caso CSV contra un CSV fixture
-conocido y comparar la salida. Eso implica un tipo de validador que ejecuta
-la entrega, con su propio aislamiento y allowlist; es un incremento aparte,
-no un ajuste del formato de caso.
+#### P1.1b — validación funcional del benchmark — BLOQUEANTE de P1.2
+
+Los validadores actuales comprueban archivos y estructura, no comportamiento.
+**Debe ejecutarse antes de iniciar la matriz**, no después: una matriz medida
+sólo con presencia de archivos no sostiene ninguna recomendación de modelo, y
+si queda para el final se convierte en opcional. Alcance acotado:
+
+- fixture CSV conocido, versionado junto al caso;
+- interfaz CLI exacta declarada en el propio caso;
+- ejecución sin shell, con argumentos estructurados;
+- `SafeCommandExecutor`, timeout y directorio aislado;
+- comparación determinista de la salida;
+- pruebas positiva, negativa, de timeout y de comando rechazado.
 
 #### P1.2 — la matriz
 
-Ejecutar la matriz inicial de 3 casos × 3 modelos × 3 repeticiones. Las 27
-corridas deben ser automatizadas; no supervisadas manualmente una por una:
+**Sólo después de P1.1b.** Ejecutar la matriz inicial de 3 casos × 3 modelos ×
+3 repeticiones. Las 27 corridas deben ser automatizadas; no supervisadas manualmente una por una:
 
 ```powershell
 .\.venv\Scripts\agentarium.exe benchmark run `
