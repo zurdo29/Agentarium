@@ -268,3 +268,123 @@ async def test_a_denied_token_in_the_arguments_is_rejected(
 
     assert not outcome.passed
     assert "comando rechazado" in outcome.detail
+
+
+# --- local modules yes, third-party no --------------------------------------
+
+
+HELPER_MODULE = """\
+def totales(filas):
+    from collections import defaultdict
+
+    por_mes = defaultdict(float)
+    por_categoria = defaultdict(float)
+    for fila in filas:
+        monto = float(fila["monto"])
+        por_mes[fila["fecha"][:7]] += monto
+        por_categoria[fila["categoria"]] += monto
+    return por_mes, por_categoria
+"""
+
+SPLIT_SCRIPT = """\
+import argparse
+import csv
+import json
+
+import helpers
+
+parser = argparse.ArgumentParser()
+parser.add_argument("entrada")
+parser.add_argument("--output", required=True)
+opciones = parser.parse_args()
+
+with open(opciones.entrada, newline="", encoding="utf-8") as archivo:
+    por_mes, por_categoria = helpers.totales(list(csv.DictReader(archivo)))
+
+resumen = {
+    "por_mes": {clave: round(valor, 2) for clave, valor in por_mes.items()},
+    "por_categoria": {clave: round(valor, 2) for clave, valor in por_categoria.items()},
+}
+with open(opciones.output, "w", encoding="utf-8") as salida:
+    json.dump(resumen, salida)
+"""
+
+THIRD_PARTY_SCRIPT = """\
+import pydantic
+
+print(pydantic.__version__)
+"""
+
+
+@pytest.mark.asyncio
+async def test_a_delivery_split_into_local_modules_passes(
+    tmp_path: Path,
+    executor: SafeCommandExecutor,
+) -> None:
+    # Splitting the work into `expenses.py` + `helpers.py` is good
+    # organisation, not a failure. `-I` used to break exactly this.
+    delivery = _delivery(tmp_path, SPLIT_SCRIPT)
+    (delivery / "helpers.py").write_text(HELPER_MODULE, encoding="utf-8")
+
+    outcome = await _run(_csv_case_check(), delivery, executor)
+
+    assert outcome.passed, outcome.detail
+
+
+@pytest.mark.asyncio
+async def test_a_delivery_that_reaches_for_a_third_party_package_fails(
+    tmp_path: Path,
+    executor: SafeCommandExecutor,
+) -> None:
+    # `pydantic` is installed in this environment; the stdlib-only contract
+    # means the run must not see it.
+    outcome = await _run(
+        _csv_case_check(), _delivery(tmp_path, THIRD_PARTY_SCRIPT), executor
+    )
+
+    assert not outcome.passed
+    assert "pydantic" in outcome.detail.casefold()
+
+
+# --- infrastructure failures are recorded, never fatal ----------------------
+
+
+@pytest.mark.asyncio
+async def test_a_filesystem_failure_is_reported_as_infrastructure(
+    tmp_path: Path,
+    executor: SafeCommandExecutor,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import shutil as shutil_module
+
+    def broken_copytree(*args, **kwargs):  # type: ignore[no-untyped-def]
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(shutil_module, "copytree", broken_copytree)
+
+    outcome = await _run(
+        _csv_case_check(), _delivery(tmp_path, WORKING_SCRIPT), executor
+    )
+
+    assert not outcome.passed
+    assert outcome.infrastructure
+    assert "no se pudo preparar" in outcome.detail
+
+
+@pytest.mark.asyncio
+async def test_a_process_that_cannot_start_is_reported_as_infrastructure(
+    tmp_path: Path,
+    executor: SafeCommandExecutor,
+) -> None:
+    # Allowed by name, absent on disk: the token gate passes and the spawn
+    # fails, which is the machine's problem and not the delivery's.
+    outcome = await _run(
+        _csv_case_check(),
+        _delivery(tmp_path, WORKING_SCRIPT),
+        executor,
+        python_executable=str(tmp_path / "no-existe" / "python.exe"),
+    )
+
+    assert not outcome.passed
+    assert outcome.infrastructure
+    assert "no se pudo iniciar el proceso" in outcome.detail

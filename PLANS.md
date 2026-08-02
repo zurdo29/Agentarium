@@ -53,7 +53,7 @@ repetibles.
 
 ### Evidencia disponible
 
-- Última verificación registrada: Ruff y MyPy limpios; 257/257 pruebas backend
+- Última verificación registrada: Ruff y MyPy limpios; 263/263 pruebas backend
   en verde, sin `xfail` ni exclusiones; lint y pruebas web reverificadas con
   `.\test.ps1` completo.
 - La concurrencia entre un `project run` y lecturas repetidas de
@@ -273,9 +273,14 @@ de código convincente**.
   `entrypoint` (`expenses.py`), `args` como lista y `produces`. No hay
   descubrimiento por glob — el resultado no puede depender del orden de
   archivos de una entrega.
-- Ejecución sin shell: `python -I -B expenses.py input.csv --output
-  result.json`, argumentos estructurados, `-I` para no heredar los
-  site-packages de esta máquina.
+- Ejecución sin shell: `python -E -s -S -B expenses.py input.csv --output
+  result.json`, argumentos estructurados. **No `-I`**: el modo aislado
+  también saca del `sys.path` el directorio del propio script, así que una
+  entrega bien organizada en `expenses.py` + `helpers.py` fallaba en el
+  import en vez de en su lógica. `-E -s -S` ignora variables PYTHON*, el
+  directorio de usuario y `site` completo, así que los `site-packages` no
+  entran; `-B` no deja bytecode. Los imports locales funcionan, los de
+  terceros no.
 - Entrega y fixture se copian a un directorio desechable dentro de
   `workspace_root` antes de ejecutar; el `produces` declarado se borra allí,
   así que una entrega que trae la respuesta hecha no obtiene crédito.
@@ -297,8 +302,16 @@ arquitectónica.
 **Pruebas:** positiva; salida incorrecta (un programa que agrupa por año en
 vez de por mes: corre bien, produce JSON válido y está mal); programa que
 crashea; entrega sin el entrypoint declarado (la forma exacta de ADR 0016);
-entrega que trae `result.json` hecho; timeout; ejecutable fuera de la
-allowlist; y token denegado en los argumentos.
+entrega que trae `result.json` hecho; entrega repartida en módulos locales
+(pasa) y entrega que importa un paquete de terceros instalado (falla);
+timeout; ejecutable fuera de la allowlist; y token denegado en los
+argumentos.
+
+**Un fallo del validador nunca aborta la matriz.** Un `OSError` al copiar
+la entrega, al leer un fixture o al arrancar el proceso queda registrado
+como `infrastructure` en el ledger y la combinación siguiente continúa; el
+bucle de `execute()` además atrapa cualquier excepción inesperada por
+corrida. Con pruebas de ambas cosas.
 
 #### P1.2 — la matriz
 

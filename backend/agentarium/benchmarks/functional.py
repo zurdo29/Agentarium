@@ -80,6 +80,10 @@ class FunctionalCheck(BaseModel):
 class FunctionalOutcome:
     passed: bool
     detail: str
+    # The machine failed, not the delivery. The run still has to be recorded
+    # and the matrix has to continue: 27 runs cannot die because one temp
+    # directory could not be copied.
+    infrastructure: bool = False
 
 
 async def run_functional_check(
@@ -100,17 +104,35 @@ async def run_functional_check(
     # else, and disposable so a run never observes another run's leftovers.
     run_root = workspace_root / f"benchmark-run-{uuid4().hex}"
     try:
-        problem = await asyncio.to_thread(
-            _prepare_run, check, delivery_root, fixtures_root, run_root
-        )
+        try:
+            problem = await asyncio.to_thread(
+                _prepare_run, check, delivery_root, fixtures_root, run_root
+            )
+        except OSError as exc:
+            # Copying the delivery or a fixture can fail for reasons that have
+            # nothing to do with the model being measured.
+            return FunctionalOutcome(
+                False,
+                f"no se pudo preparar la ejecución: {exc}",
+                infrastructure=True,
+            )
         if problem is not None:
             return FunctionalOutcome(False, problem)
 
         command = [
             python_executable,
-            # Isolated and without writing bytecode: the run must not pick up
-            # this machine's site-packages or leave __pycache__ behind.
-            "-I",
+            # NOT `-I`: isolated mode also drops the script's own directory
+            # from sys.path, so a delivery that splits itself into
+            # `expenses.py` + `helpers.py` — perfectly good organisation —
+            # would fail on the import instead of on its logic. These four do
+            # what the case actually needs: ignore PYTHON* env vars (-E), skip
+            # the user site directory (-s), skip `site` entirely so
+            # site-packages never joins sys.path (-S), and leave no bytecode
+            # behind (-B). Local imports keep working; third-party ones do not,
+            # which is the stdlib-only contract.
+            "-E",
+            "-s",
+            "-S",
             "-B",
             check.entrypoint,
             *check.args,
@@ -123,6 +145,14 @@ async def run_functional_check(
             )
         except CommandRejected as exc:
             return FunctionalOutcome(False, f"comando rechazado: {exc}")
+        except OSError as exc:
+            # The process could not even be started (missing interpreter,
+            # exhausted handles). Not the delivery's fault.
+            return FunctionalOutcome(
+                False,
+                f"no se pudo iniciar el proceso: {exc}",
+                infrastructure=True,
+            )
 
         if result.timed_out:
             return FunctionalOutcome(
@@ -135,8 +165,16 @@ async def run_functional_check(
                 False,
                 f"salió con código {result.return_code}: {detail or 'sin salida'}",
             )
-        return await asyncio.to_thread(_compare_output, check, run_root)
+        try:
+            return await asyncio.to_thread(_compare_output, check, run_root)
+        except OSError as exc:
+            return FunctionalOutcome(
+                False,
+                f"no se pudo leer la salida: {exc}",
+                infrastructure=True,
+            )
     finally:
+        # ignore_errors: cleanup must never be the reason a run is lost.
         await asyncio.to_thread(shutil.rmtree, run_root, True)
 
 
