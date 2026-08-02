@@ -1,0 +1,50 @@
+schema_version: 1
+id: architecture_document
+title: Documento de arquitectura sin código
+goal: >-
+  Crear un documento de arquitectura en Markdown para un sistema de reservas de
+  un restaurante pequeño: describe los componentes principales, las decisiones
+  de diseño con al menos una alternativa considerada para cada una, y un
+  glosario de los términos del dominio.
+
+expected_artifacts:
+  - Un documento de arquitectura en Markdown
+  - Un glosario de términos del dominio
+
+# Dominio deliberadamente sin código: sirve como prueba negativa de que los
+# perfiles de ejecución (SCRIPT_EXECUTION, ADR 0016) no se activan donde no
+# corresponde, y como caso de consistencia entre tareas (ADR 0017).
+#
+# Los patrones exigen ESTRUCTURA, no palabras sueltas. Con validadores por
+# palabra, un artefacto que se limita a repetir el enunciado aprobaba: el
+# objetivo ya menciona "componentes", "alternativa" y "glosario". Verificado
+# contra el proveedor mock, que hace exactamente eso. Un encabezado dedicado
+# no se obtiene parafraseando el pedido.
+validators:
+  - kind: file_exists
+    description: Existe el documento en Markdown
+    path_glob: "**/*.md"
+
+  - kind: file_matches
+    description: Hay una sección dedicada a los componentes
+    path_glob: "**/*.md"
+    pattern: "(?im)^#{1,6}[ \\t]+.*componente"
+
+  - kind: file_matches
+    description: Hay una sección de decisiones de diseño
+    path_glob: "**/*.md"
+    pattern: "(?im)^#{1,6}[ \\t]+.*(decisi[oó]n|dise[nñ]o)"
+
+  - kind: file_matches
+    description: Una decisión enuncia su alternativa descartada
+    path_glob: "**/*.md"
+    pattern: "(?im)^[ \\t]*([-*+]|\\d+\\.|\\|)[^\\n]*alternativa"
+
+  - kind: file_matches
+    description: Hay un glosario con términos definidos
+    path_glob: "**/*.md"
+    pattern: "(?im)^#{1,6}[ \\t]+.*glosario"
+
+  - kind: file_absent
+    description: Un documento de arquitectura no entrega código ejecutable
+    path_glob: "**/*.py"

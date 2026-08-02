@@ -53,7 +53,7 @@ repetibles.
 
 ### Evidencia disponible
 
-- Última verificación registrada: Ruff y MyPy limpios; 184/184 pruebas backend
+- Última verificación registrada: Ruff y MyPy limpios; 245/245 pruebas backend
   en verde, sin `xfail` ni exclusiones; lint y pruebas web reverificadas con
   `.\test.ps1` completo.
 - La concurrencia entre un `project run` y lecturas repetidas de
@@ -77,7 +77,8 @@ repetibles.
 | División de tareas | Resuelto en P0: reparto por ids con partición determinista de respaldo | Queda que el título de una hija puede no describir bien los criterios que le tocaron tras una partición |
 | Calidad de la descomposición | El modelo repite el mismo candidato también a nivel de subtarea | Dividir reduce el alcance, no cambia esa conducta; un linaje agotado ahora para y espera intervención |
 | Dependencias de ejecución | El worker puede elegir paquetes no disponibles en el sandbox | El fallo aparece tarde, después de gastar inferencias e intentos |
-| Evaluación de modelos | Hay corridas útiles, pero no una matriz repetible | No se puede elegir modelo por rol con evidencia suficiente |
+| Evaluación de modelos | La maquinaria de medición existe y es reproducible (P1.1); la matriz no se ha ejecutado | Sigue sin haber baseline: ninguna recomendación de modelo por rol todavía |
+| Compuerta de comandos | `deny_tokens` hacía match de subcadena: `models.py`, `registry.py` y `format_helper.js` quedaban rechazados. Corregido a límite de palabra | Ya no bloquea nombres de archivo normales; conviene revisar la lista si se agregan tokens cortos nuevos |
 | Mantenibilidad | `engine.py` tiene 2051 líneas y `app/page.tsx` 2207 | Cada cambio cruza demasiadas responsabilidades |
 | Interfaz | Sólo hay dos pruebas de render/strings; no prueban interacciones reales | Reintentos, acciones y SSE pueden romperse sin señal temprana |
 | Persistencia | Las columnas nuevas se migran manualmente desde `create_all()`, ahora con backfill y prueba sobre una DB antigua real | Funciona, pero cada columna nueva sigue necesitando su propio backfill escrito a mano |
@@ -189,7 +190,7 @@ historia sin ganancia.
 | Solapamiento con `owned_paths` vacío | `13ee7f71`: preflight detectó `api_endpoints.py` entre dos hermanas con `declared_via: ["expected_outputs"]` |
 | Reformulación no cancela la división | `75ae6456`: primera división que creó hijas, ambas `COMPLETED`; el modelo repartió `ac-1`/`ac-2` bien al primer intento |
 | La corrida ya no falla por esos motivos | Confirmado; los fallos restantes son de otra categoría |
-| Causas nuevas clasificadas, no arrastradas | Dos: rechazo de candidato sin clasificar por tipo, y recursión de la división. Cada una fue su propio PR |
+| Causas nuevas clasificadas, no arrastradas | Dos: rechazo de candidato sin clasificar por tipo, y recursión de la división. Cada una fue su propio incremento, con su hipótesis y sus pruebas, dentro del mismo PR |
 
 Detalle en ADR 0024 (rutas efectivas y encadenamiento), 0025 (clasificación
 del fallo de un candidato en corregible / infraestructura / seguridad),
@@ -202,30 +203,97 @@ confirmación. Sólo está cubierta por pruebas.
 
 ### P1 — benchmark reproducible y taxonomía de fallos
 
+Dividido en dos entregas: **P1.1 (maquinaria, sin inferencia real)** y **P1.2
+(la matriz 3×3×3)**. P1.1 está cerrada.
+
 **Esfuerzo estimado:** 2 PR, 4–6 sesiones más tiempo de inferencia en segundo
 plano.
 
-1. Versionar tres casos en `benchmarks/cases/`:
-   - CLI de gastos CSV;
-   - documento de arquitectura;
-   - API de biblioteca con SQLite.
-2. Cada caso debe incluir objetivo, artefactos esperados y validadores
-   independientes del resumen del agente.
-3. Añadir comandos:
+#### P1.1 — maquinaria medible sin inferencia — CERRADO (2 de agosto de 2026)
 
-   ```powershell
-   .\.venv\Scripts\agentarium.exe benchmark run
-   .\.venv\Scripts\agentarium.exe benchmark report
-   ```
+- Tres casos versionados en `benchmarks/cases/*.yaml` con `schema_version`,
+  objetivo, artefactos esperados y validadores declarativos que leen los
+  archivos entregados, nunca el resumen del agente.
+- Taxonomía centralizada en `agentarium/benchmarks/taxonomy.py`, con las nueve
+  categorías fijas. Clasifica la **causa terminal**: un incidente del que la
+  corrida se recuperó no es por qué terminó. Un proveedor que falla una vez,
+  reintenta y muere en un candidato duplicado es `duplicate_candidate`. La
+  detección de fallo de proveedor es estructural (evento `agent_run_failed` en
+  el intento final de esa tarea), no por texto.
+- `technical_result` y `semantic_result` se leen de los `TestReport` y
+  `Review` persistidos —último veredicto por tarea, excluyendo padres
+  cancelados por una división—, no del estado del proyecto. Una tarea puede
+  pasar la compuerta técnica y fallar la semántica, y ahora se reporta así.
+  Una compuerta que nunca corrió no cuenta como aprobada.
+- Un proyecto que el orquestador declara `completed` pero cuyos archivos no
+  pasan los validadores del caso **no** cuenta como `completed`: es el falso
+  `completed` que el benchmark existe para contar. Se mantienen las nueve
+  categorías (`technical_validation` + `false_completed`), sin inventar una
+  décima, y `false_completed` viaja serializado dentro de cada registro.
+- `benchmark run` y `benchmark report`, más `--dry-run` y `--rerun`.
+- Ejecución reanudable: cada resultado se anexa a un ledger JSONL y las
+  combinaciones ya registradas se omiten. Una suite **congela** las versiones:
+  si cambia el `schema_version` de un caso o una versión de prompt, la corrida
+  falla temprano pidiendo otra `--suite`, en vez de mezclar dos baselines en
+  un mismo informe. Un ledger corrupto o de otra `schema_version` se reporta
+  con número de línea en vez de ignorarse.
+- Suite determinista completa sobre `mock`, incluidos un smoke
+  1 caso × 1 modelo × 1 repetición y pruebas de los comandos reales con
+  `CliRunner`.
 
-4. Registrar por corrida: proveedor, modelo, versiones de prompts, duración,
-   intentos, splits, intervención humana, resultado técnico, resultado
-   semántico y categoría final de fallo.
-5. Usar categorías estables: `planning_contract`, `path_conflict`,
-   `unsupported_capability`, `duplicate_candidate`, `technical_validation`,
-   `semantic_rejection`, `provider_failure`, `infrastructure` y `completed`.
-6. Ejecutar la matriz inicial de 3 casos × 3 modelos × 3 repeticiones. Las 27
-   corridas deben ser automatizadas; no supervisadas manualmente una por una.
+**Criterio de salida cumplido:** el informe completo se genera desde el ledger
+sin depender de inferencia real, y una segunda ejecución de la misma matriz no
+repite nada.
+
+**Dos hallazgos de las primeras corridas con `mock`:**
+
+1. El caso CSV terminó `completed` sin entregar ningún script Python — falso
+   `completed` detectado por los validadores. Con `mock` es lo esperable
+   (nunca escribe código real), así que la categoría de una corrida mock no
+   mide calidad; lo que valida es la maquinaria.
+2. **Los validadores del caso de arquitectura pasaban trivialmente.** El
+   artefacto del mock repite el enunciado, y el enunciado ya contiene
+   "componentes", "alternativa" y "glosario": cualquier entrega que parafrasee
+   el pedido aprobaba. Corregido a patrones **estructurales** —encabezado
+   dedicado, ítem de lista que enuncia la alternativa— que no se obtienen
+   parafraseando. Hay pruebas en ambas direcciones: un documento que sólo
+   repite el objetivo falla; uno con secciones reales pasa. La lección aplica
+   a cualquier caso futuro: un validador por presencia de palabra mide el
+   enunciado, no la entrega.
+
+#### P1.1b — validación funcional del benchmark — BLOQUEANTE de P1.2
+
+Los validadores actuales comprueban archivos y estructura, no comportamiento.
+**Debe ejecutarse antes de iniciar la matriz**, no después: una matriz medida
+sólo con presencia de archivos no sostiene ninguna recomendación de modelo, y
+si queda para el final se convierte en opcional. Alcance acotado:
+
+- fixture CSV conocido, versionado junto al caso;
+- interfaz CLI exacta declarada en el propio caso;
+- ejecución sin shell, con argumentos estructurados;
+- `SafeCommandExecutor`, timeout y directorio aislado;
+- comparación determinista de la salida;
+- pruebas positiva, negativa, de timeout y de comando rechazado.
+
+#### P1.2 — la matriz
+
+**Sólo después de P1.1b.** Ejecutar la matriz inicial de 3 casos × 3 modelos ×
+3 repeticiones. Las 27 corridas deben ser automatizadas; no supervisadas manualmente una por una:
+
+```powershell
+.\.venv\Scripts\agentarium.exe benchmark run `
+  --suite "p1-baseline-2026-08" `
+  --model "ollama:qwen3:4b" `
+  --model "ollama:qwen3:8b" `
+  --model "ollama:qwen2.5-coder:7b" `
+  --repetitions 3
+.\.venv\Scripts\agentarium.exe benchmark report --suite "p1-baseline-2026-08"
+```
+
+Usar siempre una suite con fecha: congela casos y prompts, así que si algo
+cambia a mitad de camino la corrida avisa en vez de mezclar baselines. Es
+reanudable: si Ollama se cae o se interrumpe la corrida, volver a ejecutar el
+mismo comando continúa donde quedó.
 
 **Criterios de salida:**
 
@@ -320,7 +388,8 @@ botella resuelve.
 
 1. ~~**PR 1 — planificación mecánica:** rutas efectivas más IDs de criterios y
    sus regresiones.~~ Entregado, ver P0.
-2. **PR 2 — medición:** casos versionados, taxonomía y `benchmark report`.
+2. ~~**PR 2 — medición:** casos versionados, taxonomía y `benchmark report`.~~
+   Entregado como P1.1; queda ejecutar la matriz (P1.2).
 3. **PR 3 — capacidades:** manifiesto del runtime y fallo temprano por capacidad
    no disponible.
 

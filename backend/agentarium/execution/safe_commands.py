@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import os
+import re
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
 
 import yaml
@@ -10,6 +12,26 @@ import yaml
 
 class CommandRejected(PermissionError):
     pass
+
+
+@lru_cache(maxsize=256)
+def _denied_token_expression(token: str) -> re.Pattern[str]:
+    """How a denied token is recognised inside a command line.
+
+    Plain substring matching turned ordinary filenames into denials:
+    `models.py` contains `del`, `registry.py` contains `reg`, `arm_utils.py`
+    contains `rm`. A token made only of word characters must therefore match a
+    whole word — `del` still denies `del`, `cmd /c del x` and `C:\\bin\\del`,
+    but no longer `models.py`. Tokens that already carry separators (e.g.
+    `Invoke-Expression`) keep matching literally, since word boundaries would
+    not help there.
+    """
+    if token.isalnum():
+        # `_` counts as part of a word, so `format_helper.py` is a filename and
+        # not a `format` invocation. `.` `/` `\` `-` and whitespace stay
+        # boundaries, so `del.exe`, `C:\bin\del` and `rm -rf` remain denied.
+        return re.compile(rf"(?<![0-9A-Za-z_]){re.escape(token)}(?![0-9A-Za-z_])")
+    return re.compile(re.escape(token))
 
 
 @dataclass(frozen=True)
@@ -51,7 +73,10 @@ class SafeCommandExecutor:
         if executable not in self.allowed:
             raise CommandRejected(f"Executable is not allowed: {executable}")
         flattened = " ".join(command).casefold()
-        if any(token in flattened for token in self.denied_tokens):
+        if any(
+            _denied_token_expression(token).search(flattened)
+            for token in self.denied_tokens
+        ):
             raise CommandRejected("Command contains a denied token")
         resolved_cwd = await asyncio.to_thread(cwd.resolve)
         if resolved_cwd != self.workspace_root and self.workspace_root not in resolved_cwd.parents:

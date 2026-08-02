@@ -1,0 +1,35 @@
+schema_version: 1
+id: library_api_sqlite
+title: API de biblioteca con SQLite
+goal: >-
+  Crear una API REST en Python para gestionar el catálogo de una biblioteca:
+  libros, autores y préstamos, con persistencia en SQLite. Debe permitir listar,
+  agregar, actualizar y eliminar libros, y validar que un libro prestado no se
+  pueda volver a prestar hasta que sea devuelto.
+
+expected_artifacts:
+  - Código fuente de la API REST en Python
+  - Persistencia en SQLite
+  - Documentación de los endpoints
+
+# El objetivo con el que se verificaron ADR 0020-0026. Es el caso que más
+# problemas reveló: elección de librerías fuera del sandbox, colisión de
+# archivos entre tareas hermanas, y candidatos repetidos.
+validators:
+  - kind: file_exists
+    description: Existe el código Python de la API
+    path_glob: "**/*.py"
+
+  - kind: file_matches
+    description: La persistencia usa SQLite de verdad
+    path_glob: "**/*.py"
+    pattern: "(?i)\\bsqlite3?\\b"
+
+  - kind: file_matches
+    description: Se declara la validación del préstamo
+    path_glob: "**/*.py"
+    pattern: "(?i)(prestad|loan|borrow)"
+
+  - kind: file_exists
+    description: Existe documentación de los endpoints
+    path_glob: "**/*.md"

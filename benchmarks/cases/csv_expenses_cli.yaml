@@ -1,0 +1,32 @@
+schema_version: 1
+id: csv_expenses_cli
+title: CLI de gastos CSV
+goal: >-
+  Crear una herramienta de línea de comandos en Python que lea un archivo CSV de
+  gastos y produzca un resumen por mes y por categoría, con instrucciones de uso.
+
+expected_artifacts:
+  - Un script Python ejecutable que procese el CSV
+  - Un documento con instrucciones de uso
+
+# Los validadores leen los archivos entregados, nunca el resumen del agente.
+# El caso viene del hallazgo de ADR 0016: un proyecto terminó `completed`
+# documentando `python expenses.py` sin que ese archivo existiera.
+validators:
+  - kind: file_exists
+    description: Existe al menos un script Python en la entrega
+    path_glob: "**/*.py"
+
+  - kind: file_exists
+    description: Existe documentación de uso en Markdown
+    path_glob: "**/*.md"
+
+  - kind: file_matches
+    description: El script lee un CSV de verdad, no lo simula
+    path_glob: "**/*.py"
+    pattern: "(?i)\\b(csv\\.(reader|DictReader)|read_csv|open\\s*\\()"
+
+  - kind: file_matches
+    description: La documentación explica cómo ejecutarlo
+    path_glob: "**/*.md"
+    pattern: "(?i)python[^\\n]*\\.py"
