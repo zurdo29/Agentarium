@@ -10,14 +10,21 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    computed_field,
+    field_validator,
+    model_validator,
+)
 
 from .taxonomy import FailureCategory
 
 CASE_SCHEMA_VERSION = 1
-LEDGER_SCHEMA_VERSION = 1
+LEDGER_SCHEMA_VERSION: Literal[1] = 1
 
 
 class BenchmarkModel(BaseModel):
@@ -104,7 +111,9 @@ class ValidatorOutcome(BenchmarkModel):
 class BenchmarkRunRecord(BenchmarkModel):
     """One (case, provider, model, repetition) result, appended to the ledger."""
 
-    schema_version: int = LEDGER_SCHEMA_VERSION
+    # Pinned, not merely defaulted: a ledger written by a future format must be
+    # refused loudly rather than half-read into today's fields.
+    schema_version: Literal[1] = LEDGER_SCHEMA_VERSION
     case_id: str
     case_schema_version: int
     provider: str
@@ -120,17 +129,34 @@ class BenchmarkRunRecord(BenchmarkModel):
     prompt_versions: dict[str, str] = Field(default_factory=dict)
     technical_result: bool
     semantic_result: bool
+    technical_reports: int = 0
+    semantic_reviews: int = 0
     validation_passed: bool
     validators: list[ValidatorOutcome] = Field(default_factory=list)
     category: FailureCategory
     evidence: str
     error: str | None = None
 
+    @model_validator(mode="before")
+    @classmethod
+    def drop_derived_keys(cls, data: Any) -> Any:
+        # `false_completed` is serialized with the record but derived on read.
+        # Dropping it here keeps `extra="forbid"` meaningful for genuinely
+        # unknown keys while letting a ledger round-trip through this model.
+        if isinstance(data, dict) and "false_completed" in data:
+            data = {key: value for key, value in data.items() if key != "false_completed"}
+        return data
+
     @property
     def key(self) -> tuple[str, str, str, int]:
         return (self.case_id, self.provider, self.model, self.repetition)
 
+    @computed_field  # type: ignore[prop-decorator]
     @property
     def false_completed(self) -> bool:
-        """The orchestrator said done; the case's own validators disagree."""
+        """The orchestrator said done; the case's own validators disagree.
+
+        Derived from `project_status` and `validation_passed`, and serialized
+        with the record so a ledger read by anything else carries it too.
+        """
         return self.project_status == "completed" and not self.validation_passed

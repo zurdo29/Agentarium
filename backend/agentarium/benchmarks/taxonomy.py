@@ -4,6 +4,11 @@ Every consumer — report, ledger, future dashboards — reads categories from
 here. The set is fixed on purpose: a taxonomy that grows a bucket per surprise
 stops being comparable across runs.
 
+The rule throughout is **terminal cause**. An incident earlier in the run that
+the orchestrator recovered from is not why the run ended, and recording it as
+such would hide the real cause. A provider that times out once, retries, and
+then dies on a duplicate candidate is a `duplicate_candidate` run.
+
 This module only *reads* persisted state. It never changes execution.
 """
 
@@ -13,8 +18,8 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any
 
-from agentarium.domain.enums import ProjectStatus, WorkItemStatus
-from agentarium.domain.models import Project, WorkItem
+from agentarium.domain.enums import ProjectStatus, ReviewVerdict, WorkItemStatus
+from agentarium.domain.models import Project, Review, TestReport, WorkItem
 
 
 class FailureCategory(StrEnum):
@@ -38,8 +43,8 @@ class Classification:
         return {"category": self.category.value, "evidence": self.evidence}
 
 
-# Signatures are matched against the error text a task ended with. They are
-# ordered: the first match wins, so the more specific ones come first.
+# Matched against the error a task ended with. Ordered: first match wins, so
+# the more specific signatures come first.
 _ERROR_SIGNATURES: tuple[tuple[str, FailureCategory], ...] = (
     ("byte-for-byte identical", FailureCategory.DUPLICATE_CANDIDATE),
     ("collide with files already owned", FailureCategory.PATH_CONFLICT),
@@ -62,57 +67,48 @@ def classify(
     events: list[dict[str, Any]],
     *,
     validation_passed: bool,
+    reviews: list[Review] | None = None,
+    test_reports: list[TestReport] | None = None,
 ) -> Classification:
     """Why this run ended as it did.
 
     `validation_passed` comes from the case's own validators, which read the
     integrated files instead of trusting the agent's summary. A project the
     orchestrator called `completed` but whose artifacts do not satisfy the case
-    is not `completed` here — that is the false-completion the benchmark exists
+    is not `completed` here — that is the false completion the benchmark exists
     to count.
     """
-    actions = [str(event.get("action", "")) for event in events]
-
-    if project.status is ProjectStatus.COMPLETED and validation_passed:
-        return Classification(FailureCategory.COMPLETED, "validadores independientes en verde")
-
-    if project.status is ProjectStatus.COMPLETED and not validation_passed:
+    if project.status is ProjectStatus.COMPLETED:
+        if validation_passed:
+            return Classification(
+                FailureCategory.COMPLETED,
+                "validadores independientes en verde",
+            )
         return Classification(
             FailureCategory.TECHNICAL_VALIDATION,
             "el proyecto se declaró completo pero los validadores del caso fallaron",
         )
 
-    if "planning_failed" in actions:
+    terminal = _terminal_failed_item(items)
+    if terminal is not None:
+        return _classify_item(terminal, events, reviews or [], test_reports or [])
+
+    if any(event.get("action") == "planning_failed" for event in events):
+        # A provider that died during planning is a provider failure, not a
+        # planner that produced a bad contract.
+        if _provider_failed_planning(events):
+            return Classification(
+                FailureCategory.PROVIDER_FAILURE,
+                _message(events, "planning_failed"),
+            )
         return Classification(
             FailureCategory.PLANNING_CONTRACT,
-            "la planificación no produjo un plan utilizable",
+            _message(events, "planning_failed"),
         )
 
-    if "agent_run_failed" in actions:
-        return Classification(
-            FailureCategory.PROVIDER_FAILURE,
-            _first_message(events, "agent_run_failed"),
-        )
-
-    failed = [item for item in items if item.status is WorkItemStatus.FAILED]
-    for item in failed:
-        matched = _match_error(item.last_error)
-        if matched is not None:
-            return Classification(matched, f"{item.title}: {item.last_error}")
-
-    if any(action == "review_rejected" for action in actions):
-        return Classification(
-            FailureCategory.SEMANTIC_REJECTION,
-            _first_message(events, "review_rejected"),
-        )
-
-    if failed:
-        return Classification(
-            FailureCategory.TECHNICAL_VALIDATION,
-            f"{failed[0].title}: {failed[0].last_error}",
-        )
-
-    if "plan_owned_path_conflict_unresolved" in actions:
+    if any(
+        event.get("action") == "plan_owned_path_conflict_unresolved" for event in events
+    ):
         return Classification(
             FailureCategory.PATH_CONFLICT,
             "quedó un conflicto de propiedad sin resolver en el plan",
@@ -122,6 +118,74 @@ def classify(
         FailureCategory.PLANNING_CONTRACT,
         f"el proyecto terminó en {project.status.value} sin una tarea fallida",
     )
+
+
+def _terminal_failed_item(items: list[WorkItem]) -> WorkItem | None:
+    """The failed task that ended last: the one the run actually died on."""
+    failed = [item for item in items if item.status is WorkItemStatus.FAILED]
+    if not failed:
+        return None
+    return max(failed, key=lambda item: item.updated_at)
+
+
+def _classify_item(
+    item: WorkItem,
+    events: list[dict[str, Any]],
+    reviews: list[Review],
+    test_reports: list[TestReport],
+) -> Classification:
+    label = f"{item.title}: {item.last_error}"
+
+    # Structural, not textual: a provider failure is terminal for this task
+    # only if it happened on the attempt the task died on. An earlier one was
+    # recovered from and is not why the run ended.
+    if _provider_failed_on_final_attempt(item, events):
+        return Classification(FailureCategory.PROVIDER_FAILURE, label)
+
+    matched = _match_error(item.last_error)
+    if matched is not None:
+        return Classification(matched, label)
+
+    last_review = _last_for_item(reviews, item.id)
+    if last_review is not None and last_review.verdict is not ReviewVerdict.APPROVED:
+        reasons = "; ".join(last_review.reasons) or "sin motivo declarado"
+        return Classification(
+            FailureCategory.SEMANTIC_REJECTION,
+            f"{item.title}: {reasons}",
+        )
+
+    last_report = _last_for_item(test_reports, item.id)
+    if last_report is not None and not last_report.passed:
+        return Classification(
+            FailureCategory.TECHNICAL_VALIDATION,
+            f"{item.title}: {last_report.summary}",
+        )
+
+    return Classification(FailureCategory.TECHNICAL_VALIDATION, label)
+
+
+def _provider_failed_on_final_attempt(
+    item: WorkItem,
+    events: list[dict[str, Any]],
+) -> bool:
+    return any(
+        event.get("action") == "agent_run_failed"
+        and event.get("work_item_id") == item.id
+        and event.get("attempt") == item.attempt_count
+        for event in events
+    )
+
+
+def _provider_failed_planning(events: list[dict[str, Any]]) -> bool:
+    return any(
+        event.get("action") == "agent_run_failed" and not event.get("work_item_id")
+        for event in events
+    )
+
+
+def _last_for_item(records: list[Any], work_item_id: str) -> Any | None:
+    matching = [record for record in records if record.work_item_id == work_item_id]
+    return matching[-1] if matching else None
 
 
 def _match_error(error: str | None) -> FailureCategory | None:
@@ -134,8 +198,8 @@ def _match_error(error: str | None) -> FailureCategory | None:
     return None
 
 
-def _first_message(events: list[dict[str, Any]], action: str) -> str:
+def _message(events: list[dict[str, Any]], action: str) -> str:
     for event in events:
         if event.get("action") == action:
-            return str(event.get("message") or event.get("error") or action)
+            return str(event.get("error") or event.get("message") or action)
     return action

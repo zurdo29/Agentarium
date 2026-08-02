@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import shutil
 import subprocess
 import sys
@@ -150,6 +151,10 @@ def benchmark_run(
         bool,
         typer.Option("--dry-run", help="Sólo listar lo que falta, sin ejecutar."),
     ] = False,
+    rerun: Annotated[
+        bool,
+        typer.Option("--rerun", help="Repetir combinaciones ya registradas."),
+    ] = False,
 ) -> None:
     """Ejecuta la matriz de casos. Reanudable: omite lo ya registrado."""
     from agentarium.benchmarks import (
@@ -157,6 +162,7 @@ def benchmark_run(
         BenchmarkRunner,
         InvalidBenchmarkCase,
         ModelTarget,
+        SuiteDrift,
         load_cases,
         plan_matrix,
     )
@@ -167,12 +173,19 @@ def benchmark_run(
         typer.echo(f"Caso inválido: {exc}", err=True)
         raise typer.Exit(2) from exc
 
-    targets = [ModelTarget.parse(raw) for raw in (models or ["mock"])]
+    try:
+        targets = [ModelTarget.parse(raw) for raw in (models or ["mock"])]
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
     planned = plan_matrix(selected, targets, repetitions)
 
     service = _service()
     runner = BenchmarkRunner(service, BenchmarkLedger(_ledger_path(suite)))
-    pending = runner.pending(planned)
+    try:
+        pending = runner.pending(planned, rerun=rerun)
+    except SuiteDrift as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(3) from exc
 
     typer.echo(
         json.dumps(
@@ -204,7 +217,7 @@ def benchmark_run(
             f"({record.duration_seconds}s)"
         )
 
-    asyncio.run(runner.execute(planned, on_progress=_echo))
+    asyncio.run(runner.execute(planned, rerun=rerun, on_progress=_echo))
 
 
 @benchmark_app.command("report")
@@ -233,11 +246,18 @@ def benchmark_report(
     typer.echo(f"Informe escrito en {destination}")
 
 
+_SUITE_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+
+
 def _ledger_path(suite: str) -> Path:
-    safe = "".join(char for char in suite if char.isalnum() or char in {"-", "_"})
-    if not safe:
-        raise typer.BadParameter("Nombre de suite inválido")
-    return project_root() / "runtime" / "benchmarks" / safe / "ledger.jsonl"
+    # Rejected, never sanitized: silently stripping characters would make
+    # `a/b` and `ab` share one ledger and mix two baselines.
+    if not _SUITE_PATTERN.match(suite):
+        raise typer.BadParameter(
+            f"Nombre de suite inválido: {suite!r}. Usá letras, dígitos, "
+            "punto, guion o guion bajo (hasta 64 caracteres)."
+        )
+    return project_root() / "runtime" / "benchmarks" / suite / "ledger.jsonl"
 
 
 def _project_detail(project_id: str) -> dict[str, Any]:

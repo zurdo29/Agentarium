@@ -53,7 +53,7 @@ repetibles.
 
 ### Evidencia disponible
 
-- Última verificación registrada: Ruff y MyPy limpios; 223/223 pruebas backend
+- Última verificación registrada: Ruff y MyPy limpios; 243/243 pruebas backend
   en verde, sin `xfail` ni exclusiones; lint y pruebas web reverificadas con
   `.\test.ps1` completo.
 - La concurrencia entre un `project run` y lecturas repetidas de
@@ -215,27 +215,58 @@ plano.
   objetivo, artefactos esperados y validadores declarativos que leen los
   archivos entregados, nunca el resumen del agente.
 - Taxonomía centralizada en `agentarium/benchmarks/taxonomy.py`, con las nueve
-  categorías fijas. Un proyecto que el orquestador declara `completed` pero
-  cuyos archivos no pasan los validadores del caso **no** cuenta como
-  `completed`: es el falso `completed` que el benchmark existe para contar, y
-  se reporta como métrica propia.
-- `benchmark run` y `benchmark report`, más `--dry-run` para ver qué falta sin
-  ejecutar nada.
+  categorías fijas. Clasifica la **causa terminal**: un incidente del que la
+  corrida se recuperó no es por qué terminó. Un proveedor que falla una vez,
+  reintenta y muere en un candidato duplicado es `duplicate_candidate`. La
+  detección de fallo de proveedor es estructural (evento `agent_run_failed` en
+  el intento final de esa tarea), no por texto.
+- `technical_result` y `semantic_result` se leen de los `TestReport` y
+  `Review` persistidos —último veredicto por tarea, excluyendo padres
+  cancelados por una división—, no del estado del proyecto. Una tarea puede
+  pasar la compuerta técnica y fallar la semántica, y ahora se reporta así.
+  Una compuerta que nunca corrió no cuenta como aprobada.
+- Un proyecto que el orquestador declara `completed` pero cuyos archivos no
+  pasan los validadores del caso **no** cuenta como `completed`: es el falso
+  `completed` que el benchmark existe para contar. Se mantienen las nueve
+  categorías (`technical_validation` + `false_completed`), sin inventar una
+  décima, y `false_completed` viaja serializado dentro de cada registro.
+- `benchmark run` y `benchmark report`, más `--dry-run` y `--rerun`.
 - Ejecución reanudable: cada resultado se anexa a un ledger JSONL y las
-  combinaciones ya registradas se omiten. Un ledger corrupto se reporta con
-  número de línea en vez de ignorarse.
-- Suite determinista completa sobre `mock`, incluido un smoke
-  1 caso × 1 modelo × 1 repetición que produce informe Markdown y JSON.
+  combinaciones ya registradas se omiten. Una suite **congela** las versiones:
+  si cambia el `schema_version` de un caso o una versión de prompt, la corrida
+  falla temprano pidiendo otra `--suite`, en vez de mezclar dos baselines en
+  un mismo informe. Un ledger corrupto o de otra `schema_version` se reporta
+  con número de línea en vez de ignorarse.
+- Suite determinista completa sobre `mock`, incluidos un smoke
+  1 caso × 1 modelo × 1 repetición y pruebas de los comandos reales con
+  `CliRunner`.
 
 **Criterio de salida cumplido:** el informe completo se genera desde el ledger
 sin depender de inferencia real, y una segunda ejecución de la misma matriz no
 repite nada.
 
-**Hallazgo de la primera corrida con `mock`:** el caso CSV terminó `completed`
-sin entregar ningún script Python — falso `completed` detectado por los
-validadores. Con `mock` es lo esperable (nunca escribe código real), así que la
-categoría de una corrida mock no mide calidad; lo que valida es la maquinaria.
-El criterio de cero falsos `completed` aplica a P1.2, contra modelos reales.
+**Dos hallazgos de las primeras corridas con `mock`:**
+
+1. El caso CSV terminó `completed` sin entregar ningún script Python — falso
+   `completed` detectado por los validadores. Con `mock` es lo esperable
+   (nunca escribe código real), así que la categoría de una corrida mock no
+   mide calidad; lo que valida es la maquinaria.
+2. **Los validadores del caso de arquitectura pasaban trivialmente.** El
+   artefacto del mock repite el enunciado, y el enunciado ya contiene
+   "componentes", "alternativa" y "glosario": cualquier entrega que parafrasee
+   el pedido aprobaba. Corregido a patrones **estructurales** —encabezado
+   dedicado, ítem de lista que enuncia la alternativa— que no se obtienen
+   parafraseando. Hay pruebas en ambas direcciones: un documento que sólo
+   repite el objetivo falla; uno con secciones reales pasa. La lección aplica
+   a cualquier caso futuro: un validador por presencia de palabra mide el
+   enunciado, no la entrega.
+
+**Prerrequisito de P1.2, no implementado:** los validadores comprueban
+archivos y estructura, no comportamiento. Antes de convertir la matriz en una
+recomendación de modelo conviene ejecutar el caso CSV contra un CSV fixture
+conocido y comparar la salida. Eso implica un tipo de validador que ejecuta
+la entrega, con su propio aislamiento y allowlist; es un incremento aparte,
+no un ajuste del formato de caso.
 
 #### P1.2 — la matriz
 
@@ -244,13 +275,18 @@ corridas deben ser automatizadas; no supervisadas manualmente una por una:
 
 ```powershell
 .\.venv\Scripts\agentarium.exe benchmark run `
-  --model "ollama:qwen3:4b" --model "ollama:qwen3:8b" `
-  --model "ollama:qwen2.5-coder:7b" --repetitions 3
-.\.venv\Scripts\agentarium.exe benchmark report
+  --suite "p1-baseline-2026-08" `
+  --model "ollama:qwen3:4b" `
+  --model "ollama:qwen3:8b" `
+  --model "ollama:qwen2.5-coder:7b" `
+  --repetitions 3
+.\.venv\Scripts\agentarium.exe benchmark report --suite "p1-baseline-2026-08"
 ```
 
-Es reanudable: si Ollama se cae o se interrumpe la corrida, volver a ejecutar
-el mismo comando continúa donde quedó.
+Usar siempre una suite con fecha: congela casos y prompts, así que si algo
+cambia a mitad de camino la corrida avisa en vez de mezclar baselines. Es
+reanudable: si Ollama se cae o se interrumpe la corrida, volver a ejecutar el
+mismo comando continúa donde quedó.
 
 **Criterios de salida:**
 

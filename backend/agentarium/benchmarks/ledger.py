@@ -17,6 +17,10 @@ from .contracts import BenchmarkRunRecord
 RunKey = tuple[str, str, str, int]
 
 
+class SuiteDrift(ValueError):
+    """The suite no longer measures what its existing records measured."""
+
+
 class BenchmarkLedger:
     def __init__(self, path: Path) -> None:
         self.path = path
@@ -57,6 +61,45 @@ class BenchmarkLedger:
         for record in self.records():
             latest[record.key] = record
         return latest
+
+    def assert_comparable(
+        self,
+        *,
+        case_versions: dict[str, int],
+        prompt_versions: dict[str, str],
+    ) -> None:
+        """Refuse to append measurements that are not comparable to the rest.
+
+        Resumability keys on (case, provider, model, repetition). If the case
+        definition or a prompt changed underneath, that key names a *different*
+        measurement, and skipping it as "already done" would quietly mix two
+        baselines into one report. Fail early and ask for a new suite.
+        """
+        drift: list[str] = []
+        for record in self.records():
+            expected_case = case_versions.get(record.case_id)
+            if expected_case is not None and expected_case != record.case_schema_version:
+                drift.append(
+                    f"caso {record.case_id}: el ledger tiene "
+                    f"schema_version={record.case_schema_version}, ahora es "
+                    f"{expected_case}"
+                )
+            if record.prompt_versions and record.prompt_versions != prompt_versions:
+                changed = sorted(
+                    f"{name}: {record.prompt_versions.get(name, '—')} → "
+                    f"{prompt_versions.get(name, '—')}"
+                    for name in set(record.prompt_versions) | set(prompt_versions)
+                    if record.prompt_versions.get(name) != prompt_versions.get(name)
+                )
+                drift.append("prompts: " + ", ".join(changed))
+            if drift:
+                break
+        if drift:
+            raise SuiteDrift(
+                "Esta suite ya contiene mediciones hechas con otra versión "
+                f"({'; '.join(drift)}). Usá --suite con un nombre nuevo para "
+                "no mezclar dos baselines en un mismo informe."
+            )
 
 
 def dump_json_report(path: Path, payload: dict[str, object]) -> None:

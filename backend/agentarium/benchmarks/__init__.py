@@ -9,7 +9,8 @@ from .contracts import (
     CaseValidator,
     ValidatorOutcome,
 )
-from .ledger import BenchmarkLedger, dump_json_report
+from .gates import GateResults, gate_results
+from .ledger import BenchmarkLedger, SuiteDrift, dump_json_report
 from .report import build_payload, render_markdown
 from .runner import BenchmarkRunner, ModelTarget, PlannedRun, plan_matrix, prompt_versions
 from .taxonomy import Classification, FailureCategory, classify
@@ -23,14 +24,17 @@ __all__ = [
     "CaseValidator",
     "Classification",
     "FailureCategory",
+    "GateResults",
     "InvalidBenchmarkCase",
     "LEDGER_SCHEMA_VERSION",
     "ModelTarget",
     "PlannedRun",
+    "SuiteDrift",
     "ValidatorOutcome",
     "build_payload",
     "cases_root",
     "classify",
+    "gate_results",
     "dump_json_report",
     "load_case",
     "load_cases",

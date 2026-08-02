@@ -25,10 +25,14 @@ from agentarium.benchmarks import (
     render_markdown,
 )
 from agentarium.benchmarks.contracts import CASE_SCHEMA_VERSION, BenchmarkRunRecord
-from agentarium.domain.enums import ProjectStatus, WorkItemStatus
-from agentarium.domain.models import Project, WorkItem
+from agentarium.domain.enums import ProjectStatus, ReviewVerdict, WorkItemStatus
+from agentarium.domain.models import Project, Review, WorkItem
+
+# Aliased: pytest tries to collect anything named Test* as a test class.
+from agentarium.domain.models import TestReport as ReportModel
 from agentarium.services import ApplicationService
 from pydantic import ValidationError
+from typer.testing import CliRunner
 
 # --- the versioned cases ----------------------------------------------------
 
@@ -242,18 +246,222 @@ def test_a_completed_and_validated_project_is_completed() -> None:
     assert result.category is FailureCategory.COMPLETED
 
 
-def test_a_provider_failure_outranks_a_later_symptom() -> None:
+def test_a_transient_provider_failure_does_not_hide_the_terminal_cause() -> None:
+    # Ollama died once at attempt 1, the run recovered, and the task finally
+    # died on a duplicate candidate at attempt 3. The run is a duplicate.
     from agentarium.benchmarks import classify
+
+    item = _item(WorkItemStatus.FAILED, "Retry candidate files are byte-for-byte identical")
+    item = item.model_copy(update={"attempt_count": 3})
 
     result = classify(
         _project(ProjectStatus.FAILED),
-        [_item(WorkItemStatus.FAILED, "byte-for-byte identical")],
-        [{"action": "agent_run_failed", "message": "ConnectTimeout"}],
+        [item],
+        [
+            {
+                "action": "agent_run_failed",
+                "work_item_id": item.id,
+                "attempt": 1,
+                "message": "ConnectTimeout",
+            }
+        ],
+        validation_passed=False,
+    )
+
+    assert result.category is FailureCategory.DUPLICATE_CANDIDATE
+
+
+def test_a_provider_failure_on_the_final_attempt_is_the_terminal_cause() -> None:
+    from agentarium.benchmarks import classify
+
+    item = _item(WorkItemStatus.FAILED, "ConnectTimeout")
+    item = item.model_copy(update={"attempt_count": 3})
+
+    result = classify(
+        _project(ProjectStatus.FAILED),
+        [item],
+        [
+            {
+                "action": "agent_run_failed",
+                "work_item_id": item.id,
+                "attempt": 3,
+                "message": "ConnectTimeout",
+            }
+        ],
         validation_passed=False,
     )
 
     assert result.category is FailureCategory.PROVIDER_FAILURE
-    assert "ConnectTimeout" in result.evidence
+
+
+def test_a_provider_failure_during_planning_is_not_a_planning_contract() -> None:
+    from agentarium.benchmarks import classify
+
+    result = classify(
+        _project(ProjectStatus.FAILED),
+        [],
+        [
+            {"action": "agent_run_failed", "work_item_id": None, "message": "timeout"},
+            {"action": "planning_failed", "error": "El proveedor no respondió"},
+        ],
+        validation_passed=False,
+    )
+
+    assert result.category is FailureCategory.PROVIDER_FAILURE
+
+
+def test_a_planner_that_answered_badly_is_a_planning_contract() -> None:
+    from agentarium.benchmarks import classify
+
+    result = classify(
+        _project(ProjectStatus.FAILED),
+        [],
+        [{"action": "planning_failed", "error": "Invalid plan: falta el hito"}],
+        validation_passed=False,
+    )
+
+    assert result.category is FailureCategory.PLANNING_CONTRACT
+
+
+def test_a_final_semantic_rejection_survives_an_earlier_provider_hiccup() -> None:
+    from agentarium.benchmarks import classify
+
+    item = _item(WorkItemStatus.FAILED, "El revisor rechazó la entrega")
+    item = item.model_copy(update={"attempt_count": 3})
+    review = Review(
+        project_id="p",
+        work_item_id=item.id,
+        artifact_id="a",
+        reviewer_run_id="r",
+        verdict=ReviewVerdict.CHANGES_REQUESTED,
+        reasons=["No cubre el criterio de préstamo"],
+        acceptance_results={},
+    )
+
+    result = classify(
+        _project(ProjectStatus.FAILED),
+        [item],
+        [
+            {
+                "action": "agent_run_failed",
+                "work_item_id": item.id,
+                "attempt": 1,
+                "message": "ConnectTimeout",
+            }
+        ],
+        validation_passed=False,
+        reviews=[review],
+    )
+
+    assert result.category is FailureCategory.SEMANTIC_REJECTION
+    assert "préstamo" in result.evidence
+
+
+def test_the_terminal_task_is_the_one_that_failed_last() -> None:
+    from datetime import timedelta
+
+    from agentarium.benchmarks import classify
+
+    early = _item(WorkItemStatus.FAILED, "Workspace file could not be written: x.py")
+    late = _item(WorkItemStatus.FAILED, "Retry candidate files are byte-for-byte identical")
+    late = late.model_copy(update={"updated_at": early.updated_at + timedelta(minutes=5)})
+
+    result = classify(
+        _project(ProjectStatus.FAILED),
+        [early, late],
+        [],
+        validation_passed=False,
+    )
+
+    assert result.category is FailureCategory.DUPLICATE_CANDIDATE
+
+
+# --- the two gates ----------------------------------------------------------
+
+
+def _review(work_item_id: str, verdict: ReviewVerdict) -> Review:
+    return Review(
+        project_id="p",
+        work_item_id=work_item_id,
+        artifact_id="a",
+        reviewer_run_id="r",
+        verdict=verdict,
+        reasons=["motivo"],
+        acceptance_results={},
+    )
+
+
+def _report(work_item_id: str, passed: bool) -> ReportModel:
+    return ReportModel(
+        project_id="p",
+        work_item_id=work_item_id,
+        artifact_id="a",
+        tester_run_id="t",
+        passed=passed,
+        checks=[],
+        summary="resumen",
+    )
+
+
+def test_passing_technically_and_failing_semantically_is_reported_as_such() -> None:
+    from agentarium.benchmarks import gate_results
+
+    item = _item(WorkItemStatus.FAILED)
+    gates = gate_results(
+        [item],
+        [_review(item.id, ReviewVerdict.CHANGES_REQUESTED)],
+        [_report(item.id, True)],
+    )
+
+    # The exact case the old derivation got wrong.
+    assert gates.technical is True
+    assert gates.semantic is False
+
+
+def test_only_the_last_verdict_per_task_counts() -> None:
+    from agentarium.benchmarks import gate_results
+
+    item = _item(WorkItemStatus.COMPLETED)
+    gates = gate_results(
+        [item],
+        [
+            _review(item.id, ReviewVerdict.CHANGES_REQUESTED),
+            _review(item.id, ReviewVerdict.APPROVED),
+        ],
+        [_report(item.id, False), _report(item.id, True)],
+    )
+
+    assert gates.technical is True
+    assert gates.semantic is True
+
+
+def test_a_parent_cancelled_by_a_split_does_not_count_against_the_gates() -> None:
+    from agentarium.benchmarks import gate_results
+
+    parent = _item(WorkItemStatus.CANCELLED)
+    child = _item(WorkItemStatus.COMPLETED)
+    gates = gate_results(
+        [parent, child],
+        [
+            _review(parent.id, ReviewVerdict.CHANGES_REQUESTED),
+            _review(child.id, ReviewVerdict.APPROVED),
+        ],
+        [_report(parent.id, False), _report(child.id, True)],
+    )
+
+    assert gates.technical is True
+    assert gates.semantic is True
+    assert gates.technical_reports == 1
+    assert gates.semantic_reviews == 1
+
+
+def test_a_gate_that_never_ran_is_not_vacuously_passed() -> None:
+    from agentarium.benchmarks import gate_results
+
+    gates = gate_results([_item(WorkItemStatus.FAILED)], [], [])
+
+    assert gates.technical is False
+    assert gates.semantic is False
 
 
 # --- matrix planning and resumability ---------------------------------------
@@ -333,6 +541,83 @@ def test_a_corrupt_ledger_line_is_reported_not_ignored(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="línea 1"):
         BenchmarkLedger(path).records()
+
+
+def test_the_ledger_rejects_a_record_from_another_schema_version(tmp_path: Path) -> None:
+    path = tmp_path / "ledger.jsonl"
+    payload = _record("demo", 1).model_dump(mode="json")
+    payload["schema_version"] = 2
+    path.write_text(__import__("json").dumps(payload) + "\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="línea 1"):
+        BenchmarkLedger(path).records()
+
+
+def test_false_completed_travels_inside_the_serialized_record(tmp_path: Path) -> None:
+    path = tmp_path / "ledger.jsonl"
+    ledger = BenchmarkLedger(path)
+    ledger.append(_record("demo", 1, project_status="completed", validation_passed=False))
+
+    raw = __import__("json").loads(path.read_text(encoding="utf-8").strip())
+    assert raw["false_completed"] is True
+    # And the record still round-trips through the ledger reader.
+    assert ledger.records()[0].false_completed is True
+
+
+def test_a_case_version_change_refuses_to_reuse_the_suite(
+    service: ApplicationService,
+    tmp_path: Path,
+) -> None:
+    from agentarium.benchmarks import SuiteDrift
+
+    ledger = BenchmarkLedger(tmp_path / "ledger.jsonl")
+    ledger.append(_record("demo", 1, case_schema_version=99))
+    runner = BenchmarkRunner(service, ledger)
+
+    with pytest.raises(SuiteDrift, match="--suite"):
+        runner.pending(plan_matrix([_case()], [ModelTarget.parse("mock")], 1))
+
+
+def test_a_prompt_version_change_refuses_to_reuse_the_suite(
+    service: ApplicationService,
+    tmp_path: Path,
+) -> None:
+    from agentarium.benchmarks import SuiteDrift
+
+    ledger = BenchmarkLedger(tmp_path / "ledger.jsonl")
+    ledger.append(_record("demo", 1, prompt_versions={"planning": "planning-v1"}))
+    runner = BenchmarkRunner(service, ledger)
+
+    with pytest.raises(SuiteDrift, match="prompts"):
+        runner.pending(plan_matrix([_case()], [ModelTarget.parse("mock")], 1))
+
+
+def test_an_unchanged_suite_is_comparable(
+    service: ApplicationService,
+    tmp_path: Path,
+) -> None:
+    from agentarium.benchmarks import prompt_versions
+
+    ledger = BenchmarkLedger(tmp_path / "ledger.jsonl")
+    ledger.append(_record("demo", 1, prompt_versions=prompt_versions()))
+    runner = BenchmarkRunner(service, ledger)
+
+    assert runner.pending(plan_matrix([_case()], [ModelTarget.parse("mock")], 1)) == []
+
+
+def test_rerun_replans_a_combination_already_recorded(
+    service: ApplicationService,
+    tmp_path: Path,
+) -> None:
+    from agentarium.benchmarks import prompt_versions
+
+    ledger = BenchmarkLedger(tmp_path / "ledger.jsonl")
+    ledger.append(_record("demo", 1, prompt_versions=prompt_versions()))
+    runner = BenchmarkRunner(service, ledger)
+    planned = plan_matrix([_case()], [ModelTarget.parse("mock")], 1)
+
+    assert runner.pending(planned) == []
+    assert runner.pending(planned, rerun=True) == planned
 
 
 def test_a_rerun_of_the_same_key_supersedes_the_previous_record(tmp_path: Path) -> None:
@@ -425,3 +710,166 @@ async def test_smoke_one_case_one_model_one_repetition(
 
     assert await runner.execute(planned) == []
     assert len(ledger.records()) == 1
+
+
+# --- the actual CLI commands ------------------------------------------------
+
+
+def _cli_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Point the CLI at a throwaway project root."""
+    from agentarium.config import settings as settings_module
+
+    database = (tmp_path / "db.sqlite").as_posix()
+    monkeypatch.setenv("AGENTARIUM_DATABASE_URL", f"sqlite:///{database}")
+    monkeypatch.setenv("AGENTARIUM_WORKSPACE_ROOT", str(tmp_path / "workspaces"))
+    monkeypatch.setenv(
+        "AGENTARIUM_PROVIDER_STATE_PATH", str(tmp_path / "provider-selection.json")
+    )
+    settings_module.get_settings.cache_clear()
+    monkeypatch.setattr(
+        "agentarium.cli.project_root", lambda: tmp_path, raising=True
+    )
+
+
+def test_the_cli_rejects_an_invalid_suite_name_instead_of_sanitizing_it(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from agentarium.cli import app
+
+    _cli_env(tmp_path, monkeypatch)
+    result = CliRunner().invoke(
+        app, ["benchmark", "run", "--suite", "a/b", "--dry-run"]
+    )
+
+    assert result.exit_code != 0
+    assert "inválido" in result.output
+
+
+def test_the_cli_dry_run_lists_what_is_missing_without_executing(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import json as json_module
+
+    from agentarium.cli import app
+
+    _cli_env(tmp_path, monkeypatch)
+    result = CliRunner().invoke(
+        app,
+        [
+            "benchmark",
+            "run",
+            "--suite",
+            "cli-smoke",
+            "--case",
+            "csv_expenses_cli",
+            "--model",
+            "mock",
+            "--dry-run",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json_module.loads(result.output[result.output.index("{"):])
+    assert payload["pending"] == 1
+    assert not (tmp_path / "runtime" / "benchmarks" / "cli-smoke" / "ledger.jsonl").exists()
+
+
+def test_the_cli_runs_reports_and_then_skips_what_is_done(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from agentarium.cli import app
+
+    _cli_env(tmp_path, monkeypatch)
+    runner = CliRunner()
+    command = [
+        "benchmark",
+        "run",
+        "--suite",
+        "cli-smoke",
+        "--case",
+        "architecture_document",
+        "--model",
+        "mock",
+    ]
+
+    first = runner.invoke(app, command)
+    assert first.exit_code == 0, first.output
+    ledger = tmp_path / "runtime" / "benchmarks" / "cli-smoke" / "ledger.jsonl"
+    assert ledger.is_file()
+    assert len(ledger.read_text(encoding="utf-8").strip().splitlines()) == 1
+
+    # Resumable: the second invocation has nothing left to do.
+    second = runner.invoke(app, command)
+    assert second.exit_code == 0, second.output
+    assert '"pending": 0' in second.output
+    assert len(ledger.read_text(encoding="utf-8").strip().splitlines()) == 1
+
+    # --rerun measures it again on purpose.
+    third = runner.invoke(app, [*command, "--rerun"])
+    assert third.exit_code == 0, third.output
+    assert len(ledger.read_text(encoding="utf-8").strip().splitlines()) == 2
+
+    report = runner.invoke(app, ["benchmark", "report", "--suite", "cli-smoke"])
+    assert report.exit_code == 0, report.output
+    assert "# Informe de benchmark" in report.output
+    destination = tmp_path / "runtime" / "benchmarks" / "cli-smoke"
+    assert (destination / "report.json").is_file()
+    assert (destination / "report.md").is_file()
+    # Superseded, not duplicated: one row per key.
+    assert "Corridas registradas: **1**" in report.output
+
+
+def test_the_architecture_case_rejects_a_document_that_only_echoes_the_goal(
+    tmp_path: Path,
+) -> None:
+    """A validator satisfied by restating the request measures nothing.
+
+    The mock provider echoes the goal, and the goal itself names "componentes",
+    "alternativa" and "glosario" — so word-presence patterns passed on an
+    artifact with no architecture in it at all.
+    """
+    case = next(one for one in load_cases() if one.id == "architecture_document")
+    goal = next(
+        line
+        for line in [
+            "Crear un documento de arquitectura en Markdown para un sistema de "
+            "reservas: describe los componentes principales, las decisiones de "
+            "diseño con al menos una alternativa considerada para cada una, y "
+            "un glosario de los términos del dominio."
+        ]
+    )
+    (tmp_path / "eco.md").write_text(
+        f"# Especificar el alcance\n\n## Objetivo\n{goal}\n", encoding="utf-8"
+    )
+
+    outcomes = BenchmarkRunner.validate_delivery(case, tmp_path)
+
+    assert not all(outcome.passed for outcome in outcomes)
+    failed = {outcome.description for outcome in outcomes if not outcome.passed}
+    assert "Hay una sección dedicada a los componentes" in failed
+    assert "Hay un glosario con términos definidos" in failed
+
+
+def test_the_architecture_case_accepts_a_document_with_real_structure(
+    tmp_path: Path,
+) -> None:
+    case = next(one for one in load_cases() if one.id == "architecture_document")
+    (tmp_path / "arquitectura.md").write_text(
+        "# Arquitectura\n"
+        "\n## Componentes principales\n"
+        "- API de reservas\n"
+        "\n## Decisiones de diseño\n"
+        "- Persistencia en SQLite. Alternativa considerada: PostgreSQL.\n"
+        "\n## Glosario\n"
+        "- **Reserva**: intención de ocupar una mesa en una franja horaria.\n",
+        encoding="utf-8",
+    )
+
+    outcomes = BenchmarkRunner.validate_delivery(case, tmp_path)
+
+    assert all(outcome.passed for outcome in outcomes), [
+        outcome.description for outcome in outcomes if not outcome.passed
+    ]

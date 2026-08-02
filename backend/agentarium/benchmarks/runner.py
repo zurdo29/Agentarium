@@ -15,6 +15,7 @@ from agentarium.llm import (
 from agentarium.services import ApplicationService
 
 from .contracts import BenchmarkCase, BenchmarkRunRecord, ValidatorOutcome
+from .gates import gate_results
 from .ledger import BenchmarkLedger
 from .taxonomy import Classification, FailureCategory, classify
 
@@ -79,7 +80,19 @@ class BenchmarkRunner:
         self.service = service
         self.ledger = ledger
 
-    def pending(self, planned: list[PlannedRun]) -> list[PlannedRun]:
+    def pending(
+        self,
+        planned: list[PlannedRun],
+        *,
+        rerun: bool = False,
+    ) -> list[PlannedRun]:
+        """What is left to measure. `rerun` deliberately supersedes results."""
+        self.ledger.assert_comparable(
+            case_versions={run.case.id: run.case.schema_version for run in planned},
+            prompt_versions=prompt_versions(),
+        )
+        if rerun:
+            return list(planned)
         done = self.ledger.completed_keys()
         return [run for run in planned if run.key not in done]
 
@@ -87,10 +100,11 @@ class BenchmarkRunner:
         self,
         planned: list[PlannedRun],
         *,
+        rerun: bool = False,
         on_progress: object = None,
     ) -> list[BenchmarkRunRecord]:
         records: list[BenchmarkRunRecord] = []
-        for run in self.pending(planned):
+        for run in self.pending(planned, rerun=rerun):
             record = await self.execute_one(run)
             self.ledger.append(record)
             records.append(record)
@@ -139,15 +153,24 @@ class BenchmarkRunner:
         started: float,
         error: str | None,
     ) -> BenchmarkRunRecord:
-        project = self.service.repository.get_project(project_id)
-        items = self.service.repository.list_work_items(project_id)
-        events = self.service.repository.list_events(project_id)
+        repository = self.service.repository
+        project = repository.get_project(project_id)
+        items = repository.list_work_items(project_id)
+        events = repository.list_events(project_id)
+        reviews = repository.list_reviews(project_id)
+        test_reports = repository.list_test_reports(project_id)
 
         outcomes = self.validate_delivery(run.case, self.delivery_root(project_id))
         validation_passed = all(outcome.passed for outcome in outcomes)
-        classification = classify(project, items, events, validation_passed=validation_passed)
-
-        from agentarium.domain.enums import WorkItemStatus
+        classification = classify(
+            project,
+            items,
+            events,
+            validation_passed=validation_passed,
+            reviews=reviews,
+            test_reports=test_reports,
+        )
+        gates = gate_results(items, reviews, test_reports)
 
         return BenchmarkRunRecord(
             case_id=run.case.id,
@@ -163,10 +186,10 @@ class BenchmarkRunner:
             splits=sum(1 for event in events if event.get("action") == "task_split_created"),
             human_intervention=False,
             prompt_versions=prompt_versions(),
-            technical_result=not any(
-                item.status is WorkItemStatus.FAILED for item in items
-            ),
-            semantic_result=project.status.value == "completed",
+            technical_result=gates.technical,
+            semantic_result=gates.semantic,
+            technical_reports=gates.technical_reports,
+            semantic_reviews=gates.semantic_reviews,
             validation_passed=validation_passed,
             validators=outcomes,
             category=classification.category,
