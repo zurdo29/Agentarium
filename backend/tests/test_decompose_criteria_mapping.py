@@ -232,10 +232,16 @@ async def test_children_get_the_parent_text_not_the_models_rewrite(
         child.title.removeprefix("[subtarea] "): child
         for child in _children(service, project.id)
     }
-    assert by_title["Lectura"].acceptance_criteria == ["Listar libros"]
+    # The parent's own text, plus P1.3b's own derived criterion for each
+    # child's new expected_output.
+    assert by_title["Lectura"].acceptance_criteria == [
+        "Listar libros",
+        "El entregable esperado existe y está completo: routes/read.py",
+    ]
     assert by_title["Escritura"].acceptance_criteria == [
         "Agregar libros",
         "Eliminar libros",
+        "El entregable esperado existe y está completo: routes/write.py",
     ]
     events = {
         event["action"] for event in service.repository.list_events(project.id)
@@ -274,7 +280,16 @@ async def test_a_broken_mapping_falls_back_to_the_partition(
     assigned = [
         criterion for child in children for criterion in child.acceptance_criteria
     ]
-    assert sorted(assigned) == sorted(PARENT_CRITERIA)
+    # Every parent criterion covered exactly once by the deterministic
+    # partition, same as before P1.3b — plus each child's own derived
+    # criterion for its new expected_output.
+    inherited = [criterion for criterion in assigned if criterion in PARENT_CRITERIA]
+    assert sorted(inherited) == sorted(PARENT_CRITERIA)
+    derived = {
+        "El entregable esperado existe y está completo: routes/read.py",
+        "El entregable esperado existe y está completo: routes/write.py",
+    }
+    assert derived <= set(assigned)
     events = {
         event["action"] for event in service.repository.list_events(project.id)
     }

@@ -7,6 +7,7 @@ from agentarium.domain.enums import OutputStrategy, ProjectStatus, WorkItemStatu
 from agentarium.domain.models import Milestone, WorkItem, new_id
 from agentarium.llm import ProviderResponse
 from agentarium.llm.mock import MockProvider
+from agentarium.orchestration.engine import Orchestrator
 from agentarium.services import ApplicationService
 
 
@@ -320,9 +321,14 @@ async def test_a_proposal_that_drops_a_criterion_falls_back_to_a_partition(
         if candidate.title.startswith("[subtarea] ")
     ]
     assert len(children) == 2
-    # Every parent criterion covered exactly once, with the parent's own text.
     assigned = [criterion for child in children for criterion in child.acceptance_criteria]
-    assert sorted(assigned) == ["Primer criterio", "Segundo criterio"]
+    # Every parent criterion covered exactly once, with the parent's own text.
+    inherited = [c for c in assigned if c in {"Primer criterio", "Segundo criterio"}]
+    assert sorted(inherited) == ["Primer criterio", "Segundo criterio"]
+    # Plus P1.3b's own derived criterion for "resultado", once per child —
+    # both subtasks declared the same expected_output in this stub.
+    derived = "El entregable esperado existe y está completo: resultado"
+    assert assigned.count(derived) == 2
 
     events = {
         event["action"] for event in service.repository.list_events(project.id)
@@ -643,3 +649,135 @@ async def test_prose_expected_outputs_do_not_chain_unrelated_subtasks(
         child.status is WorkItemStatus.READY for child in children.values()
     )
     assert all(child.owned_paths == [] for child in children.values())
+
+
+# --- P1.3b: expected_outputs -> acceptance criteria, through a split -------
+
+
+@pytest.mark.asyncio
+async def test_split_children_get_a_derived_criterion_for_their_own_expected_output(
+    service: ApplicationService,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project = service.create_project("Objetivo con expected_outputs propios en las hijas")
+    item = _exhausted_item(service, project.id, ["Listar libros", "Agregar libros"])
+    _stub_decompose(
+        monkeypatch,
+        [
+            ("Listar", "Listar libros", "routes/list.py"),
+            ("Agregar", "Agregar libros", "routes/create.py"),
+        ],
+    )
+
+    assert await service.orchestrator._attempt_split(
+        item, new_id(), "Se agotaron los intentos"
+    )
+
+    children = _children_by_title(service, project.id)
+    listar, agregar = children["Listar"], children["Agregar"]
+
+    # Inherited: the parent's own wording, untouched.
+    assert "Listar libros" in listar.acceptance_criteria
+    assert "Agregar libros" in agregar.acceptance_criteria
+
+    # Plus a fresh, deterministic criterion for each child's own new output —
+    # nothing beyond the inherited one and the derived one.
+    assert listar.acceptance_criteria == [
+        "Listar libros",
+        "El entregable esperado existe y está completo: routes/list.py",
+    ]
+    assert agregar.acceptance_criteria == [
+        "Agregar libros",
+        "El entregable esperado existe y está completo: routes/create.py",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_a_child_declaring_the_same_output_twice_gets_one_criterion(
+    service: ApplicationService,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project = service.create_project("Objetivo con expected_outputs duplicados en una hija")
+    item = _exhausted_item(service, project.id, ["Listar libros", "Agregar libros"])
+    original_generate = MockProvider.generate
+
+    async def decompose_with_duplicate_output(self, request, agent):  # type: ignore[no-untyped-def]
+        if request.operation != "decompose":
+            return await original_generate(self, request, agent)
+        content = {
+            "subtasks": [
+                {
+                    "title": "Listar",
+                    "description": "Subtarea Listar",
+                    "expected_outputs": ["api.py", "api.py"],
+                    "acceptance_criteria": ["Listar libros"],
+                },
+                {
+                    "title": "Agregar",
+                    "description": "Subtarea Agregar",
+                    "expected_outputs": ["models.py"],
+                    "acceptance_criteria": ["Agregar libros"],
+                },
+            ]
+        }
+        raw = json.dumps(content)
+        return ProviderResponse(
+            content=content,
+            raw_text=raw,
+            prompt_characters=len(raw),
+            response_characters=len(raw),
+        )
+
+    monkeypatch.setattr(MockProvider, "generate", decompose_with_duplicate_output)
+
+    assert await service.orchestrator._attempt_split(
+        item, new_id(), "Se agotaron los intentos"
+    )
+
+    children = _children_by_title(service, project.id)
+    listar = children["Listar"]
+    derived = "El entregable esperado existe y está completo: api.py"
+    assert listar.acceptance_criteria.count(derived) == 1
+
+
+@pytest.mark.asyncio
+async def test_consolidation_does_not_duplicate_criteria_already_derived_for_the_parent(
+    service: ApplicationService,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project = service.create_project("Objetivo con consolidación sin duplicados")
+    milestone = _milestone(service, project.id)
+    # Built exactly as the initial-plan site leaves it: the parent's own
+    # criteria already include the derived one for its declared output.
+    parent_criteria = Orchestrator._with_expected_output_criteria(
+        ["api.py"], ["Listar libros", "Agregar libros"]
+    )
+    item = WorkItem(
+        project_id=project.id,
+        milestone_id=milestone.id,
+        title="Implementación de la API REST",
+        description="Cubre varios endpoints independientes",
+        expected_outputs=["api.py"],
+        acceptance_criteria=parent_criteria,
+        max_attempts=1,
+        attempt_count=1,
+        status=WorkItemStatus.CHANGES_REQUESTED,
+    )
+    service.repository.add_work_item(item)
+    _stub_decompose(
+        monkeypatch,
+        [
+            ("Listar", "Listar libros", "api.py"),
+            ("Agregar", "Agregar libros", "api.py"),
+        ],
+    )
+
+    assert await service.orchestrator._attempt_split(
+        item, new_id(), "Se agotaron los intentos"
+    )
+
+    consolidation = _consolidation(service, project.id)
+    assert consolidation.acceptance_criteria == parent_criteria
+    assert len(consolidation.acceptance_criteria) == len(
+        set(consolidation.acceptance_criteria)
+    )
