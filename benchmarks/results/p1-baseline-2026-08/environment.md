@@ -6,6 +6,13 @@ de P1.2. Es la contraparte humana de `runtime_identity` (ver ADR 0021/P1.2a en
 ninguno de los dos se versiona — pero deja el resultado auditable desde el
 repositorio sin depender de artefactos locales que no se comparten.
 
+Este archivo, `report.md`, `report.json` y `findings.md` viven en
+`benchmarks/results/<suite>/` — versionados sin necesitar excepciones de
+`.gitignore`, junto a `benchmarks/cases/` y `benchmarks/fixtures/`. El
+ledger y `agentarium.db` de la corrida siguen en
+`runtime/benchmarks/<suite>/`, sin versionar: son estado de ejecución local
+que la CLI regenera, no un registro que deba sobrevivir en el repositorio.
+
 ## Identidad congelada
 
 | Campo | Valor |
@@ -15,7 +22,7 @@ repositorio sin depender de artefactos locales que no se comparten.
 | Árbol de trabajo | limpio (`agentarium_dirty: false`) |
 | Python | 3.14.6 |
 | Plataforma | Windows-AMD64 |
-| Concurrencia | 1 (por invocación de `benchmark run`; tareas independientes dentro de un mismo proyecto sí corren en paralelo — ver P1.3, punto del timeout) |
+| Concurrencia | `model_concurrency: 1` — un solo semáforo global para llamadas al modelo (`ResourceScheduler`); varias tareas independientes del mismo proyecto pueden quedar listas a la vez y encolarse detrás de esa única llamada activa. Relevante para P1.3a: el timeout actual envuelve la espera en cola además de la generación, y hoy no se puede separar una de otra |
 | Versión de Ollama | 0.32.5 |
 
 La identidad se congeló una vez por invocación de `benchmark run`, y la
@@ -54,6 +61,9 @@ localmente — no se recrea automáticamente a partir de lo versionado.
 
 27 corridas: 3 casos (`architecture_document`, `csv_expenses_cli`,
 `library_api_sqlite`) × 3 modelos × 3 repeticiones, en dos tandas (9 + 18).
-Resultado completo, categorías y los 4 falsos `completed` en `report.md` /
-`report.json` de este mismo directorio, y el análisis de causas en la
-sección "P1.2 — la matriz" de `PLANS.md`.
+Resultado completo tal como lo calculó la maquinaria (incluye 4 falsos
+`completed` señalados) en `report.md` / `report.json` de este mismo
+directorio. La adjudicación manual de esos 4 (3 confirmados, 1 falso
+negativo del validador) y el diagnóstico de causas están en `findings.md`,
+también aquí. Resumen y hoja de ruta en la sección "P1.2 — la matriz" de
+`PLANS.md`.

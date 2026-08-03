@@ -9,16 +9,25 @@ crecer indefinidamente aquí.
 > **Dónde estamos (3 de agosto de 2026).** P0, P1.1, P1.1b y P1.2a siguen
 > cerrados. **P1.2 (la matriz 3×3×3) ya se ejecutó completa: 27/27 corridas
 > registradas**, pero su criterio de calidad ("cero falsos `completed`") **no
-> se cumplió** — 4/27. Por eso P1.2 queda como medición completa, no como
-> fase cerrada, y **P1 sigue abierto**. El siguiente paso es **P1.3**: cerrar
-> mecánicamente las causas ya observadas (timeout fijo de 300s ajeno al
-> modelo elegido, `expected_outputs` que no se traduce en acceptance
-> criteria exigibles, `SCRIPT_EXECUTION` sin argumentos ni oráculo, revisor
-> semántico sin señal de estructura) antes de tocar prompts, casos o
-> arrancar P2. Detalle completo en "P1.2 — la matriz" y la nueva sección
-> "P1.3" más abajo. No cambiar prompts ni casos de la suite
+> se cumplió**: el informe automático señala 4/27; la adjudicación manual
+> (`benchmarks/results/p1-baseline-2026-08/findings.md`) confirma 3 y
+> reclasifica 1 como falso negativo del propio validador (exigía un
+> encabezado que el `goal` del caso nunca pidió). El resultado real es 3/27,
+> igual sigue sin ser cero. Por eso P1.2 queda como medición completa, no
+> como fase cerrada, y **P1 sigue abierto**. El siguiente paso es **P1.3**,
+> dividido en cuatro PR independientes (P1.3a–P1.3d) para cerrar
+> mecánicamente las causas observadas — empezando por P1.3a, que
+> **instrumenta** tiempo de cola vs. tiempo de generación antes de calibrar
+> ningún timeout por modelo: hoy `asyncio.wait_for` envuelve la espera del
+> semáforo de concurrencia además de la llamada real, así que todavía no se
+> sabe si `qwen3:8b` de verdad supera 300s generando o si el tiempo se va en
+> cola. Detalle completo en "P1.2 — la matriz", la nueva sección "P1.3" más
+> abajo, y `findings.md`. No cambiar prompts ni casos de la suite
 > `p1-baseline-2026-08`: ya cumplió su propósito y queda congelada como
 > registro histórico; cualquier remedición usa un nombre de suite nuevo.
+> Resultados versionados en `benchmarks/results/p1-baseline-2026-08/`
+> (`report.md`, `report.json`, `environment.md`, `findings.md`); el ledger y
+> la DB de la corrida siguen sin versionar en `runtime/`.
 
 ## Norte del producto
 
@@ -84,10 +93,12 @@ repetibles.
 - Los detalles y reproducciones están en ADR 0015–0026.
 - P1.2 corrió la matriz completa 3×3×3 contra la suite `p1-baseline-2026-08`
   (27/27 registradas, HEAD `2b4ecb2`, árbol limpio): 3/27 `completed` reales
-  (11.1%), 4/27 falsos `completed`. Detalle e inspección de causas en
-  "P1.2 — la matriz" y en `runtime/benchmarks/p1-baseline-2026-08/` (`report.md`,
-  `report.json`, `environment.md`, versionados; el ledger y la DB de la
-  corrida no).
+  (11.1%), 4/27 falsos `completed` según el informe automático, 3/27 tras
+  adjudicación manual (el 4º es un falso negativo del validador). Detalle e
+  inspección de causas en "P1.2 — la matriz" y en
+  `benchmarks/results/p1-baseline-2026-08/` (`report.md`, `report.json`,
+  `environment.md`, `findings.md`, versionados; el ledger y la DB de la
+  corrida siguen en `runtime/`, sin versionar).
 
 ### Riesgos y límites actuales
 
@@ -97,7 +108,7 @@ repetibles.
 | División de tareas | Resuelto en P0: reparto por ids con partición determinista de respaldo | Queda que el título de una hija puede no describir bien los criterios que le tocaron tras una partición |
 | Calidad de la descomposición | El modelo repite el mismo candidato también a nivel de subtarea | Dividir reduce el alcance, no cambia esa conducta; un linaje agotado ahora para y espera intervención |
 | Dependencias de ejecución | El worker puede elegir paquetes no disponibles en el sandbox | El fallo aparece tarde, después de gastar inferencias e intentos |
-| Evaluación de modelos | Matriz ejecutada (27/27, P1.2): 11.1–22.2% de completion real, 4/27 falsos `completed`. `qwen3:8b` en 0% pero confundido por un timeout de 300s insuficiente para su velocidad en esta máquina (ver P1.3) | Todavía ninguna recomendación de modelo por rol — la tasa de `qwen3:8b` no es comparable hasta corregir el timeout |
+| Evaluación de modelos | Matriz ejecutada (27/27, P1.2): 11.1–22.2% de completion real, 3/27 falsos `completed` confirmados tras adjudicación manual. `qwen3:8b` en 0%, pero no se sabe si por generación lenta o por cola del semáforo de concurrencia (timeout envuelve ambas, ver P1.3a) | Todavía ninguna recomendación de modelo por rol — la tasa de `qwen3:8b` no es comparable hasta instrumentar y, si hace falta, calibrar |
 | Compuerta de comandos | `deny_tokens` hacía match de subcadena: `models.py`, `registry.py` y `format_helper.js` quedaban rechazados. Corregido a límite de palabra | Ya no bloquea nombres de archivo normales; conviene revisar la lista si se agregan tokens cortos nuevos |
 | Mantenibilidad | `engine.py` tiene 2051 líneas y `app/page.tsx` 2207 | Cada cambio cruza demasiadas responsabilidades |
 | Interfaz | Sólo hay dos pruebas de render/strings; no prueban interacciones reales | Reintentos, acciones y SSE pueden romperse sin señal temprana |
@@ -223,15 +234,18 @@ confirmación. Sólo está cubierta por pruebas.
 
 ### P1 — benchmark reproducible y taxonomía de fallos — ABIERTO
 
-Dividido en tres entregas: **P1.1 (maquinaria, sin inferencia real)**, **P1.2
-(la matriz 3×3×3)** y **P1.3 (cerrar las causas que P1.2 encontró)**. P1.1,
-P1.1b y P1.2a están cerradas. **P1.2 ya midió (27/27), pero su criterio de
-calidad no se cumplió**, así que P1 en conjunto sigue abierto hasta que P1.3
-resuelva o acepte explícitamente las causas observadas — regla 6 (WIP
-limitado) sigue permitiendo esto porque es un único P1, no uno nuevo.
+Dividido en entregas: **P1.1 (maquinaria, sin inferencia real)**, **P1.1b
+(validación funcional)**, **P1.2a (identidad de la suite)**, **P1.2 (la
+matriz 3×3×3)** y **P1.3a–P1.3d (cerrar las causas que P1.2 encontró, cuatro
+PR independientes)**. Las primeras tres están cerradas. **P1.2 ya midió
+(27/27), pero su criterio de calidad no se cumplió** (3/27 falsos
+`completed` confirmados tras adjudicación manual), así que P1 en conjunto
+sigue abierto hasta que P1.3a–d resuelvan o acepten explícitamente las
+causas observadas — regla 6 (WIP limitado) sigue permitiendo esto porque es
+un único P1, no uno nuevo.
 
-**Esfuerzo estimado:** 3 PR, 4–6 sesiones más tiempo de inferencia en segundo
-plano.
+**Esfuerzo estimado:** 4 PR más para P1.3a–d, 4–6 sesiones más tiempo de
+inferencia ya gastado en segundo plano (P1.2 no se re-corre).
 
 #### P1.1 — maquinaria medible sin inferencia — CERRADO (2 de agosto de 2026)
 
@@ -493,19 +507,26 @@ Categorías sobre las 27: `duplicate_candidate` 9, `technical_validation` 7,
 2, `semantic_rejection` 2. Ninguna `infrastructure`; ninguna
 `unsupported_capability` — ver la expectativa fallida más abajo.
 
-Los 4 falsos `completed`:
+Los 4 falsos `completed` que señala el informe **automático** —
+**adjudicación manual en
+`benchmarks/results/p1-baseline-2026-08/findings.md`: 3 confirmados, 1 falso
+negativo del validador**. `report.md`/`report.json` no se editan para
+reflejar esto: quedan como salida histórica de la maquinaria; la
+adjudicación vive aparte, en `findings.md`.
 
-| Caso | Modelo | Rep. | Validador que falló |
-|---|---|---|---|
-| `csv_expenses_cli` | `qwen3:4b` | 1 | procesa el CSV fixture y produce el resumen correcto |
-| `csv_expenses_cli` | `qwen3:4b` | 2 | documentación Markdown (ausente) |
-| `csv_expenses_cli` | `qwen3:4b` | 3 | documentación Markdown + procesamiento del CSV |
-| `architecture_document` | `qwen3:8b` | 2 | sección de decisiones de diseño |
+| Caso | Modelo | Rep. | Validador que falló | Adjudicación |
+|---|---|---|---|---|
+| `csv_expenses_cli` | `qwen3:4b` | 1 | procesa el CSV fixture y produce el resumen correcto | Confirmado |
+| `csv_expenses_cli` | `qwen3:4b` | 2 | documentación Markdown (ausente) | Confirmado |
+| `csv_expenses_cli` | `qwen3:4b` | 3 | documentación Markdown + procesamiento del CSV | Confirmado |
+| `architecture_document` | `qwen3:8b` | 2 | sección de decisiones de diseño | Falso negativo del validador |
 
 ##### Causas inspeccionadas a fondo (read-only, sin re-correr nada)
 
-**Los 3 falsos `completed` de `csv_expenses_cli`/`qwen3:4b`:** los tres
-`expenses.py` entregados ignoran `sys.argv` por completo (hardcodean
+Detalle completo con cita de código en `findings.md`. Resumen:
+
+**Los 3 confirmados (`csv_expenses_cli`/`qwen3:4b`):** los tres `expenses.py`
+entregados ignoran `sys.argv` por completo (hardcodean
 `input.csv`/`result.json`) y envuelven la lógica en `except Exception:
 print(...)` sin `sys.exit`, así que el proceso siempre devuelve código 0. El
 perfil interno `SCRIPT_EXECUTION` (`backend/agentarium/execution/validation.py`)
@@ -516,35 +537,35 @@ sum(...)` sobreescribe entre fechas del mismo mes en vez de acumular). Rep 2
 y 3: el plan (`decompose`) nunca creó una tarea de documentación — en rep 3
 el Markdown ni siquiera queda como acceptance criterion de la tarea de
 consolidación, sólo como `expected_outputs`, que no se traduce en un check
-exigible. Es inconsistencia real del modelo combinada con un gap estructural
-del orquestador (sin oráculo de valores correctos; `expected_outputs` no
-fuerza acceptance criteria) — no un defecto del harness de medición.
+exigible.
 
-**El 4º falso `completed`, `architecture_document`/`qwen3:8b` rep 2:** el
-documento entregado (`arquitectura.md`) sí tiene el contenido de decisiones
-y alternativas — el revisor semántico interno lo aprobó explícitamente sobre
-esa base — pero lo escribió como texto dentro de "## Componentes
-Principales" en vez de bajo un encabezado propio. El validador exige
-estructura (`^#{1,6}...decisi[oó]n|dise[nñ]o`), no sólo contenido, por la
-misma razón de P1.1 (un check por contenido se parafrasea). El plan sí tenía
-una tarea dedicada "Detallar Decisiones de Diseño con Alternativas" con su
-propio acceptance criterion de contenido — cumplido — pero ningún AC exige
-la forma (encabezado dedicado). El revisor interno sólo evalúa contenido,
-nunca estructura.
+**El falso negativo (`architecture_document`/`qwen3:8b` rep 2):** el `goal`
+del caso pide describir componentes, decisiones de diseño con alternativa, y
+un glosario — un requisito de **contenido**. El validador que falló exige
+además un encabezado Markdown dedicado a "decisión"/"diseño", algo que el
+`goal` nunca pidió (ese requisito estructural existe para que un mock no
+apruebe repitiendo el enunciado, según el propio comentario del caso YAML —
+no porque el objetivo pida secciones separadas). La entrega tiene el
+contenido completo — cada componente con su alternativa descartada, glosario
+propio — sólo que las decisiones quedaron dentro de "## Componentes
+Principales" en vez de bajo su propio encabezado. El revisor semántico
+interno la aprobó correctamente; no había nada que debiera atrapar. El punto
+de acción es auditar el validador, no el revisor (ver P1.3d).
 
-**Los 2 `provider_failure` de `library_api_sqlite`/`qwen3:8b`:** confirmado
-a nivel de milisegundo contra `agent_runs` — docenas de llamadas del rol
-`implementation_worker` cortadas a exactamente 300.00–300.06 segundos con
-`TimeoutError`, en las dos corridas, sobre tareas distintas ejecutadas en
-paralelo. `configs/roles/default.yaml` fija `timeout_seconds: 300` para
-`implementation_worker` **por rol, no por modelo**: el mismo número aplica a
-`mock`, a `qwen3:4b` y a `qwen3:8b`. En esta máquina, `qwen3:8b` necesita más
-de 300s para generar una implementación no trivial; el cliente HTTP
-(`http_providers.py`, `timeout=agent.timeout_seconds`) corta la conexión
-antes de que el modelo termine, se agotan los 3 intentos, y el proyecto
-muere sin haber tenido una oportunidad real de completar la tarea. **La tasa
-de 0% de `qwen3:8b` está confundida por esto**: no se puede leer como "el
-modelo no sabe resolver la tarea" sin antes corregir el timeout.
+**Los 2 `provider_failure` de `library_api_sqlite`/`qwen3:8b` — diagnóstico
+corregido:** `asyncio.wait_for(timeout=300)` en `roles.py:91-94` envuelve
+`scheduler.run(...)`, que primero espera un semáforo de concurrencia
+(`model_concurrency: 1` en toda la suite) y **después** llama al proveedor.
+El timeout cuenta desde antes de entrar a la cola, no desde que arranca la
+generación. En el proyecto `45a0895a`, de 4 tareas `implementation_worker`
+listas al mismo tiempo, sólo 1 llegó a ejecutar `provider.generate()` (293s,
+con tokens reales); las otras 3 murieron a los ~300s con `TimeoutError`. Se
+revisó si eso prueba que nunca salieron de la cola: **no lo prueba** — en el
+camino de fallo, `ResourceUsage` nunca registra `prompt_characters`, así que
+da 0 tanto si la tarea nunca llegó a generar como si llegó y fue cortada a
+mitad de respuesta. **No sabemos, con la telemetría actual, si la inferencia
+sola de `qwen3:8b` supera 300s o si el tiempo se va mayormente en cola.**
+P1.3a instrumenta esto antes de calibrar nada.
 
 **Criterios de salida — resultado real, no reinterpretado:**
 
@@ -552,8 +573,8 @@ modelo no sabe resolver la tarea" sin antes corregir el timeout.
 |---|---|
 | Informe Markdown/JSON reproducible desde el ledger | Cumplido |
 | Baseline de tasa de finalización, tiempo y causas de fallo | Cumplido — tabla arriba |
-| Ninguna recomendación de modelo por rol antes de tener datos | Cumplido — no se recomienda ningún modelo todavía, y la tasa de `qwen3:8b` no es comparable hasta P1.3 |
-| Cero falsos `completed` en los validadores independientes | **No cumplido — 4/27.** Queda como criterio de calidad abierto; P1.3 cierra las causas mecánicas conocidas, no persigue "cero" a fuerza de repetir corridas (violaría la regla 5, sin fishing) |
+| Ninguna recomendación de modelo por rol antes de tener datos | Cumplido — no se recomienda ningún modelo todavía; la tasa de `qwen3:8b` no es comparable hasta P1.3a |
+| Cero falsos `completed` en los validadores independientes | **No cumplido — 3/27 confirmados tras adjudicación manual** (el informe automático señala 4; el 4º es un falso negativo del validador, ver arriba). Sigue abierto como criterio de calidad; P1.3 cierra las causas mecánicas conocidas, no persigue "cero" a fuerza de repetir corridas (violaría la regla 5, sin fishing) |
 
 **Expectativa que no se cumplió — el caso de biblioteca:** se anticipaba que
 `library_api_sqlite` fallara sobre todo por `unsupported_capability` (el
@@ -564,52 +585,90 @@ la categoría no aparece en el informe. Las causas reales fueron
 Información real para P2 igual, pero distinta de la anticipada: el límite de
 capacidades no fue lo que más pesó esta vez.
 
-#### P1.3 — cerrar mecánicamente las causas que P1.2 encontró
+#### P1.3 — cerrar mecánicamente las causas que P1.2 encontró — cuatro PR independientes
 
-**Esfuerzo estimado:** 1 PR, 2–3 sesiones. Sin re-correr la matriz completa:
-cada punto tiene su propia verificación mínima, no una repetición de las 27
-corridas.
+Cuatro causas quedaron identificadas en la inspección read-only de P1.2
+(detalle arriba, en "Causas inspeccionadas a fondo", y completo en
+`findings.md`). Cada una es su propio PR con su propia hipótesis y su propio
+criterio de salida (regla 1) — no se mezclan en un solo cambio (regla 9).
+Ninguna se resuelve "probando con otro prompt" (regla 4) ni persigue "cero
+falsos `completed`" repitiendo corridas (regla 5). **P1.3a bloquea a P1.3b
+en lo que toca a timeout/calibración**: no tiene sentido tocar un número sin
+saber qué mide.
 
-Cuatro causas mecánicas quedaron identificadas en la inspección read-only de
-P1.2 (detalle arriba, en "Causas inspeccionadas a fondo"). P1.3 les da una
-resolución mecánica o una decisión explícita de aceptarlas como límite
-conocido — no intenta forzar "cero falsos `completed`" repitiendo corridas
-(violaría la regla 5, sin fishing).
+##### P1.3a — instrumentar `queue_wait` vs. `generation_time` (prerrequisito)
 
-1. **Timeout de llamada LLM fijo por rol, no por modelo/target.**
-   `configs/roles/default.yaml` fija `implementation_worker.timeout_seconds:
-   300` sin importar qué modelo esté conectado. Confirmado que corta
-   sistemáticamente a `qwen3:8b` en tareas no triviales (`agent_runs` cortados
-   a 300.00–300.06s, dos corridas independientes). Hacerlo configurable por
-   target antes de volver a comparar modelos de tamaños muy distintos.
-2. **`expected_outputs` no se traduce en acceptance criteria exigibles.** Un
-   work item puede listar un entregable en `expected_outputs` (p. ej. el
-   Markdown de uso) sin que ningún `acceptance_criteria` lo fuerce, y el
-   revisor semántico nunca lo evalúa. Confirmado en 2 de los 4 falsos
-   `completed`. Decidir: ¿se deriva automáticamente un AC de cada
-   `expected_output` al descomponer, o se documenta como límite conocido?
-3. **`SCRIPT_EXECUTION` corre sin argumentos y sin oráculo.** El perfil
-   interno (`backend/agentarium/execution/validation.py`) ejecuta el script
-   entregado sin los argumentos del contrato real y sólo mira el código de
-   salida — no puede detectar una salida numéricamente incorrecta ni un
-   script que traga excepciones sin `raise`/`sys.exit`. Es una limitación
-   estructural conocida (el orquestador no tiene el fixture oculto), no
-   necesariamente un bug: decidir si conviene una señal mínima o si se acepta
-   como límite.
-4. **El revisor semántico evalúa contenido, nunca estructura.** El caso
-   `architecture_document`/`qwen3:8b` rep 2 tenía el contenido correcto bajo
-   el encabezado equivocado, y el revisor lo aprobó igual. Evaluar si el
-   revisor debería recibir alguna señal de la forma esperada, o si eso queda
-   exclusivamente del lado de los validadores del benchmark y nunca del
-   agente.
+**Esfuerzo estimado:** 1 PR, 1 sesión.
 
-**Criterios de salida:** cada uno de los cuatro puntos tiene una resolución
-mecánica mergeada o una nota explícita en este documento aceptándolo como
-límite conocido, con su razón. Ninguno se resuelve "probando con otro
-prompt" (regla 4: máximo un intento prompt-only, y los prompts ya se tratan
-como ayuda probabilística, no garantía). Sólo después de esto se decide si
-remedir con una suite nueva o pasar directo a P2 con las capacidades ya
-conocidas.
+`roles.py:91-94` envuelve en un mismo `asyncio.wait_for` la espera del
+semáforo de `ResourceScheduler` (`model_concurrency`) y la llamada real al
+proveedor. Con el `resource_usage_json` actual no se puede saber cuánto de
+un `TimeoutError` fue cola y cuánto generación — ver `findings.md`.
+
+1. Registrar por separado, en `ResourceUsage` (o un campo nuevo), el momento
+   en que la tarea entra a `scheduler.run`, el momento en que adquiere el
+   semáforo, y el momento en que `provider.generate()` retorna o falla — en
+   el camino de éxito **y** en el de fallo (hoy el de fallo no registra nada
+   de esto).
+2. Persistir `queue_wait_ms` y `generation_ms` (`null` si nunca llegó a
+   generar) en cada `agent_run`, no sólo `duration_ms`.
+
+**Criterio de salida:** una corrida real con al menos un `TimeoutError`
+muestra si el tiempo se fue en cola o en generación. Sin este dato, ningún
+timeout se calibra por modelo — se estaría adivinando.
+
+##### P1.3b — `expected_outputs` no se traduce en acceptance criteria exigibles
+
+**Esfuerzo estimado:** 1 PR, 1–2 sesiones.
+
+Un work item puede listar un entregable en `expected_outputs` (p. ej. el
+Markdown de uso) sin que ningún `acceptance_criteria` lo fuerce, y el
+revisor semántico nunca lo evalúa. Confirmado en los 3 falsos `completed`
+reales de `csv_expenses_cli`.
+
+**Criterio de salida:** decisión explícita — o `decompose` deriva
+automáticamente un AC exigible de cada `expected_output`, o se documenta
+aquí como límite conocido con su razón.
+
+##### P1.3c — `SCRIPT_EXECUTION` corre sin argumentos y sin oráculo
+
+**Esfuerzo estimado:** 1 PR, 1 sesión.
+
+El perfil interno (`backend/agentarium/execution/validation.py`) ejecuta el
+script entregado sin los argumentos del contrato real y sólo mira el código
+de salida — no puede detectar una salida numéricamente incorrecta ni un
+script que traga excepciones sin `raise`/`sys.exit`. Es una limitación
+estructural conocida (el orquestador no tiene el fixture oculto), no
+necesariamente un bug.
+
+**Criterio de salida:** decisión explícita — una señal mínima (p. ej.
+detectar un `except` de alcance total sin `raise`/`sys.exit`) o aceptarlo
+como límite documentado.
+
+##### P1.3d — auditar validadores del benchmark por sobre-especificación
+
+**Esfuerzo estimado:** 1 PR, 1 sesión.
+
+El validador de `architecture_document` ("sección de decisiones de diseño")
+exigía un encabezado dedicado que el `goal` del caso nunca pidió, y produjo
+el falso negativo de P1.2 (ver arriba y `findings.md`). No es un problema
+del revisor semántico ni del orquestador — es el validador más estricto que
+el objetivo real del caso.
+
+1. Revisar los validadores estructurales de los otros dos casos
+   (`csv_expenses_cli`, `library_api_sqlite`) por el mismo patrón: ¿el
+   validador exige algo que el `goal` no pide explícitamente?
+2. Ajustar el validador de `architecture_document`, o documentar por qué el
+   encabezado dedicado es intencional y reflejarlo en el `goal` del caso.
+
+**Criterio de salida:** cada validador estructural de los tres casos tiene
+una nota explícita de qué exige más allá del `goal` y por qué, o se ajusta
+para no exceder el `goal`.
+
+**Criterio de salida de P1.3 en conjunto:** las cuatro PR mergeadas, o cada
+causa aceptada explícitamente como límite conocido con su razón en este
+documento. Sólo después se decide si remedir con una suite nueva o pasar
+directo a P2 con las capacidades ya conocidas.
 
 ### P2 — contrato real de capacidades del runtime
 
@@ -702,9 +761,13 @@ botella resuelve.
    P1.2a (PR #4, identidad de la suite). ~~Queda ejecutar la matriz, P1.2.~~
    **Ejecutada: 27/27, criterio de calidad no cumplido (PR de medición
    P1.2).**
-3. **P1.3 — cerrar las causas mecánicas que P1.2 encontró:** timeout fijo por
-   rol, `expected_outputs` no exigible, `SCRIPT_EXECUTION` sin oráculo,
-   revisor sin señal de estructura. Bloquea empezar P2 con datos limpios.
+3. **P1.3a–P1.3d — cerrar las causas mecánicas que P1.2 encontró, cuatro PR
+   independientes:** P1.3a instrumenta `queue_wait` vs. `generation_time`
+   (prerrequisito de cualquier calibración de timeout); P1.3b hace
+   exigible `expected_outputs`; P1.3c le da oráculo o límite documentado a
+   `SCRIPT_EXECUTION`; P1.3d audita los validadores del benchmark por
+   sobre-especificación respecto al `goal` (causa del falso negativo de
+   `architecture_document`). Bloquean empezar P2 con datos limpios.
 4. **PR de capacidades (P2):** manifiesto del runtime y fallo temprano por
    capacidad no disponible.
 
