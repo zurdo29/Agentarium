@@ -16,7 +16,7 @@ crecer indefinidamente aquí.
 > igual sigue sin ser cero. Por eso P1.2 queda como medición completa, no
 > como fase cerrada, y **P1 sigue abierto**. P1.3 quedó dividido en cuatro PR
 > independientes (P1.3a–P1.3d) para cerrar mecánicamente las causas
-> observadas. **P1.3a y P1.3b ya cerraron.** P1.3a instrumentó tiempo de
+> observadas. **P1.3a, P1.3b y P1.3c ya cerraron.** P1.3a instrumentó tiempo de
 > cola vs. tiempo de generación con evidencia sintética, sin Ollama real:
 > `asyncio.wait_for` envolvía la espera del semáforo de concurrencia además
 > de la llamada real, y ahora un `agent_run` que falle por timeout puede
@@ -26,10 +26,17 @@ crecer indefinidamente aquí.
 > hizo que cada `expected_output` genere su propio criterio de aceptación
 > determinista — probado hasta el revisor: el criterio derivado llega al
 > payload real y un resultado `false` bloquea la aprobación mecánicamente,
-> sin necesitar Ollama. **El siguiente paso es P1.3c**
-> (`SCRIPT_EXECUTION` sin oráculo). Detalle completo en "P1.2 — la matriz",
-> la sección "P1.3" más abajo, y `findings.md`. No cambiar prompts ni casos
-> de la suite
+> sin necesitar Ollama. P1.3c le dio a `SCRIPT_EXECUTION` un contrato de
+> ejecución declarado (entrypoint, argumentos, existencia del artefacto
+> declarado) para que un work item que lo tenga deje de correr a ciegas sin
+> argumentos, con evidencia sintética de la forma exacta del bug real de
+> `csv_expenses_cli` — pero **hoy ningún work item puede declarar ese
+> contrato todavía**: el contrato del LLM de planificación deliberadamente
+> no lo expone (ver ADR 0027), así que el mecanismo queda probado de punta a
+> punta pero inerte en cualquier corrida real. **El siguiente paso es
+> P1.3d** (auditar validadores del benchmark por sobre-especificación).
+> Detalle completo en "P1.2 — la matriz", la sección "P1.3" más abajo, y
+> `findings.md`. No cambiar prompts ni casos de la suite
 > `p1-baseline-2026-08`: ya cumplió su propósito y queda congelada como
 > registro histórico; cualquier remedición usa un nombre de suite nuevo.
 > Resultados versionados en `benchmarks/results/p1-baseline-2026-08/`
@@ -604,12 +611,12 @@ Cuatro causas quedaron identificadas en la inspección read-only de P1.2
 criterio de salida (regla 1) — no se mezclan en un solo cambio (regla 9).
 Ninguna se resuelve "probando con otro prompt" (regla 4) ni persigue "cero
 falsos `completed`" repitiendo corridas (regla 5). P1.3a–d son
-independientes entre sí (ninguna bloquea a otra). **P1.3a y P1.3b ya
+independientes entre sí (ninguna bloquea a otra). **P1.3a, P1.3b y P1.3c ya
 cerraron** (ver abajo). El prerrequisito para cualquier trabajo futuro de
 calibrar un timeout por modelo queda cumplido (P1.3a), pero esa
 calibración en sí **todavía no es un punto propio de P1.3 y no se ha
 iniciado** — sigue sin saberse si hace falta. El siguiente paso dentro de
-P1.3 es **P1.3c**.
+P1.3 es **P1.3d**.
 
 ##### P1.3a — instrumentar `queue_wait` vs. `generation_time` — CERRADO (3 de agosto de 2026)
 
@@ -702,26 +709,98 @@ bug de agregación de P1.3c, sin relación con documentación faltante).
   contar el nuevo derivado — una aserción desactualizada, no un fallo del
   cambio.
 
-##### P1.3c — `SCRIPT_EXECUTION` corre sin argumentos y sin oráculo
+##### P1.3c — `SCRIPT_EXECUTION` acepta un contrato de ejecución declarado — CERRADO (3 de agosto de 2026)
 
-**Esfuerzo estimado:** 1 PR, 1 sesión.
+El perfil interno ejecutaba cada script entregado sin los argumentos del
+contrato real y sólo miraba el código de salida — no podía detectar una
+salida numéricamente incorrecta, y un script que traga excepciones sin
+`raise`/`sys.exit` siempre devuelve 0 pase lo que pase. Confirmado con el
+bug real de las tres repeticiones de `csv_expenses_cli`/`qwen3:4b` en P1.2
+(nombres de archivo hardcodeados en vez de `sys.argv`, excepción tragada
+sin salida de error) — ver ADR 0027 y `findings.md`.
 
-El perfil interno (`backend/agentarium/execution/validation.py`) ejecuta el
-script entregado sin los argumentos del contrato real y sólo mira el código
-de salida — no puede detectar una salida numéricamente incorrecta, y un
-script que traga excepciones sin `raise`/`sys.exit` siempre devuelve 0 pase
-lo que pase. Es una limitación estructural conocida (el orquestador no tiene
-el fixture oculto), no necesariamente un bug.
+- `ScriptExecutionContract` (nuevo, `domain/models.py`): `entrypoint`,
+  `args`, `produces` opcional (sólo existencia, no comparación de valores —
+  no hay fixture oculto para un proyecto real de usuario, mismo motivo por
+  el que ADR 0016 dejó fuera de alcance comparar salida entre tareas del
+  DAG). `WorkItem` gana `execution_contract: ScriptExecutionContract | None`.
+- `ValidationProfileExecutor.validate` usa el contrato cuando está presente:
+  busca el `.py` entregado cuyo path coincide con el `entrypoint`
+  declarado; si hay `produces` declarado, lo borra primero del directorio
+  de la corrida (mismo principio que `_prepare_run` de `FunctionalCheck` —
+  "la entrega no se lleva el crédito por un artefacto que ya traía
+  puesto") y sólo después invoca el script con los `args` reales, en vez de
+  a ciegas. Sin coincidencia (incluido el caso de cero `.py` entregados),
+  falla de inmediato nombrando el entrypoint — nunca cae en silencio al
+  modo ciego. **El contrato es la única autoridad una vez presente:**
+  ningún otro `.py` de la misma entrega se ejecuta como `SCRIPT_EXECUTION`
+  (sigue recibiendo `PYTHON_SYNTAX` igual que siempre) — correr a ciegas un
+  módulo auxiliar válido para importar pero no pensado para correr solo lo
+  rechazaría sin razón. Sin contrato, cero cambios de comportamiento.
+- **Deliberadamente no se tocó** `planning/contracts.py`
+  (`TaskProposal`/`SubtaskProposal`): agregar el campo ahí para que el LLM
+  lo llene habría repetido el fallo que ADR 0020 y ADR 0024 ya confirmaron
+  en vivo, dos veces, con `owned_paths`/`shared_component`. Consecuencia
+  documentada, no un descuido: **hoy nada construye un `WorkItem` con
+  `execution_contract`** — el mecanismo consumidor queda real, persistido y
+  probado de punta a punta (`engine.py` lo pasa en la llamada real a
+  `validate`), pero inerte en cualquier corrida en vivo hasta que exista una
+  decisión aparte sobre cómo poblarlo.
+- `VALIDATION_CONTRACT_VERSION` se queda en `profiles-v6` — a diferencia de
+  ADR 0016, este cambio no altera el resultado de ningún work item
+  construible hoy, así que no hay requisito obsoleto del que proteger a un
+  reintento.
 
-**Criterio de salida:** decisión explícita — `SCRIPT_EXECUTION` acepta un
-**contrato de ejecución declarado** (entrypoint, argumentos, salida
-esperada — análogo al bloque `functional:` de un caso de benchmark, P1.1b)
-cuando el work item lo tiene, y lo usa para invocar el script en vez de
-correrlo a ciegas sin argumentos. **No** una heurística de AST que intente
-reconocer patrones de código "sospechosos": eso adivina intención y es
-frágil por diseño (falsos positivos y negativos crecen con cada patrón
-nuevo que el modelo invente). Si hoy ningún work item declara ese contrato,
-se documenta como límite conocido en vez de improvisar una heurística.
+**Revisión antes de mergear encontró dos huecos de diseño reales**, ambos
+corregidos en la misma PR antes de cerrar: (1) `produces` sólo comprobaba
+existencia *después* de correr, así que un archivo preexistente (entregado
+junto al script, o remanente de un intento anterior) hacía pasar a un
+script que no hacía nada — corregido borrándolo antes de ejecutar. (2) el
+diseño original corría además, a ciegas, cualquier otro `.py` de la
+entrega que no coincidiera con el `entrypoint` — corregido para que el
+contrato sea la única autoridad una vez presente, sólo se ejecuta el
+entrypoint declarado.
+
+**Criterio de salida cumplido, con evidencia sintética — sin Ollama real:**
+22 pruebas deterministas nuevas (verificado con
+`pytest backend --collect-only -q`, contando parametrización), más una
+lista de columnas ya parametrizada extendida en una línea.
+
+- `test_domain_validation.py` (+10 casos, 6 funciones — una parametrizada
+  en 4 paths que escapan y otra en 2): `entrypoint` en blanco, con `../`,
+  absoluto o con letra de unidad, y sin sufijo `.py` rechazados; `args` con
+  entrada en blanco rechazado; `produces` con path que escapa rechazado;
+  defaults (`args=[]`, `produces=None`) cuando se omiten.
+- `test_validation_profiles.py` (+8, las 4 pruebas `SCRIPT_EXECUTION`
+  preexistentes quedan intactas): argumentos declarados sí se usan (la
+  forma exacta del bug de `sys.argv` ignorado); `produces` declarado que
+  nunca aparece falla aunque el código de salida sea 0 (el caso concreto de
+  la excepción tragada); **un `produces` preexistente en la entrega no basta
+  para pasar** — se borra antes de ejecutar, y un script vacío sigue
+  fallando; `entrypoint` que no coincide con ningún `.py` entregado falla
+  nombrándolo, sin caer a modo ciego; mismo camino con cero archivos `.py`
+  entregados; varios `.py` entregados, **sólo el entrypoint declarado se
+  ejecuta** — el otro (que falla deliberadamente si corre) no aparece en
+  absoluto entre los resultados; un contrato declarado sin ninguna palabra
+  clave de prosa igual activa el perfil; `entrypoint` en un subdirectorio
+  resuelve `produces` relativo a ese subdirectorio, no a la raíz del
+  proyecto.
+- `test_schema_migration.py` (+3): `execution_contract_json` sumado a la
+  lista ya parametrizada de columnas que deben existir tras migrar una base
+  legacy; +2 pruebas de round-trip real vía `Repository`/`Database` en
+  `tmp_path` (un `WorkItem` con contrato sobrevive guardar y releer; una
+  fila sin contrato carga `execution_contract` como `None`).
+- `test_script_execution_contract_integration.py` (nuevo, +1): la única
+  prueba que atraviesa el camino real completo —
+  `Orchestrator._execute_work_item` → `WorkItem.execution_contract` →
+  `validate(execution_contract=...)` —, no sólo una llamada directa al
+  validador. `WorkItem` con contrato creado a mano (nada en el camino de
+  planificación puede producir uno todavía) y persistido vía
+  `service.repository`; el proveedor mock se intercepta sólo para la
+  operación `work` de esa tarea (para controlar el contenido exacto de
+  `tool.py`) y para capturar el payload real que le llega al tester en la
+  operación `test`, confirmando ahí que el `SCRIPT_EXECUTION` real usó los
+  `args` declarados y satisfizo `produces` — sin tocar Ollama.
 
 ##### P1.3d — auditar validadores del benchmark por sobre-especificación
 
@@ -845,11 +924,11 @@ botella resuelve.
    P1.2).**
 3. **P1.3a–P1.3d — cerrar las causas mecánicas que P1.2 encontró, cuatro PR
    independientes:** ~~P1.3a instrumenta `queue_wait` vs.
-   `generation_time`~~ y ~~P1.3b hace exigible `expected_outputs`~~
-   entregados. Queda **P1.3c**, que le da oráculo o límite documentado a
-   `SCRIPT_EXECUTION`; y P1.3d, que audita los validadores del benchmark
+   `generation_time`~~, ~~P1.3b hace exigible `expected_outputs`~~ y
+   ~~P1.3c le da a `SCRIPT_EXECUTION` un contrato de ejecución declarado~~
+   entregados. Queda **P1.3d**, que audita los validadores del benchmark
    por sobre-especificación respecto al `goal` (causa del falso negativo
-   de `architecture_document`). Bloquean empezar P2 con datos limpios.
+   de `architecture_document`). Bloquea empezar P2 con datos limpios.
 4. **PR de capacidades (P2):** manifiesto del runtime y fallo temprano por
    capacidad no disponible.
 

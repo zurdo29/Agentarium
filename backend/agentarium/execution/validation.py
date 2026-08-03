@@ -7,6 +7,8 @@ from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
 
+from agentarium.domain.models import ScriptExecutionContract
+
 from .safe_commands import CommandRejected, CommandResult, SafeCommandExecutor
 from .workspace import WorkspaceFileEvidence
 
@@ -76,6 +78,7 @@ class ValidationProfileExecutor:
         validation_root: Path | None = None,
         acceptance_criteria: list[str] | None = None,
         expected_outputs: list[str] | None = None,
+        execution_contract: ScriptExecutionContract | None = None,
     ) -> list[ValidationProfileResult]:
         project_scope = await asyncio.to_thread(
             (self.workspace_root / project_id).resolve
@@ -182,13 +185,22 @@ class ValidationProfileExecutor:
             for profile, command_targets, command in commands
         ]
 
-        script_execution_requested = self._script_execution_requested(
-            [*(acceptance_criteria or []), *(expected_outputs or [])]
+        script_execution_requested = (
+            self._script_execution_requested(
+                [*(acceptance_criteria or []), *(expected_outputs or [])]
+            )
+            or execution_contract is not None
         )
         script_targets = [
             target for target in targets if target.suffix.casefold() == ".py"
         ]
-        if script_execution_requested and not script_targets:
+        if script_execution_requested and execution_contract is not None:
+            results.extend(
+                await self._run_declared_contract(
+                    execution_contract, script_targets, project_root
+                )
+            )
+        elif script_execution_requested and not script_targets:
             results.append(
                 ValidationProfileResult(
                     profile=ValidationProfile.SCRIPT_EXECUTION,
@@ -218,6 +230,96 @@ class ValidationProfileExecutor:
                     )
                 )
 
+        return results
+
+    async def _run_declared_contract(
+        self,
+        contract: ScriptExecutionContract,
+        script_targets: list[Path],
+        project_root: Path,
+    ) -> list[ValidationProfileResult]:
+        """Invoke the entrypoint a work item declared, with its real args,
+        instead of running every `.py` file blind (ADR 0027). A declared
+        contract is the sole authority once present: only its own entrypoint
+        gets executed. Every other delivered `.py` file already gets
+        `PYTHON_SYNTAX` (unconditional, checked earlier) but is no longer
+        also run blind as `SCRIPT_EXECUTION` — a helper module perfectly
+        valid when imported can be invalid to run standalone, so doing that
+        would reject good auxiliary code, not validate it."""
+        matched_target = next(
+            (
+                target
+                for target in script_targets
+                if target.as_posix().casefold() == contract.entrypoint.casefold()
+            ),
+            None,
+        )
+        if matched_target is None:
+            # Covers both "no .py files at all" and "has .py files, but not
+            # this one" — a declared contract that names a file the delivery
+            # doesn't have is always a hard failure, never a silent fall
+            # back to blind mode.
+            return [
+                ValidationProfileResult(
+                    profile=ValidationProfile.SCRIPT_EXECUTION,
+                    targets=(),
+                    result=CommandResult(
+                        command=[],
+                        cwd=str(project_root),
+                        stdout="",
+                        stderr=(
+                            "El contrato de ejecucion declara el entrypoint "
+                            f"'{contract.entrypoint}' pero la entrega no lo "
+                            "incluye."
+                        ),
+                        return_code=1,
+                        timed_out=False,
+                    ),
+                )
+            ]
+
+        contract_cwd = project_root / matched_target.parent
+        if contract.produces:
+            # The delivery must not be credited for an artifact that was
+            # already lying around — materialized alongside the script, or
+            # left over from a previous attempt in the same worktree. Same
+            # discipline as `benchmarks/functional.py::_prepare_run`
+            # ("a delivery that ships the answer must not be credited for
+            # it"). Erasing it first means the check below only passes if
+            # this run actually (re)created it.
+            (contract_cwd / contract.produces).unlink(missing_ok=True)
+        results = [
+            await self._execute(
+                ValidationProfile.SCRIPT_EXECUTION,
+                (matched_target.as_posix(),),
+                [sys.executable, matched_target.name, *contract.args],
+                contract_cwd,
+            )
+        ]
+        contract_result = results[0]
+        if (
+            contract_result.passed
+            and contract.produces
+            and not (contract_cwd / contract.produces).is_file()
+        ):
+            results.append(
+                ValidationProfileResult(
+                    profile=ValidationProfile.SCRIPT_EXECUTION,
+                    targets=(matched_target.as_posix(),),
+                    result=CommandResult(
+                        command=contract_result.result.command,
+                        cwd=str(contract_cwd),
+                        stdout="",
+                        stderr=(
+                            "El contrato de ejecucion declara que se produce "
+                            f"'{contract.produces}' pero no aparece tras "
+                            "ejecutar el entrypoint."
+                        ),
+                        return_code=1,
+                        timed_out=False,
+                    ),
+                )
+            )
         return results
 
     @staticmethod
