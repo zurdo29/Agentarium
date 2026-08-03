@@ -127,7 +127,11 @@ class AgentDefinition(DomainModel):
 
 
 class ResourceUsage(DomainModel):
+    # duration_ms also covers inter-retry backoff sleep and interpreter/event-loop
+    # overhead, so it will not necessarily equal queue_wait_ms + generation_ms.
     duration_ms: int = Field(default=0, ge=0)
+    queue_wait_ms: int | None = Field(default=None, ge=0)
+    generation_ms: int | None = Field(default=None, ge=0)
     prompt_characters: int = Field(default=0, ge=0)
     response_characters: int = Field(default=0, ge=0)
     prompt_tokens_approx: int = Field(default=0, ge=0)

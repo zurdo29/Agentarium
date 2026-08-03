@@ -10,7 +10,7 @@ import yaml
 
 from agentarium.domain.enums import AgentRole, RunOutcome
 from agentarium.domain.models import AgentDefinition, AgentRun, ResourceUsage, new_id
-from agentarium.execution.scheduler import ResourceScheduler
+from agentarium.execution.scheduler import AttemptTiming, ResourceScheduler
 from agentarium.llm import ModelRequest, ProviderRegistry, ProviderResponse
 
 
@@ -86,44 +86,66 @@ class RoleRunner:
         clock = perf_counter()
         last_error: Exception | None = None
         errors = 0
+        total_queue_wait_ms = 0
+        total_generation_ms = 0
+        generation_started = False
+
+        def accumulate(timing: AttemptTiming) -> None:
+            nonlocal total_queue_wait_ms, total_generation_ms, generation_started
+            if timing.queue_wait_ms is not None:
+                total_queue_wait_ms += timing.queue_wait_ms
+            if timing.generation_ms is not None:
+                generation_started = True
+                total_generation_ms += timing.generation_ms
+
         for retry in range(definition.max_retries + 1):
+            timing = AttemptTiming()
             try:
                 response = await asyncio.wait_for(
-                    self.scheduler.run(lambda: provider.generate(request, definition)),
+                    self.scheduler.run(
+                        lambda: provider.generate(request, definition), timing
+                    ),
                     timeout=definition.timeout_seconds,
                 )
-                duration_ms = int((perf_counter() - clock) * 1000)
-                usage = ResourceUsage(
-                    duration_ms=duration_ms,
-                    prompt_characters=response.prompt_characters,
-                    response_characters=response.response_characters,
-                    prompt_tokens_approx=response.prompt_characters // 4,
-                    response_tokens_approx=response.response_characters // 4,
-                    model=definition.model,
-                    provider=definition.provider,
-                    errors=errors,
-                )
-                run = AgentRun(
-                    project_id=request.project_id,
-                    work_item_id=request.work_item_id,
-                    agent_role=role,
-                    model=definition.model,
-                    provider=definition.provider,
-                    attempt=request.attempt,
-                    outcome=RunOutcome.ARTIFACT_DELIVERED,
-                    input_summary=json.dumps(request.payload, ensure_ascii=False)[:1000],
-                    output_summary=response.raw_text[:1000],
-                    resource_usage=usage,
-                    correlation_id=correlation_id,
-                    started_at=started,
-                    finished_at=datetime.now(UTC),
-                )
-                return response, run
             except Exception as exc:
                 errors += 1
                 last_error = exc
+                accumulate(timing)
                 if retry < definition.max_retries:
                     await asyncio.sleep(min(0.1 * (2**retry), 1))
+                continue
+
+            accumulate(timing)
+            duration_ms = int((perf_counter() - clock) * 1000)
+            usage = ResourceUsage(
+                duration_ms=duration_ms,
+                queue_wait_ms=total_queue_wait_ms,
+                generation_ms=total_generation_ms if generation_started else None,
+                prompt_characters=response.prompt_characters,
+                response_characters=response.response_characters,
+                prompt_tokens_approx=response.prompt_characters // 4,
+                response_tokens_approx=response.response_characters // 4,
+                model=definition.model,
+                provider=definition.provider,
+                errors=errors,
+            )
+            run = AgentRun(
+                project_id=request.project_id,
+                work_item_id=request.work_item_id,
+                agent_role=role,
+                model=definition.model,
+                provider=definition.provider,
+                attempt=request.attempt,
+                outcome=RunOutcome.ARTIFACT_DELIVERED,
+                input_summary=json.dumps(request.payload, ensure_ascii=False)[:1000],
+                output_summary=response.raw_text[:1000],
+                resource_usage=usage,
+                correlation_id=correlation_id,
+                started_at=started,
+                finished_at=datetime.now(UTC),
+            )
+            return response, run
+
         duration_ms = int((perf_counter() - clock) * 1000)
         error_message = str(last_error).strip() if last_error else ""
         if not error_message:
@@ -144,6 +166,8 @@ class RoleRunner:
             output_summary="",
             resource_usage=ResourceUsage(
                 duration_ms=duration_ms,
+                queue_wait_ms=total_queue_wait_ms,
+                generation_ms=total_generation_ms if generation_started else None,
                 model=definition.model,
                 provider=definition.provider,
                 errors=errors,
