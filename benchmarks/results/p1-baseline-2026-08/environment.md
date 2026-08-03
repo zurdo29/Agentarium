@@ -10,8 +10,16 @@ Este archivo, `report.md`, `report.json` y `findings.md` viven en
 `benchmarks/results/<suite>/` — versionados sin necesitar excepciones de
 `.gitignore`, junto a `benchmarks/cases/` y `benchmarks/fixtures/`. El
 ledger y `agentarium.db` de la corrida siguen en
-`runtime/benchmarks/<suite>/`, sin versionar: son estado de ejecución local
-que la CLI regenera, no un registro que deba sobrevivir en el repositorio.
+`runtime/benchmarks/<suite>/`, sin versionar. **No son regenerables a partir
+de lo versionado aquí** — la relación va al revés: `report.md`/`report.json`
+son una proyección agregada que la CLI calcula *leyendo* la DB, no algo que
+la reconstruya. La DB tiene detalle que el informe nunca serializa (work
+items, acceptance criteria, razones del revisor, `agent_runs` con sus
+timestamps y `resource_usage_json`) — es exactamente lo que hizo falta para
+escribir `findings.md`. Quedan fuera de versión por tamaño y por ser estado
+local de una corrida puntual, no porque sean prescindibles: si se pierden,
+la adjudicación manual de esta suite no podría auditarse más a fondo ni
+rehacerse — sólo repetirse la medición desde cero.
 
 ## Identidad congelada
 
@@ -51,11 +59,13 @@ $env:AGENTARIUM_WORKSPACE_ROOT = "C:\Users\Renzo\agbench\workspaces"
 
 La base de datos (`agentarium.db`) y los workspaces de cada corrida quedan
 **fuera de control de versiones** deliberadamente: son estado de ejecución
-local, potencialmente grandes, y no aportan nada que este archivo más
-`report.md`/`report.json` no capturen ya para efectos de auditoría. Quien
-necesite inspeccionar una corrida puntual (artefactos entregados, work items,
-test reports, reviews) reproduce el entorno de arriba y consulta esa base
-localmente — no se recrea automáticamente a partir de lo versionado.
+local, potencialmente grandes, y con detalle que este archivo más
+`report.md`/`report.json` **no capturan** (work items, acceptance criteria,
+razones del revisor, artefactos entregados, `agent_runs`). Quien necesite
+inspeccionar una corrida puntual reproduce el entorno de arriba y consulta
+esa base localmente — no hay forma de reconstruirla a partir de lo
+versionado; si se borra, ese detalle se pierde para siempre, aunque el
+resultado agregado (`report.md`/`report.json`/`findings.md`) sobreviva.
 
 ## Qué se corrió
 

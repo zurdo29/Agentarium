@@ -399,8 +399,10 @@ Las 27 corridas (3 casos × 3 modelos × 3 repeticiones) están hechas y
 registradas contra la suite `p1-baseline-2026-08`. La maquinaria (P1.1,
 P1.1b, P1.2a) se comportó como se diseñó: informe reproducible desde el
 ledger, cero drift, cero corridas perdidas. **Lo que no se cumplió es el
-criterio de calidad de la propia matriz** — 4 de 27 corridas son falsos
-`completed`, no cero. Eso no cierra P1.2 como fase exitosa; la deja como
+criterio de calidad de la propia matriz**: el informe automático señala 4 de
+27 corridas como falsos `completed`; la adjudicación manual confirma 3 (ver
+"Causas inspeccionadas a fondo" más abajo). De cualquiera de las dos formas,
+no es cero. Eso no cierra P1.2 como fase exitosa; la deja como
 medición completa con un resultado real y abre P1.3 para cerrar
 mecánicamente las causas antes de tocar prompts, casos o empezar P2. La
 suite `p1-baseline-2026-08` queda congelada como registro histórico de este
@@ -415,8 +417,9 @@ contra `qwen3:4b`, el modelo más liviano— y sólo después las 18 restantes.
 Así, un problema de infraestructura, de staging, del contrato funcional o de
 persistencia habría aparecido antes de gastar horas con los modelos grandes.
 No apareció ninguno: lo que la tanda 2 sí mostró fue la señal de calidad de
-abajo, más un timeout mal calibrado para el modelo más grande (ver
-"Causas inspeccionadas" más abajo).
+abajo, más una pregunta abierta sobre el timeout del modelo más grande —
+todavía no se sabe si hace falta calibrarlo o si el problema es otro (ver
+"Causas inspeccionadas" más abajo y P1.3a).
 
 ##### Aislamiento (obligatorio, en la misma sesión de PowerShell)
 
@@ -592,9 +595,11 @@ Cuatro causas quedaron identificadas en la inspección read-only de P1.2
 `findings.md`). Cada una es su propio PR con su propia hipótesis y su propio
 criterio de salida (regla 1) — no se mezclan en un solo cambio (regla 9).
 Ninguna se resuelve "probando con otro prompt" (regla 4) ni persigue "cero
-falsos `completed`" repitiendo corridas (regla 5). **P1.3a bloquea a P1.3b
-en lo que toca a timeout/calibración**: no tiene sentido tocar un número sin
-saber qué mide.
+falsos `completed`" repitiendo corridas (regla 5). P1.3a–d son
+independientes entre sí (ninguna bloquea a otra) — pero **P1.3a sí bloquea a
+cualquier trabajo futuro de calibrar un timeout por modelo**, que
+deliberadamente todavía no es un punto propio de P1.3 porque no se sabe si
+hace falta: no tiene sentido tocar un número sin saber qué mide.
 
 ##### P1.3a — instrumentar `queue_wait` vs. `generation_time` (prerrequisito)
 
@@ -613,8 +618,11 @@ un `TimeoutError` fue cola y cuánto generación — ver `findings.md`.
 2. Persistir `queue_wait_ms` y `generation_ms` (`null` si nunca llegó a
    generar) en cada `agent_run`, no sólo `duration_ms`.
 
-**Criterio de salida:** una corrida real con al menos un `TimeoutError`
-muestra si el tiempo se fue en cola o en generación. Sin este dato, ningún
+**Criterio de salida:** una prueba —sintética o real, no hace falta forzar
+ni esperar un `TimeoutError` real contra un modelo lento— demuestra que la
+instrumentación atribuye correctamente tiempo de cola vs. generación,
+incluido el camino de fallo (un doble del proveedor con demora controlada
+alcanza el mismo propósito que una corrida real). Sin este dato, ningún
 timeout se calibra por modelo — se estaría adivinando.
 
 ##### P1.3b — `expected_outputs` no se traduce en acceptance criteria exigibles
@@ -623,8 +631,9 @@ timeout se calibra por modelo — se estaría adivinando.
 
 Un work item puede listar un entregable en `expected_outputs` (p. ej. el
 Markdown de uso) sin que ningún `acceptance_criteria` lo fuerce, y el
-revisor semántico nunca lo evalúa. Confirmado en los 3 falsos `completed`
-reales de `csv_expenses_cli`.
+revisor semántico nunca lo evalúa. Confirmado en 2 de los 3 falsos
+`completed` de `csv_expenses_cli` (rep 2 y 3 — rep 1 falló únicamente por el
+bug de agregación de P1.3c, sin relación con documentación faltante).
 
 **Criterio de salida:** decisión explícita — o `decompose` deriva
 automáticamente un AC exigible de cada `expected_output`, o se documenta
@@ -636,14 +645,20 @@ aquí como límite conocido con su razón.
 
 El perfil interno (`backend/agentarium/execution/validation.py`) ejecuta el
 script entregado sin los argumentos del contrato real y sólo mira el código
-de salida — no puede detectar una salida numéricamente incorrecta ni un
-script que traga excepciones sin `raise`/`sys.exit`. Es una limitación
-estructural conocida (el orquestador no tiene el fixture oculto), no
-necesariamente un bug.
+de salida — no puede detectar una salida numéricamente incorrecta, y un
+script que traga excepciones sin `raise`/`sys.exit` siempre devuelve 0 pase
+lo que pase. Es una limitación estructural conocida (el orquestador no tiene
+el fixture oculto), no necesariamente un bug.
 
-**Criterio de salida:** decisión explícita — una señal mínima (p. ej.
-detectar un `except` de alcance total sin `raise`/`sys.exit`) o aceptarlo
-como límite documentado.
+**Criterio de salida:** decisión explícita — `SCRIPT_EXECUTION` acepta un
+**contrato de ejecución declarado** (entrypoint, argumentos, salida
+esperada — análogo al bloque `functional:` de un caso de benchmark, P1.1b)
+cuando el work item lo tiene, y lo usa para invocar el script en vez de
+correrlo a ciegas sin argumentos. **No** una heurística de AST que intente
+reconocer patrones de código "sospechosos": eso adivina intención y es
+frágil por diseño (falsos positivos y negativos crecen con cada patrón
+nuevo que el modelo invente). Si hoy ningún work item declara ese contrato,
+se documenta como límite conocido en vez de improvisar una heurística.
 
 ##### P1.3d — auditar validadores del benchmark por sobre-especificación
 
@@ -655,15 +670,19 @@ el falso negativo de P1.2 (ver arriba y `findings.md`). No es un problema
 del revisor semántico ni del orquestador — es el validador más estricto que
 el objetivo real del caso.
 
-1. Revisar los validadores estructurales de los otros dos casos
-   (`csv_expenses_cli`, `library_api_sqlite`) por el mismo patrón: ¿el
-   validador exige algo que el `goal` no pide explícitamente?
-2. Ajustar el validador de `architecture_document`, o documentar por qué el
-   encabezado dedicado es intencional y reflejarlo en el `goal` del caso.
+1. Para cada validador estructural de los tres casos, construir
+   **trazabilidad explícita `goal` → validador**: qué frase o cláusula
+   literal del `goal` justifica esa exigencia. Un validador sin una frase
+   del `goal` que lo respalde queda marcado como sobre-especificación por
+   default, no como limitación aceptada tácitamente.
+2. Ajustar el validador de `architecture_document`, o incorporar al `goal`
+   del caso la exigencia de encabezado dedicado si se decide que es
+   intencional (para que quede trazable como las demás).
 
-**Criterio de salida:** cada validador estructural de los tres casos tiene
-una nota explícita de qué exige más allá del `goal` y por qué, o se ajusta
-para no exceder el `goal`.
+**Criterio de salida:** una tabla `validador → frase del goal que lo
+justifica` para los tres casos, sin entradas huérfanas salvo que queden
+documentadas explícitamente aquí como sobre-especificación deliberada, con
+su razón.
 
 **Criterio de salida de P1.3 en conjunto:** las cuatro PR mergeadas, o cada
 causa aceptada explícitamente como límite conocido con su razón en este
