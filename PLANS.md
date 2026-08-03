@@ -627,7 +627,7 @@ cuánto de un `TimeoutError` era cola y cuánto generación — ver
   de un mismo `AgentRun`, persistidos en éxito y en fallo.
 
 **Criterio de salida cumplido, con evidencia sintética — no con una corrida
-real contra `qwen3:8b`:** 9 pruebas deterministas, sin Ollama, en
+real contra `qwen3:8b`:** 10 pruebas deterministas, sin Ollama, en
 `backend/tests/test_scheduler.py`, `test_role_timing.py` y el nuevo
 `test_agent_run_persistence.py`. Cubren: espera real detrás de otra
 llamada; cancelación mientras espera (`generation_ms=None`); timeout
