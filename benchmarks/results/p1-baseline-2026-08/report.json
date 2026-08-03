@@ -1,0 +1,1869 @@
+{
+  "totals": {
+    "runs": 27,
+    "completed": 3,
+    "completion_rate": 11.1,
+    "false_completed": 4
+  },
+  "categories": {
+    "duplicate_candidate": 9,
+    "technical_validation": 7,
+    "completed": 3,
+    "path_conflict": 2,
+    "planning_contract": 2,
+    "provider_failure": 2,
+    "semantic_rejection": 2
+  },
+  "by_target": {
+    "ollama:qwen2.5-coder:7b": {
+      "runs": 9,
+      "completed": 1,
+      "false_completed": 0,
+      "completion_rate": 11.1,
+      "average_seconds": 263.32
+    },
+    "ollama:qwen3:4b": {
+      "runs": 9,
+      "completed": 2,
+      "false_completed": 3,
+      "completion_rate": 22.2,
+      "average_seconds": 252.05
+    },
+    "ollama:qwen3:8b": {
+      "runs": 9,
+      "completed": 0,
+      "false_completed": 1,
+      "completion_rate": 0.0,
+      "average_seconds": 868.16
+    }
+  },
+  "false_completed_runs": [
+    {
+      "case_id": "csv_expenses_cli",
+      "provider": "ollama",
+      "model": "qwen3:4b",
+      "repetition": 1,
+      "project_id": "baf1d076-ddde-4bc6-b808-f798fe54f640",
+      "failed_validators": [
+        "El programa procesa el CSV fixture y produce el resumen correcto"
+      ]
+    },
+    {
+      "case_id": "csv_expenses_cli",
+      "provider": "ollama",
+      "model": "qwen3:4b",
+      "repetition": 2,
+      "project_id": "b8156c37-306b-4a5c-9e73-0de4644fbe7c",
+      "failed_validators": [
+        "Existe documentación de uso en Markdown",
+        "La documentación explica cómo ejecutarlo"
+      ]
+    },
+    {
+      "case_id": "csv_expenses_cli",
+      "provider": "ollama",
+      "model": "qwen3:4b",
+      "repetition": 3,
+      "project_id": "33d1cca8-17f8-4404-81d6-7ba09a762aa1",
+      "failed_validators": [
+        "Existe documentación de uso en Markdown",
+        "La documentación explica cómo ejecutarlo",
+        "El programa procesa el CSV fixture y produce el resumen correcto"
+      ]
+    },
+    {
+      "case_id": "architecture_document",
+      "provider": "ollama",
+      "model": "qwen3:8b",
+      "repetition": 2,
+      "project_id": "a9ec5847-c6d4-4e23-8a39-e0446cf96ea3",
+      "failed_validators": [
+        "Hay una sección de decisiones de diseño"
+      ]
+    }
+  ],
+  "runs": [
+    {
+      "schema_version": 2,
+      "case_id": "architecture_document",
+      "case_schema_version": 1,
+      "provider": "ollama",
+      "model": "qwen3:4b",
+      "repetition": 1,
+      "project_id": "edf5bfe7-9565-4a36-a33f-2f8bcf1e4c11",
+      "project_status": "completed",
+      "progress_percent": 100.0,
+      "duration_seconds": 290.93,
+      "attempts": 5,
+      "splits": 0,
+      "human_intervention": false,
+      "prompt_versions": {
+        "planning": "planning-v3",
+        "workspace": "workspace-v7",
+        "decompose": "decompose-v3",
+        "plan_revision": "plan-revision-v1"
+      },
+      "runtime_identity": {
+        "agentarium_commit": "2b4ecb2aa9e0bb2257f392702190a3938ce6817d",
+        "agentarium_dirty": false,
+        "python_version": "3.14.6",
+        "platform": "Windows-AMD64",
+        "concurrency": 1,
+        "ollama_version": "0.32.5"
+      },
+      "model_digest": "359d7dd4bcdab3d86b87d73ac27966f4dbb9f5efdfcc75d34a8764a09474fae7",
+      "technical_result": true,
+      "semantic_result": true,
+      "technical_reports": 5,
+      "semantic_reviews": 5,
+      "validation_passed": true,
+      "validators": [
+        {
+          "description": "Existe el documento en Markdown",
+          "passed": true,
+          "detail": "4 archivo(s) coinciden"
+        },
+        {
+          "description": "Hay una sección dedicada a los componentes",
+          "passed": true,
+          "detail": "patrón encontrado en docs\\architecture.md"
+        },
+        {
+          "description": "Hay una sección de decisiones de diseño",
+          "passed": true,
+          "detail": "patrón encontrado en docs\\architecture.md"
+        },
+        {
+          "description": "Una decisión enuncia su alternativa descartada",
+          "passed": true,
+          "detail": "patrón encontrado en docs\\architecture.md"
+        },
+        {
+          "description": "Hay un glosario con términos definidos",
+          "passed": true,
+          "detail": "patrón encontrado en docs\\architecture.md"
+        },
+        {
+          "description": "Un documento de arquitectura no entrega código ejecutable",
+          "passed": true,
+          "detail": "ausente como se esperaba"
+        }
+      ],
+      "category": "completed",
+      "evidence": "validadores independientes en verde",
+      "error": null,
+      "false_completed": false
+    },
+    {
+      "schema_version": 2,
+      "case_id": "architecture_document",
+      "case_schema_version": 1,
+      "provider": "ollama",
+      "model": "qwen3:4b",
+      "repetition": 2,
+      "project_id": "99d4202d-82bf-430a-9a3c-107e9aebf954",
+      "project_status": "failed",
+      "progress_percent": 22.22,
+      "duration_seconds": 249.16,
+      "attempts": 8,
+      "splits": 1,
+      "human_intervention": false,
+      "prompt_versions": {
+        "planning": "planning-v3",
+        "workspace": "workspace-v7",
+        "decompose": "decompose-v3",
+        "plan_revision": "plan-revision-v1"
+      },
+      "runtime_identity": {
+        "agentarium_commit": "2b4ecb2aa9e0bb2257f392702190a3938ce6817d",
+        "agentarium_dirty": false,
+        "python_version": "3.14.6",
+        "platform": "Windows-AMD64",
+        "concurrency": 1,
+        "ollama_version": "0.32.5"
+      },
+      "model_digest": "359d7dd4bcdab3d86b87d73ac27966f4dbb9f5efdfcc75d34a8764a09474fae7",
+      "technical_result": true,
+      "semantic_result": true,
+      "technical_reports": 2,
+      "semantic_reviews": 2,
+      "validation_passed": true,
+      "validators": [
+        {
+          "description": "Existe el documento en Markdown",
+          "passed": true,
+          "detail": "1 archivo(s) coinciden"
+        },
+        {
+          "description": "Hay una sección dedicada a los componentes",
+          "passed": true,
+          "detail": "patrón encontrado en architecture\\docs\\main.md"
+        },
+        {
+          "description": "Hay una sección de decisiones de diseño",
+          "passed": true,
+          "detail": "patrón encontrado en architecture\\docs\\main.md"
+        },
+        {
+          "description": "Una decisión enuncia su alternativa descartada",
+          "passed": true,
+          "detail": "patrón encontrado en architecture\\docs\\main.md"
+        },
+        {
+          "description": "Hay un glosario con términos definidos",
+          "passed": true,
+          "detail": "patrón encontrado en architecture\\docs\\main.md"
+        },
+        {
+          "description": "Un documento de arquitectura no entrega código ejecutable",
+          "passed": true,
+          "detail": "ausente como se esperaba"
+        }
+      ],
+      "category": "path_conflict",
+      "evidence": "[subtarea] Definir los componentes principales del sistema de reservas: Workspace file paths collide with files already owned by an unrelated task: architecture/docs/main.md",
+      "error": null,
+      "false_completed": false
+    },
+    {
+      "schema_version": 2,
+      "case_id": "architecture_document",
+      "case_schema_version": 1,
+      "provider": "ollama",
+      "model": "qwen3:4b",
+      "repetition": 3,
+      "project_id": "36aa2c75-a166-4389-93b1-be4d10d946b8",
+      "project_status": "completed",
+      "progress_percent": 100.0,
+      "duration_seconds": 204.37,
+      "attempts": 5,
+      "splits": 0,
+      "human_intervention": false,
+      "prompt_versions": {
+        "planning": "planning-v3",
+        "workspace": "workspace-v7",
+        "decompose": "decompose-v3",
+        "plan_revision": "plan-revision-v1"
+      },
+      "runtime_identity": {
+        "agentarium_commit": "2b4ecb2aa9e0bb2257f392702190a3938ce6817d",
+        "agentarium_dirty": false,
+        "python_version": "3.14.6",
+        "platform": "Windows-AMD64",
+        "concurrency": 1,
+        "ollama_version": "0.32.5"
+      },
+      "model_digest": "359d7dd4bcdab3d86b87d73ac27966f4dbb9f5efdfcc75d34a8764a09474fae7",
+      "technical_result": true,
+      "semantic_result": true,
+      "technical_reports": 5,
+      "semantic_reviews": 5,
+      "validation_passed": true,
+      "validators": [
+        {
+          "description": "Existe el documento en Markdown",
+          "passed": true,
+          "detail": "4 archivo(s) coinciden"
+        },
+        {
+          "description": "Hay una sección dedicada a los componentes",
+          "passed": true,
+          "detail": "patrón encontrado en components.md"
+        },
+        {
+          "description": "Hay una sección de decisiones de diseño",
+          "passed": true,
+          "detail": "patrón encontrado en design_decisions.md"
+        },
+        {
+          "description": "Una decisión enuncia su alternativa descartada",
+          "passed": true,
+          "detail": "patrón encontrado en components.md"
+        },
+        {
+          "description": "Hay un glosario con términos definidos",
+          "passed": true,
+          "detail": "patrón encontrado en design_decisions.md"
+        },
+        {
+          "description": "Un documento de arquitectura no entrega código ejecutable",
+          "passed": true,
+          "detail": "ausente como se esperaba"
+        }
+      ],
+      "category": "completed",
+      "evidence": "validadores independientes en verde",
+      "error": null,
+      "false_completed": false
+    },
+    {
+      "schema_version": 2,
+      "case_id": "csv_expenses_cli",
+      "case_schema_version": 2,
+      "provider": "ollama",
+      "model": "qwen3:4b",
+      "repetition": 1,
+      "project_id": "baf1d076-ddde-4bc6-b808-f798fe54f640",
+      "project_status": "completed",
+      "progress_percent": 100.0,
+      "duration_seconds": 173.82,
+      "attempts": 4,
+      "splits": 0,
+      "human_intervention": false,
+      "prompt_versions": {
+        "planning": "planning-v3",
+        "workspace": "workspace-v7",
+        "decompose": "decompose-v3",
+        "plan_revision": "plan-revision-v1"
+      },
+      "runtime_identity": {
+        "agentarium_commit": "2b4ecb2aa9e0bb2257f392702190a3938ce6817d",
+        "agentarium_dirty": false,
+        "python_version": "3.14.6",
+        "platform": "Windows-AMD64",
+        "concurrency": 1,
+        "ollama_version": "0.32.5"
+      },
+      "model_digest": "359d7dd4bcdab3d86b87d73ac27966f4dbb9f5efdfcc75d34a8764a09474fae7",
+      "technical_result": true,
+      "semantic_result": true,
+      "technical_reports": 4,
+      "semantic_reviews": 4,
+      "validation_passed": false,
+      "validators": [
+        {
+          "description": "Existe el entrypoint declarado por el contrato",
+          "passed": true,
+          "detail": "1 archivo(s) coinciden"
+        },
+        {
+          "description": "Existe documentación de uso en Markdown",
+          "passed": true,
+          "detail": "1 archivo(s) coinciden"
+        },
+        {
+          "description": "El script lee un CSV de verdad, no lo simula",
+          "passed": true,
+          "detail": "patrón encontrado en expenses.py"
+        },
+        {
+          "description": "La documentación explica cómo ejecutarlo",
+          "passed": true,
+          "detail": "patrón encontrado en README.md"
+        },
+        {
+          "description": "El programa procesa el CSV fixture y produce el resumen correcto",
+          "passed": false,
+          "detail": "la salida no coincide con la esperada: {\"por_mes\": {\"2026-01\": 20.0, \"2026-02\": 9.75, \"2026-03\": 60.0}, \"por_categoria\": {\"comida\": 110.0, \"transporte\": 13.0, \"servicios\": 75.25}}"
+        }
+      ],
+      "category": "technical_validation",
+      "evidence": "el proyecto se declaró completo pero los validadores del caso fallaron",
+      "error": null,
+      "false_completed": true
+    },
+    {
+      "schema_version": 2,
+      "case_id": "csv_expenses_cli",
+      "case_schema_version": 2,
+      "provider": "ollama",
+      "model": "qwen3:4b",
+      "repetition": 2,
+      "project_id": "b8156c37-306b-4a5c-9e73-0de4644fbe7c",
+      "project_status": "completed",
+      "progress_percent": 100.0,
+      "duration_seconds": 182.48,
+      "attempts": 4,
+      "splits": 0,
+      "human_intervention": false,
+      "prompt_versions": {
+        "planning": "planning-v3",
+        "workspace": "workspace-v7",
+        "decompose": "decompose-v3",
+        "plan_revision": "plan-revision-v1"
+      },
+      "runtime_identity": {
+        "agentarium_commit": "2b4ecb2aa9e0bb2257f392702190a3938ce6817d",
+        "agentarium_dirty": false,
+        "python_version": "3.14.6",
+        "platform": "Windows-AMD64",
+        "concurrency": 1,
+        "ollama_version": "0.32.5"
+      },
+      "model_digest": "359d7dd4bcdab3d86b87d73ac27966f4dbb9f5efdfcc75d34a8764a09474fae7",
+      "technical_result": true,
+      "semantic_result": true,
+      "technical_reports": 4,
+      "semantic_reviews": 4,
+      "validation_passed": false,
+      "validators": [
+        {
+          "description": "Existe el entrypoint declarado por el contrato",
+          "passed": true,
+          "detail": "1 archivo(s) coinciden"
+        },
+        {
+          "description": "Existe documentación de uso en Markdown",
+          "passed": false,
+          "detail": "ningún archivo coincide con '**/*.md'"
+        },
+        {
+          "description": "El script lee un CSV de verdad, no lo simula",
+          "passed": true,
+          "detail": "patrón encontrado en expenses.py"
+        },
+        {
+          "description": "La documentación explica cómo ejecutarlo",
+          "passed": false,
+          "detail": "ningún archivo coincide con '**/*.md'"
+        },
+        {
+          "description": "El programa procesa el CSV fixture y produce el resumen correcto",
+          "passed": true,
+          "detail": "la entrega produjo la salida esperada"
+        }
+      ],
+      "category": "technical_validation",
+      "evidence": "el proyecto se declaró completo pero los validadores del caso fallaron",
+      "error": null,
+      "false_completed": true
+    },
+    {
+      "schema_version": 2,
+      "case_id": "csv_expenses_cli",
+      "case_schema_version": 2,
+      "provider": "ollama",
+      "model": "qwen3:4b",
+      "repetition": 3,
+      "project_id": "33d1cca8-17f8-4404-81d6-7ba09a762aa1",
+      "project_status": "completed",
+      "progress_percent": 100.0,
+      "duration_seconds": 195.74,
+      "attempts": 5,
+      "splits": 0,
+      "human_intervention": false,
+      "prompt_versions": {
+        "planning": "planning-v3",
+        "workspace": "workspace-v7",
+        "decompose": "decompose-v3",
+        "plan_revision": "plan-revision-v1"
+      },
+      "runtime_identity": {
+        "agentarium_commit": "2b4ecb2aa9e0bb2257f392702190a3938ce6817d",
+        "agentarium_dirty": false,
+        "python_version": "3.14.6",
+        "platform": "Windows-AMD64",
+        "concurrency": 1,
+        "ollama_version": "0.32.5"
+      },
+      "model_digest": "359d7dd4bcdab3d86b87d73ac27966f4dbb9f5efdfcc75d34a8764a09474fae7",
+      "technical_result": true,
+      "semantic_result": true,
+      "technical_reports": 5,
+      "semantic_reviews": 5,
+      "validation_passed": false,
+      "validators": [
+        {
+          "description": "Existe el entrypoint declarado por el contrato",
+          "passed": true,
+          "detail": "1 archivo(s) coinciden"
+        },
+        {
+          "description": "Existe documentación de uso en Markdown",
+          "passed": false,
+          "detail": "ningún archivo coincide con '**/*.md'"
+        },
+        {
+          "description": "El script lee un CSV de verdad, no lo simula",
+          "passed": true,
+          "detail": "patrón encontrado en expenses.py"
+        },
+        {
+          "description": "La documentación explica cómo ejecutarlo",
+          "passed": false,
+          "detail": "ningún archivo coincide con '**/*.md'"
+        },
+        {
+          "description": "El programa procesa el CSV fixture y produce el resumen correcto",
+          "passed": false,
+          "detail": "la salida no coincide con la esperada: {\"por_mes\": {\"2026-01\": 20.0, \"2026-02\": 9.75, \"2026-03\": 60.0}, \"por_categoria\": {\"comida\": 60.0, \"transporte\": 9.75, \"servicios\": 30.25}}"
+        }
+      ],
+      "category": "technical_validation",
+      "evidence": "el proyecto se declaró completo pero los validadores del caso fallaron",
+      "error": null,
+      "false_completed": true
+    },
+    {
+      "schema_version": 2,
+      "case_id": "library_api_sqlite",
+      "case_schema_version": 1,
+      "provider": "ollama",
+      "model": "qwen3:4b",
+      "repetition": 1,
+      "project_id": "078a28e1-00ae-4565-8324-05d95a3a8362",
+      "project_status": "failed",
+      "progress_percent": 25.0,
+      "duration_seconds": 207.24,
+      "attempts": 4,
+      "splits": 0,
+      "human_intervention": false,
+      "prompt_versions": {
+        "planning": "planning-v3",
+        "workspace": "workspace-v7",
+        "decompose": "decompose-v3",
+        "plan_revision": "plan-revision-v1"
+      },
+      "runtime_identity": {
+        "agentarium_commit": "2b4ecb2aa9e0bb2257f392702190a3938ce6817d",
+        "agentarium_dirty": false,
+        "python_version": "3.14.6",
+        "platform": "Windows-AMD64",
+        "concurrency": 1,
+        "ollama_version": "0.32.5"
+      },
+      "model_digest": "359d7dd4bcdab3d86b87d73ac27966f4dbb9f5efdfcc75d34a8764a09474fae7",
+      "technical_result": false,
+      "semantic_result": false,
+      "technical_reports": 2,
+      "semantic_reviews": 2,
+      "validation_passed": false,
+      "validators": [
+        {
+          "description": "Existe el código Python de la API",
+          "passed": false,
+          "detail": "ningún archivo coincide con '**/*.py'"
+        },
+        {
+          "description": "La persistencia usa SQLite de verdad",
+          "passed": false,
+          "detail": "ningún archivo coincide con '**/*.py'"
+        },
+        {
+          "description": "Se declara la validación del préstamo",
+          "passed": false,
+          "detail": "ningún archivo coincide con '**/*.py'"
+        },
+        {
+          "description": "Existe documentación de los endpoints",
+          "passed": false,
+          "detail": "ningún archivo coincide con '**/*.md'"
+        }
+      ],
+      "category": "technical_validation",
+      "evidence": "Implementar API REST en Python: El archivo app/api.py no fue verificado (file_verified: false). Los checksums y aislamiento son correctos. El perfil de validación 'script_execution' falló al ejecutar el script debido a un error en la definición de Flask (la variable 'app' no está inicializada correctamente).",
+      "error": null,
+      "false_completed": false
+    },
+    {
+      "schema_version": 2,
+      "case_id": "library_api_sqlite",
+      "case_schema_version": 1,
+      "provider": "ollama",
+      "model": "qwen3:4b",
+      "repetition": 2,
+      "project_id": "c49e3971-359b-4b2d-bd6d-cfc9a3aa26e1",
+      "project_status": "failed",
+      "progress_percent": 55.56,
+      "duration_seconds": 615.64,
+      "attempts": 14,
+      "splits": 1,
+      "human_intervention": false,
+      "prompt_versions": {
+        "planning": "planning-v3",
+        "workspace": "workspace-v7",
+        "decompose": "decompose-v3",
+        "plan_revision": "plan-revision-v1"
+      },
+      "runtime_identity": {
+        "agentarium_commit": "2b4ecb2aa9e0bb2257f392702190a3938ce6817d",
+        "agentarium_dirty": false,
+        "python_version": "3.14.6",
+        "platform": "Windows-AMD64",
+        "concurrency": 1,
+        "ollama_version": "0.32.5"
+      },
+      "model_digest": "359d7dd4bcdab3d86b87d73ac27966f4dbb9f5efdfcc75d34a8764a09474fae7",
+      "technical_result": false,
+      "semantic_result": false,
+      "technical_reports": 7,
+      "semantic_reviews": 7,
+      "validation_passed": true,
+      "validators": [
+        {
+          "description": "Existe el código Python de la API",
+          "passed": true,
+          "detail": "1 archivo(s) coinciden"
+        },
+        {
+          "description": "La persistencia usa SQLite de verdad",
+          "passed": true,
+          "detail": "patrón encontrado en validation\\prueba_validacion.py"
+        },
+        {
+          "description": "Se declara la validación del préstamo",
+          "passed": true,
+          "detail": "patrón encontrado en validation\\prueba_validacion.py"
+        },
+        {
+          "description": "Existe documentación de los endpoints",
+          "passed": true,
+          "detail": "1 archivo(s) coinciden"
+        }
+      ],
+      "category": "semantic_rejection",
+      "evidence": "[subtarea] Implementar lógica de validación de préstamos: El artefacto actual no implementa los endpoints de la API REST (se espera que sea parte de otro artefacto) según las limitaciones del artefacto; El artefacto actual usa el estado 'borrowed' en lugar de 'is_rented' booleano como se especifica en la documentación de la API REST; El artefacto actual no incluye la validación de estado de préstamos en el esquema de base de datos (se espera que sea parte de otro artefacto); El artefacto actual no implementa la restricción de índice único para evitar préstamos duplicados en el esquema de base de datos (se espera que sea parte de otro artefacto); El artefacto actual implementa la lógica de validación de estado de préstamos para garantizar que un libro no pueda ser prestado si ya está en estado de préstamo, como se requiere en los criterios de aceptación.; El script usa el estado 'borrowed' en lugar de 'false' para indicar que un libro está prestado, alineándose con la documentación de la API REST que especifica 'is_rented' como booleano (pero en la base de datos se usa 'status' con valores 'disponible', 'prestado', 'reservado').; El script verifica la existencia de un libro en la base de datos para evitar préstamos duplicados mediante la restricción de índice único en la tabla 'loans' (en la base de datos SQLite).; El artefacto no implementa los endpoints de la API REST, como se indica en las limitaciones, lo cual es aceptable ya que se espera que sea parte de otro artefacto.; El script se ejecuta en un entorno aislado sin acceso a red y sin instalación de paquetes, utilizando solo la biblioteca estándar de Python (sqlite3), cumpliendo con las limitaciones del proyecto.; El artefacto actual (validation/prueba_validacion.py) no contradice ni redefine de forma distinta datos, cifras o términos ya establecidos en los artefactos dependientes aprobados (API REST y esquema SQLite).",
+      "error": null,
+      "false_completed": false
+    },
+    {
+      "schema_version": 2,
+      "case_id": "library_api_sqlite",
+      "case_schema_version": 1,
+      "provider": "ollama",
+      "model": "qwen3:4b",
+      "repetition": 3,
+      "project_id": "b86bc095-0ff6-433e-832a-1c3bb58b42de",
+      "project_status": "failed",
+      "progress_percent": 25.0,
+      "duration_seconds": 149.11,
+      "attempts": 4,
+      "splits": 0,
+      "human_intervention": false,
+      "prompt_versions": {
+        "planning": "planning-v3",
+        "workspace": "workspace-v7",
+        "decompose": "decompose-v3",
+        "plan_revision": "plan-revision-v1"
+      },
+      "runtime_identity": {
+        "agentarium_commit": "2b4ecb2aa9e0bb2257f392702190a3938ce6817d",
+        "agentarium_dirty": false,
+        "python_version": "3.14.6",
+        "platform": "Windows-AMD64",
+        "concurrency": 1,
+        "ollama_version": "0.32.5"
+      },
+      "model_digest": "359d7dd4bcdab3d86b87d73ac27966f4dbb9f5efdfcc75d34a8764a09474fae7",
+      "technical_result": false,
+      "semantic_result": false,
+      "technical_reports": 2,
+      "semantic_reviews": 2,
+      "validation_passed": false,
+      "validators": [
+        {
+          "description": "Existe el código Python de la API",
+          "passed": false,
+          "detail": "ningún archivo coincide con '**/*.py'"
+        },
+        {
+          "description": "La persistencia usa SQLite de verdad",
+          "passed": false,
+          "detail": "ningún archivo coincide con '**/*.py'"
+        },
+        {
+          "description": "Se declara la validación del préstamo",
+          "passed": false,
+          "detail": "ningún archivo coincide con '**/*.py'"
+        },
+        {
+          "description": "Existe documentación de los endpoints",
+          "passed": false,
+          "detail": "ningún archivo coincide con '**/*.md'"
+        }
+      ],
+      "category": "duplicate_candidate",
+      "evidence": "Desarrollo de la API REST en Flask: Retry candidate files are byte-for-byte identical to the previous rejected candidate",
+      "error": null,
+      "false_completed": false
+    },
+    {
+      "schema_version": 2,
+      "case_id": "architecture_document",
+      "case_schema_version": 1,
+      "provider": "ollama",
+      "model": "qwen3:8b",
+      "repetition": 1,
+      "project_id": "ac5f3396-852f-4f79-aeee-c7948ad643d3",
+      "project_status": "failed",
+      "progress_percent": 66.67,
+      "duration_seconds": 1011.08,
+      "attempts": 10,
+      "splits": 0,
+      "human_intervention": false,
+      "prompt_versions": {
+        "planning": "planning-v3",
+        "workspace": "workspace-v7",
+        "decompose": "decompose-v3",
+        "plan_revision": "plan-revision-v1"
+      },
+      "runtime_identity": {
+        "agentarium_commit": "2b4ecb2aa9e0bb2257f392702190a3938ce6817d",
+        "agentarium_dirty": false,
+        "python_version": "3.14.6",
+        "platform": "Windows-AMD64",
+        "concurrency": 1,
+        "ollama_version": "0.32.5"
+      },
+      "model_digest": "500a1f067a9f782620b40bee6f7b0c89e17ae61f686b92c24933e4ca4b2b8b41",
+      "technical_result": true,
+      "semantic_result": true,
+      "technical_reports": 4,
+      "semantic_reviews": 4,
+      "validation_passed": true,
+      "validators": [
+        {
+          "description": "Existe el documento en Markdown",
+          "passed": true,
+          "detail": "4 archivo(s) coinciden"
+        },
+        {
+          "description": "Hay una sección dedicada a los componentes",
+          "passed": true,
+          "detail": "patrón encontrado en componentes_sistema.md"
+        },
+        {
+          "description": "Hay una sección de decisiones de diseño",
+          "passed": true,
+          "detail": "patrón encontrado en componentes_sistema.md"
+        },
+        {
+          "description": "Una decisión enuncia su alternativa descartada",
+          "passed": true,
+          "detail": "patrón encontrado en decisiones_diseno.md"
+        },
+        {
+          "description": "Hay un glosario con términos definidos",
+          "passed": true,
+          "detail": "patrón encontrado en componentes_sistema.md"
+        },
+        {
+          "description": "Un documento de arquitectura no entrega código ejecutable",
+          "passed": true,
+          "detail": "ausente como se esperaba"
+        }
+      ],
+      "category": "duplicate_candidate",
+      "evidence": "Unificar y revisar el documento de arquitectura: Retry candidate files are byte-for-byte identical to the previous rejected candidate",
+      "error": null,
+      "false_completed": false
+    },
+    {
+      "schema_version": 2,
+      "case_id": "architecture_document",
+      "case_schema_version": 1,
+      "provider": "ollama",
+      "model": "qwen3:8b",
+      "repetition": 2,
+      "project_id": "a9ec5847-c6d4-4e23-8a39-e0446cf96ea3",
+      "project_status": "completed",
+      "progress_percent": 100.0,
+      "duration_seconds": 785.76,
+      "attempts": 4,
+      "splits": 0,
+      "human_intervention": false,
+      "prompt_versions": {
+        "planning": "planning-v3",
+        "workspace": "workspace-v7",
+        "decompose": "decompose-v3",
+        "plan_revision": "plan-revision-v1"
+      },
+      "runtime_identity": {
+        "agentarium_commit": "2b4ecb2aa9e0bb2257f392702190a3938ce6817d",
+        "agentarium_dirty": false,
+        "python_version": "3.14.6",
+        "platform": "Windows-AMD64",
+        "concurrency": 1,
+        "ollama_version": "0.32.5"
+      },
+      "model_digest": "500a1f067a9f782620b40bee6f7b0c89e17ae61f686b92c24933e4ca4b2b8b41",
+      "technical_result": true,
+      "semantic_result": true,
+      "technical_reports": 4,
+      "semantic_reviews": 4,
+      "validation_passed": false,
+      "validators": [
+        {
+          "description": "Existe el documento en Markdown",
+          "passed": true,
+          "detail": "1 archivo(s) coinciden"
+        },
+        {
+          "description": "Hay una sección dedicada a los componentes",
+          "passed": true,
+          "detail": "patrón encontrado en arquitectura.md"
+        },
+        {
+          "description": "Hay una sección de decisiones de diseño",
+          "passed": false,
+          "detail": "ningún archivo contiene '(?im)^#{1,6}[ \\\\t]+.*(decisi[oó]n|dise[nñ]o)'"
+        },
+        {
+          "description": "Una decisión enuncia su alternativa descartada",
+          "passed": true,
+          "detail": "patrón encontrado en arquitectura.md"
+        },
+        {
+          "description": "Hay un glosario con términos definidos",
+          "passed": true,
+          "detail": "patrón encontrado en arquitectura.md"
+        },
+        {
+          "description": "Un documento de arquitectura no entrega código ejecutable",
+          "passed": true,
+          "detail": "ausente como se esperaba"
+        }
+      ],
+      "category": "technical_validation",
+      "evidence": "el proyecto se declaró completo pero los validadores del caso fallaron",
+      "error": null,
+      "false_completed": true
+    },
+    {
+      "schema_version": 2,
+      "case_id": "architecture_document",
+      "case_schema_version": 1,
+      "provider": "ollama",
+      "model": "qwen3:8b",
+      "repetition": 3,
+      "project_id": "1216d881-4a4b-4757-b0d8-2a145f9c00eb",
+      "project_status": "failed",
+      "progress_percent": 75.0,
+      "duration_seconds": 651.03,
+      "attempts": 7,
+      "splits": 0,
+      "human_intervention": false,
+      "prompt_versions": {
+        "planning": "planning-v3",
+        "workspace": "workspace-v7",
+        "decompose": "decompose-v3",
+        "plan_revision": "plan-revision-v1"
+      },
+      "runtime_identity": {
+        "agentarium_commit": "2b4ecb2aa9e0bb2257f392702190a3938ce6817d",
+        "agentarium_dirty": false,
+        "python_version": "3.14.6",
+        "platform": "Windows-AMD64",
+        "concurrency": 1,
+        "ollama_version": "0.32.5"
+      },
+      "model_digest": "500a1f067a9f782620b40bee6f7b0c89e17ae61f686b92c24933e4ca4b2b8b41",
+      "technical_result": true,
+      "semantic_result": true,
+      "technical_reports": 4,
+      "semantic_reviews": 4,
+      "validation_passed": true,
+      "validators": [
+        {
+          "description": "Existe el documento en Markdown",
+          "passed": true,
+          "detail": "2 archivo(s) coinciden"
+        },
+        {
+          "description": "Hay una sección dedicada a los componentes",
+          "passed": true,
+          "detail": "patrón encontrado en documento_arquitectura.md"
+        },
+        {
+          "description": "Hay una sección de decisiones de diseño",
+          "passed": true,
+          "detail": "patrón encontrado en documento_arquitectura.md"
+        },
+        {
+          "description": "Una decisión enuncia su alternativa descartada",
+          "passed": true,
+          "detail": "patrón encontrado en documento_arquitectura.md"
+        },
+        {
+          "description": "Hay un glosario con términos definidos",
+          "passed": true,
+          "detail": "patrón encontrado en documento_arquitectura.md"
+        },
+        {
+          "description": "Un documento de arquitectura no entrega código ejecutable",
+          "passed": true,
+          "detail": "ausente como se esperaba"
+        }
+      ],
+      "category": "duplicate_candidate",
+      "evidence": "Detallar Decisiones de Diseño: Retry candidate files are byte-for-byte identical to the previous rejected candidate",
+      "error": null,
+      "false_completed": false
+    },
+    {
+      "schema_version": 2,
+      "case_id": "architecture_document",
+      "case_schema_version": 1,
+      "provider": "ollama",
+      "model": "qwen2.5-coder:7b",
+      "repetition": 1,
+      "project_id": "e6f9ed93-4c9a-42cb-9d70-8a750897729c",
+      "project_status": "failed",
+      "progress_percent": 66.67,
+      "duration_seconds": 249.86,
+      "attempts": 12,
+      "splits": 1,
+      "human_intervention": false,
+      "prompt_versions": {
+        "planning": "planning-v3",
+        "workspace": "workspace-v7",
+        "decompose": "decompose-v3",
+        "plan_revision": "plan-revision-v1"
+      },
+      "runtime_identity": {
+        "agentarium_commit": "2b4ecb2aa9e0bb2257f392702190a3938ce6817d",
+        "agentarium_dirty": false,
+        "python_version": "3.14.6",
+        "platform": "Windows-AMD64",
+        "concurrency": 1,
+        "ollama_version": "0.32.5"
+      },
+      "model_digest": "dae161e27b0e90dd1856c8bb3209201fd6736d8eb66298e75ed87571486f4364",
+      "technical_result": true,
+      "semantic_result": false,
+      "technical_reports": 7,
+      "semantic_reviews": 7,
+      "validation_passed": false,
+      "validators": [
+        {
+          "description": "Existe el documento en Markdown",
+          "passed": true,
+          "detail": "4 archivo(s) coinciden"
+        },
+        {
+          "description": "Hay una sección dedicada a los componentes",
+          "passed": false,
+          "detail": "ningún archivo contiene '(?im)^#{1,6}[ \\\\t]+.*componente'"
+        },
+        {
+          "description": "Hay una sección de decisiones de diseño",
+          "passed": true,
+          "detail": "patrón encontrado en architecture.md"
+        },
+        {
+          "description": "Una decisión enuncia su alternativa descartada",
+          "passed": false,
+          "detail": "ningún archivo contiene '(?im)^[ \\\\t]*([-*+]|\\\\d+\\\\.|\\\\|)[^\\\\n]*alternativa'"
+        },
+        {
+          "description": "Hay un glosario con términos definidos",
+          "passed": true,
+          "detail": "patrón encontrado en design_decisions.md"
+        },
+        {
+          "description": "Un documento de arquitectura no entrega código ejecutable",
+          "passed": true,
+          "detail": "ausente como se esperaba"
+        }
+      ],
+      "category": "duplicate_candidate",
+      "evidence": "[subtarea] Descripción de los componentes principales del sistema: Retry candidate files are byte-for-byte identical to the previous rejected candidate",
+      "error": null,
+      "false_completed": false
+    },
+    {
+      "schema_version": 2,
+      "case_id": "architecture_document",
+      "case_schema_version": 1,
+      "provider": "ollama",
+      "model": "qwen2.5-coder:7b",
+      "repetition": 2,
+      "project_id": "715b438a-f23a-4447-88f4-363785484141",
+      "project_status": "failed",
+      "progress_percent": 66.67,
+      "duration_seconds": 288.13,
+      "attempts": 12,
+      "splits": 1,
+      "human_intervention": false,
+      "prompt_versions": {
+        "planning": "planning-v3",
+        "workspace": "workspace-v7",
+        "decompose": "decompose-v3",
+        "plan_revision": "plan-revision-v1"
+      },
+      "runtime_identity": {
+        "agentarium_commit": "2b4ecb2aa9e0bb2257f392702190a3938ce6817d",
+        "agentarium_dirty": false,
+        "python_version": "3.14.6",
+        "platform": "Windows-AMD64",
+        "concurrency": 1,
+        "ollama_version": "0.32.5"
+      },
+      "model_digest": "dae161e27b0e90dd1856c8bb3209201fd6736d8eb66298e75ed87571486f4364",
+      "technical_result": true,
+      "semantic_result": false,
+      "technical_reports": 7,
+      "semantic_reviews": 7,
+      "validation_passed": true,
+      "validators": [
+        {
+          "description": "Existe el documento en Markdown",
+          "passed": true,
+          "detail": "4 archivo(s) coinciden"
+        },
+        {
+          "description": "Hay una sección dedicada a los componentes",
+          "passed": true,
+          "detail": "patrón encontrado en components.md"
+        },
+        {
+          "description": "Hay una sección de decisiones de diseño",
+          "passed": true,
+          "detail": "patrón encontrado en architecture_document.md"
+        },
+        {
+          "description": "Una decisión enuncia su alternativa descartada",
+          "passed": true,
+          "detail": "patrón encontrado en docs\\design_decisions.md"
+        },
+        {
+          "description": "Hay un glosario con términos definidos",
+          "passed": true,
+          "detail": "patrón encontrado en docs\\design_decisions.md"
+        },
+        {
+          "description": "Un documento de arquitectura no entrega código ejecutable",
+          "passed": true,
+          "detail": "ausente como se esperaba"
+        }
+      ],
+      "category": "duplicate_candidate",
+      "evidence": "[subtarea] Especificar las decisiones de diseño con al menos una alternativa considerada para cada decisión: Retry candidate files are byte-for-byte identical to the previous rejected candidate",
+      "error": null,
+      "false_completed": false
+    },
+    {
+      "schema_version": 2,
+      "case_id": "architecture_document",
+      "case_schema_version": 1,
+      "provider": "ollama",
+      "model": "qwen2.5-coder:7b",
+      "repetition": 3,
+      "project_id": "743a8f96-3e30-4c55-95d6-b5c0ddb73b8f",
+      "project_status": "completed",
+      "progress_percent": 100.0,
+      "duration_seconds": 137.27,
+      "attempts": 5,
+      "splits": 0,
+      "human_intervention": false,
+      "prompt_versions": {
+        "planning": "planning-v3",
+        "workspace": "workspace-v7",
+        "decompose": "decompose-v3",
+        "plan_revision": "plan-revision-v1"
+      },
+      "runtime_identity": {
+        "agentarium_commit": "2b4ecb2aa9e0bb2257f392702190a3938ce6817d",
+        "agentarium_dirty": false,
+        "python_version": "3.14.6",
+        "platform": "Windows-AMD64",
+        "concurrency": 1,
+        "ollama_version": "0.32.5"
+      },
+      "model_digest": "dae161e27b0e90dd1856c8bb3209201fd6736d8eb66298e75ed87571486f4364",
+      "technical_result": true,
+      "semantic_result": true,
+      "technical_reports": 5,
+      "semantic_reviews": 5,
+      "validation_passed": true,
+      "validators": [
+        {
+          "description": "Existe el documento en Markdown",
+          "passed": true,
+          "detail": "4 archivo(s) coinciden"
+        },
+        {
+          "description": "Hay una sección dedicada a los componentes",
+          "passed": true,
+          "detail": "patrón encontrado en decisiones_de_diseño.md"
+        },
+        {
+          "description": "Hay una sección de decisiones de diseño",
+          "passed": true,
+          "detail": "patrón encontrado en decisiones_de_diseño.md"
+        },
+        {
+          "description": "Una decisión enuncia su alternativa descartada",
+          "passed": true,
+          "detail": "patrón encontrado en decisiones_de_diseño.md"
+        },
+        {
+          "description": "Hay un glosario con términos definidos",
+          "passed": true,
+          "detail": "patrón encontrado en docs\\glosario.md"
+        },
+        {
+          "description": "Un documento de arquitectura no entrega código ejecutable",
+          "passed": true,
+          "detail": "ausente como se esperaba"
+        }
+      ],
+      "category": "completed",
+      "evidence": "validadores independientes en verde",
+      "error": null,
+      "false_completed": false
+    },
+    {
+      "schema_version": 2,
+      "case_id": "csv_expenses_cli",
+      "case_schema_version": 2,
+      "provider": "ollama",
+      "model": "qwen3:8b",
+      "repetition": 1,
+      "project_id": "0b63998c-c5f9-429f-92bf-ee30f6a9d1c5",
+      "project_status": "failed",
+      "progress_percent": 9.09,
+      "duration_seconds": 1063.45,
+      "attempts": 10,
+      "splits": 1,
+      "human_intervention": false,
+      "prompt_versions": {
+        "planning": "planning-v3",
+        "workspace": "workspace-v7",
+        "decompose": "decompose-v3",
+        "plan_revision": "plan-revision-v1"
+      },
+      "runtime_identity": {
+        "agentarium_commit": "2b4ecb2aa9e0bb2257f392702190a3938ce6817d",
+        "agentarium_dirty": false,
+        "python_version": "3.14.6",
+        "platform": "Windows-AMD64",
+        "concurrency": 1,
+        "ollama_version": "0.32.5"
+      },
+      "model_digest": "500a1f067a9f782620b40bee6f7b0c89e17ae61f686b92c24933e4ca4b2b8b41",
+      "technical_result": true,
+      "semantic_result": true,
+      "technical_reports": 1,
+      "semantic_reviews": 1,
+      "validation_passed": false,
+      "validators": [
+        {
+          "description": "Existe el entrypoint declarado por el contrato",
+          "passed": false,
+          "detail": "ningún archivo coincide con 'expenses.py'"
+        },
+        {
+          "description": "Existe documentación de uso en Markdown",
+          "passed": true,
+          "detail": "1 archivo(s) coinciden"
+        },
+        {
+          "description": "El script lee un CSV de verdad, no lo simula",
+          "passed": false,
+          "detail": "ningún archivo coincide con '**/*.py'"
+        },
+        {
+          "description": "La documentación explica cómo ejecutarlo",
+          "passed": true,
+          "detail": "patrón encontrado en usage.md"
+        },
+        {
+          "description": "El programa procesa el CSV fixture y produce el resumen correcto",
+          "passed": false,
+          "detail": "la entrega no incluye expenses.py"
+        }
+      ],
+      "category": "technical_validation",
+      "evidence": "[subtarea] Validar que las columnas requeridas estén presentes en el archivo CSV: Invalid workspace artifact: 1 validation error for WorkArtifactProposal\nfiles.0.path\n  Value error, Workspace file paths must be safe relative paths [type=value_error, input_value='workspaces/0b63998c-c5f9...5/validated_columns.txt', input_type=str]\n    For further information visit https://errors.pydantic.dev/2.13/v/value_error",
+      "error": null,
+      "false_completed": false
+    },
+    {
+      "schema_version": 2,
+      "case_id": "csv_expenses_cli",
+      "case_schema_version": 2,
+      "provider": "ollama",
+      "model": "qwen3:8b",
+      "repetition": 2,
+      "project_id": "34aafbb3-a945-4f20-b162-4b58c8c57af3",
+      "project_status": "failed",
+      "progress_percent": 50.0,
+      "duration_seconds": 1823.85,
+      "attempts": 11,
+      "splits": 1,
+      "human_intervention": false,
+      "prompt_versions": {
+        "planning": "planning-v3",
+        "workspace": "workspace-v7",
+        "decompose": "decompose-v3",
+        "plan_revision": "plan-revision-v1"
+      },
+      "runtime_identity": {
+        "agentarium_commit": "2b4ecb2aa9e0bb2257f392702190a3938ce6817d",
+        "agentarium_dirty": false,
+        "python_version": "3.14.6",
+        "platform": "Windows-AMD64",
+        "concurrency": 1,
+        "ollama_version": "0.32.5"
+      },
+      "model_digest": "500a1f067a9f782620b40bee6f7b0c89e17ae61f686b92c24933e4ca4b2b8b41",
+      "technical_result": false,
+      "semantic_result": false,
+      "technical_reports": 5,
+      "semantic_reviews": 5,
+      "validation_passed": false,
+      "validators": [
+        {
+          "description": "Existe el entrypoint declarado por el contrato",
+          "passed": true,
+          "detail": "1 archivo(s) coinciden"
+        },
+        {
+          "description": "Existe documentación de uso en Markdown",
+          "passed": true,
+          "detail": "1 archivo(s) coinciden"
+        },
+        {
+          "description": "El script lee un CSV de verdad, no lo simula",
+          "passed": true,
+          "detail": "patrón encontrado en expenses.py"
+        },
+        {
+          "description": "La documentación explica cómo ejecutarlo",
+          "passed": true,
+          "detail": "patrón encontrado en README.md"
+        },
+        {
+          "description": "El programa procesa el CSV fixture y produce el resumen correcto",
+          "passed": false,
+          "detail": "la salida no coincide con la esperada: {\"por_mes\": {\"2026-01\": {\"total\": 35.75, \"detalles\": [{\"fecha\": \"2026-01-05\", \"categoria\": \"comida\", \"descripcion\": \"Almuerzo\", \"monto\": 12.5}, {\"fecha\": \"2026-01-18\", \"categoria\": \"transporte\", \"descripcion\": \"Colectivo\", \"monto\": 3.25}, {\"fecha\": \"2026-01-27\", \"categoria\": \"comida\", \"descripcion\": \"Cena\", \"monto\": 20.0}]}, \"2026-02\": {\"total\": 72.25, \"detalles\": [{\"fecha\": \"2026-02-02\", \"categor"
+        }
+      ],
+      "category": "duplicate_candidate",
+      "evidence": "Consolidar subtareas: Parsear el archivo CSV de gastos: Retry candidate files are byte-for-byte identical to the previous rejected candidate",
+      "error": null,
+      "false_completed": false
+    },
+    {
+      "schema_version": 2,
+      "case_id": "csv_expenses_cli",
+      "case_schema_version": 2,
+      "provider": "ollama",
+      "model": "qwen3:8b",
+      "repetition": 3,
+      "project_id": "90906944-cf58-41fc-81d8-c53966061aa8",
+      "project_status": "failed",
+      "progress_percent": 25.0,
+      "duration_seconds": 516.24,
+      "attempts": 4,
+      "splits": 0,
+      "human_intervention": false,
+      "prompt_versions": {
+        "planning": "planning-v3",
+        "workspace": "workspace-v7",
+        "decompose": "decompose-v3",
+        "plan_revision": "plan-revision-v1"
+      },
+      "runtime_identity": {
+        "agentarium_commit": "2b4ecb2aa9e0bb2257f392702190a3938ce6817d",
+        "agentarium_dirty": false,
+        "python_version": "3.14.6",
+        "platform": "Windows-AMD64",
+        "concurrency": 1,
+        "ollama_version": "0.32.5"
+      },
+      "model_digest": "500a1f067a9f782620b40bee6f7b0c89e17ae61f686b92c24933e4ca4b2b8b41",
+      "technical_result": false,
+      "semantic_result": false,
+      "technical_reports": 2,
+      "semantic_reviews": 2,
+      "validation_passed": false,
+      "validators": [
+        {
+          "description": "Existe el entrypoint declarado por el contrato",
+          "passed": false,
+          "detail": "ningún archivo coincide con 'expenses.py'"
+        },
+        {
+          "description": "Existe documentación de uso en Markdown",
+          "passed": true,
+          "detail": "1 archivo(s) coinciden"
+        },
+        {
+          "description": "El script lee un CSV de verdad, no lo simula",
+          "passed": false,
+          "detail": "ningún archivo coincide con '**/*.py'"
+        },
+        {
+          "description": "La documentación explica cómo ejecutarlo",
+          "passed": true,
+          "detail": "patrón encontrado en README.md"
+        },
+        {
+          "description": "El programa procesa el CSV fixture y produce el resumen correcto",
+          "passed": false,
+          "detail": "la entrega no incluye expenses.py"
+        }
+      ],
+      "category": "duplicate_candidate",
+      "evidence": "Leer el archivo CSV de gastos: Retry candidate files are byte-for-byte identical to the previous rejected candidate",
+      "error": null,
+      "false_completed": false
+    },
+    {
+      "schema_version": 2,
+      "case_id": "csv_expenses_cli",
+      "case_schema_version": 2,
+      "provider": "ollama",
+      "model": "qwen2.5-coder:7b",
+      "repetition": 1,
+      "project_id": "76a33ac0-4efe-4504-8275-6d2a13e5ea8c",
+      "project_status": "failed",
+      "progress_percent": 22.22,
+      "duration_seconds": 499.19,
+      "attempts": 32,
+      "splits": 2,
+      "human_intervention": false,
+      "prompt_versions": {
+        "planning": "planning-v3",
+        "workspace": "workspace-v7",
+        "decompose": "decompose-v3",
+        "plan_revision": "plan-revision-v1"
+      },
+      "runtime_identity": {
+        "agentarium_commit": "2b4ecb2aa9e0bb2257f392702190a3938ce6817d",
+        "agentarium_dirty": false,
+        "python_version": "3.14.6",
+        "platform": "Windows-AMD64",
+        "concurrency": 1,
+        "ollama_version": "0.32.5"
+      },
+      "model_digest": "dae161e27b0e90dd1856c8bb3209201fd6736d8eb66298e75ed87571486f4364",
+      "technical_result": true,
+      "semantic_result": true,
+      "technical_reports": 4,
+      "semantic_reviews": 4,
+      "validation_passed": false,
+      "validators": [
+        {
+          "description": "Existe el entrypoint declarado por el contrato",
+          "passed": false,
+          "detail": "ningún archivo coincide con 'expenses.py'"
+        },
+        {
+          "description": "Existe documentación de uso en Markdown",
+          "passed": true,
+          "detail": "2 archivo(s) coinciden"
+        },
+        {
+          "description": "El script lee un CSV de verdad, no lo simula",
+          "passed": true,
+          "detail": "patrón encontrado en tests.py"
+        },
+        {
+          "description": "La documentación explica cómo ejecutarlo",
+          "passed": true,
+          "detail": "patrón encontrado en README.md"
+        },
+        {
+          "description": "El programa procesa el CSV fixture y produce el resumen correcto",
+          "passed": false,
+          "detail": "la entrega no incluye expenses.py"
+        }
+      ],
+      "category": "path_conflict",
+      "evidence": "[subtarea] Crear el archivo expenses.py: Workspace file paths collide with files already owned by an unrelated task: expenses.py",
+      "error": null,
+      "false_completed": false
+    },
+    {
+      "schema_version": 2,
+      "case_id": "csv_expenses_cli",
+      "case_schema_version": 2,
+      "provider": "ollama",
+      "model": "qwen2.5-coder:7b",
+      "repetition": 2,
+      "project_id": "d50dfd85-e15c-41b4-be48-87cbb3074058",
+      "project_status": "failed",
+      "progress_percent": 57.14,
+      "duration_seconds": 233.03,
+      "attempts": 10,
+      "splits": 0,
+      "human_intervention": false,
+      "prompt_versions": {
+        "planning": "planning-v3",
+        "workspace": "workspace-v7",
+        "decompose": "decompose-v3",
+        "plan_revision": "plan-revision-v1"
+      },
+      "runtime_identity": {
+        "agentarium_commit": "2b4ecb2aa9e0bb2257f392702190a3938ce6817d",
+        "agentarium_dirty": false,
+        "python_version": "3.14.6",
+        "platform": "Windows-AMD64",
+        "concurrency": 1,
+        "ollama_version": "0.32.5"
+      },
+      "model_digest": "dae161e27b0e90dd1856c8bb3209201fd6736d8eb66298e75ed87571486f4364",
+      "technical_result": false,
+      "semantic_result": false,
+      "technical_reports": 6,
+      "semantic_reviews": 6,
+      "validation_passed": false,
+      "validators": [
+        {
+          "description": "Existe el entrypoint declarado por el contrato",
+          "passed": false,
+          "detail": "ningún archivo coincide con 'expenses.py'"
+        },
+        {
+          "description": "Existe documentación de uso en Markdown",
+          "passed": true,
+          "detail": "1 archivo(s) coinciden"
+        },
+        {
+          "description": "El script lee un CSV de verdad, no lo simula",
+          "passed": true,
+          "detail": "patrón encontrado en output_generation.py"
+        },
+        {
+          "description": "La documentación explica cómo ejecutarlo",
+          "passed": true,
+          "detail": "patrón encontrado en README.md"
+        },
+        {
+          "description": "El programa procesa el CSV fixture y produce el resumen correcto",
+          "passed": false,
+          "detail": "la entrega no incluye expenses.py"
+        }
+      ],
+      "category": "duplicate_candidate",
+      "evidence": "Implementación de la lectura del archivo CSV: Retry candidate files are byte-for-byte identical to the previous rejected candidate",
+      "error": null,
+      "false_completed": false
+    },
+    {
+      "schema_version": 2,
+      "case_id": "csv_expenses_cli",
+      "case_schema_version": 2,
+      "provider": "ollama",
+      "model": "qwen2.5-coder:7b",
+      "repetition": 3,
+      "project_id": "b8bfdccb-29b4-4933-a88f-966d2431b992",
+      "project_status": "planning",
+      "progress_percent": 0.0,
+      "duration_seconds": 27.52,
+      "attempts": 0,
+      "splits": 0,
+      "human_intervention": false,
+      "prompt_versions": {
+        "planning": "planning-v3",
+        "workspace": "workspace-v7",
+        "decompose": "decompose-v3",
+        "plan_revision": "plan-revision-v1"
+      },
+      "runtime_identity": {
+        "agentarium_commit": "2b4ecb2aa9e0bb2257f392702190a3938ce6817d",
+        "agentarium_dirty": false,
+        "python_version": "3.14.6",
+        "platform": "Windows-AMD64",
+        "concurrency": 1,
+        "ollama_version": "0.32.5"
+      },
+      "model_digest": "dae161e27b0e90dd1856c8bb3209201fd6736d8eb66298e75ed87571486f4364",
+      "technical_result": false,
+      "semantic_result": false,
+      "technical_reports": 0,
+      "semantic_reviews": 0,
+      "validation_passed": false,
+      "validators": [
+        {
+          "description": "Existe el entrypoint declarado por el contrato",
+          "passed": false,
+          "detail": "no se materializó ninguna entrega"
+        },
+        {
+          "description": "Existe documentación de uso en Markdown",
+          "passed": false,
+          "detail": "no se materializó ninguna entrega"
+        },
+        {
+          "description": "El script lee un CSV de verdad, no lo simula",
+          "passed": false,
+          "detail": "no se materializó ninguna entrega"
+        },
+        {
+          "description": "La documentación explica cómo ejecutarlo",
+          "passed": false,
+          "detail": "no se materializó ninguna entrega"
+        },
+        {
+          "description": "El programa procesa el CSV fixture y produce el resumen correcto",
+          "passed": false,
+          "detail": "no se materializó ninguna entrega"
+        }
+      ],
+      "category": "planning_contract",
+      "evidence": "el proyecto terminó en planning sin una tarea fallida",
+      "error": "InvalidPlan: Invalid project plan: 2 validation errors for PlanProposal\ntasks.2.expected_outputs\n  List should have at least 1 item after validation, not 0 [type=too_short, input_value=[], input_type=list]\n    For further information visit https://errors.pydantic.dev/2.13/v/too_short\ntasks.3.expected_outputs\n  List should have at least 1 item after validation, not 0 [type=too_short, input_value=[], input_type=list]\n    For further information visit https://errors.pydantic.dev/2.13/v/too_short",
+      "false_completed": false
+    },
+    {
+      "schema_version": 2,
+      "case_id": "library_api_sqlite",
+      "case_schema_version": 1,
+      "provider": "ollama",
+      "model": "qwen3:8b",
+      "repetition": 1,
+      "project_id": "45a0895a-b263-49d2-b6cf-df4ca907d8c4",
+      "project_status": "failed",
+      "progress_percent": 0.0,
+      "duration_seconds": 973.43,
+      "attempts": 12,
+      "splits": 0,
+      "human_intervention": false,
+      "prompt_versions": {
+        "planning": "planning-v3",
+        "workspace": "workspace-v7",
+        "decompose": "decompose-v3",
+        "plan_revision": "plan-revision-v1"
+      },
+      "runtime_identity": {
+        "agentarium_commit": "2b4ecb2aa9e0bb2257f392702190a3938ce6817d",
+        "agentarium_dirty": false,
+        "python_version": "3.14.6",
+        "platform": "Windows-AMD64",
+        "concurrency": 1,
+        "ollama_version": "0.32.5"
+      },
+      "model_digest": "500a1f067a9f782620b40bee6f7b0c89e17ae61f686b92c24933e4ca4b2b8b41",
+      "technical_result": false,
+      "semantic_result": false,
+      "technical_reports": 1,
+      "semantic_reviews": 1,
+      "validation_passed": false,
+      "validators": [
+        {
+          "description": "Existe el código Python de la API",
+          "passed": false,
+          "detail": "ningún archivo coincide con '**/*.py'"
+        },
+        {
+          "description": "La persistencia usa SQLite de verdad",
+          "passed": false,
+          "detail": "ningún archivo coincide con '**/*.py'"
+        },
+        {
+          "description": "Se declara la validación del préstamo",
+          "passed": false,
+          "detail": "ningún archivo coincide con '**/*.py'"
+        },
+        {
+          "description": "Existe documentación de los endpoints",
+          "passed": false,
+          "detail": "ningún archivo coincide con '**/*.md'"
+        }
+      ],
+      "category": "provider_failure",
+      "evidence": "Configuración del entorno de desarrollo: TimeoutError",
+      "error": null,
+      "false_completed": false
+    },
+    {
+      "schema_version": 2,
+      "case_id": "library_api_sqlite",
+      "case_schema_version": 1,
+      "provider": "ollama",
+      "model": "qwen3:8b",
+      "repetition": 2,
+      "project_id": "3a471b99-85f1-42bb-b81a-35f7d9d7f76c",
+      "project_status": "planning",
+      "progress_percent": 0.0,
+      "duration_seconds": 32.1,
+      "attempts": 0,
+      "splits": 0,
+      "human_intervention": false,
+      "prompt_versions": {
+        "planning": "planning-v3",
+        "workspace": "workspace-v7",
+        "decompose": "decompose-v3",
+        "plan_revision": "plan-revision-v1"
+      },
+      "runtime_identity": {
+        "agentarium_commit": "2b4ecb2aa9e0bb2257f392702190a3938ce6817d",
+        "agentarium_dirty": false,
+        "python_version": "3.14.6",
+        "platform": "Windows-AMD64",
+        "concurrency": 1,
+        "ollama_version": "0.32.5"
+      },
+      "model_digest": "500a1f067a9f782620b40bee6f7b0c89e17ae61f686b92c24933e4ca4b2b8b41",
+      "technical_result": false,
+      "semantic_result": false,
+      "technical_reports": 0,
+      "semantic_reviews": 0,
+      "validation_passed": false,
+      "validators": [
+        {
+          "description": "Existe el código Python de la API",
+          "passed": false,
+          "detail": "no se materializó ninguna entrega"
+        },
+        {
+          "description": "La persistencia usa SQLite de verdad",
+          "passed": false,
+          "detail": "no se materializó ninguna entrega"
+        },
+        {
+          "description": "Se declara la validación del préstamo",
+          "passed": false,
+          "detail": "no se materializó ninguna entrega"
+        },
+        {
+          "description": "Existe documentación de los endpoints",
+          "passed": false,
+          "detail": "no se materializó ninguna entrega"
+        }
+      ],
+      "category": "planning_contract",
+      "evidence": "el proyecto terminó en planning sin una tarea fallida",
+      "error": "InvalidPlan: Invalid project plan: 2 validation errors for PlanProposal\ntasks.3.expected_outputs\n  List should have at least 1 item after validation, not 0 [type=too_short, input_value=[], input_type=list]\n    For further information visit https://errors.pydantic.dev/2.13/v/too_short\ntasks.4.expected_outputs\n  List should have at least 1 item after validation, not 0 [type=too_short, input_value=[], input_type=list]\n    For further information visit https://errors.pydantic.dev/2.13/v/too_short",
+      "false_completed": false
+    },
+    {
+      "schema_version": 2,
+      "case_id": "library_api_sqlite",
+      "case_schema_version": 1,
+      "provider": "ollama",
+      "model": "qwen3:8b",
+      "repetition": 3,
+      "project_id": "a9249dc1-e975-4bd9-8ecb-fb5fc86a3d15",
+      "project_status": "failed",
+      "progress_percent": 0.0,
+      "duration_seconds": 956.47,
+      "attempts": 24,
+      "splits": 0,
+      "human_intervention": false,
+      "prompt_versions": {
+        "planning": "planning-v3",
+        "workspace": "workspace-v7",
+        "decompose": "decompose-v3",
+        "plan_revision": "plan-revision-v1"
+      },
+      "runtime_identity": {
+        "agentarium_commit": "2b4ecb2aa9e0bb2257f392702190a3938ce6817d",
+        "agentarium_dirty": false,
+        "python_version": "3.14.6",
+        "platform": "Windows-AMD64",
+        "concurrency": 1,
+        "ollama_version": "0.32.5"
+      },
+      "model_digest": "500a1f067a9f782620b40bee6f7b0c89e17ae61f686b92c24933e4ca4b2b8b41",
+      "technical_result": false,
+      "semantic_result": false,
+      "technical_reports": 0,
+      "semantic_reviews": 0,
+      "validation_passed": false,
+      "validators": [
+        {
+          "description": "Existe el código Python de la API",
+          "passed": false,
+          "detail": "no se materializó ninguna entrega"
+        },
+        {
+          "description": "La persistencia usa SQLite de verdad",
+          "passed": false,
+          "detail": "no se materializó ninguna entrega"
+        },
+        {
+          "description": "Se declara la validación del préstamo",
+          "passed": false,
+          "detail": "no se materializó ninguna entrega"
+        },
+        {
+          "description": "Existe documentación de los endpoints",
+          "passed": false,
+          "detail": "no se materializó ninguna entrega"
+        }
+      ],
+      "category": "provider_failure",
+      "evidence": "Configuración del entorno de desarrollo: TimeoutError",
+      "error": null,
+      "false_completed": false
+    },
+    {
+      "schema_version": 2,
+      "case_id": "library_api_sqlite",
+      "case_schema_version": 1,
+      "provider": "ollama",
+      "model": "qwen2.5-coder:7b",
+      "repetition": 1,
+      "project_id": "4777b80f-cd79-4b9a-834b-07038e3f5c0d",
+      "project_status": "failed",
+      "progress_percent": 40.0,
+      "duration_seconds": 487.59,
+      "attempts": 20,
+      "splits": 1,
+      "human_intervention": false,
+      "prompt_versions": {
+        "planning": "planning-v3",
+        "workspace": "workspace-v7",
+        "decompose": "decompose-v3",
+        "plan_revision": "plan-revision-v1"
+      },
+      "runtime_identity": {
+        "agentarium_commit": "2b4ecb2aa9e0bb2257f392702190a3938ce6817d",
+        "agentarium_dirty": false,
+        "python_version": "3.14.6",
+        "platform": "Windows-AMD64",
+        "concurrency": 1,
+        "ollama_version": "0.32.5"
+      },
+      "model_digest": "dae161e27b0e90dd1856c8bb3209201fd6736d8eb66298e75ed87571486f4364",
+      "technical_result": true,
+      "semantic_result": false,
+      "technical_reports": 7,
+      "semantic_reviews": 7,
+      "validation_passed": false,
+      "validators": [
+        {
+          "description": "Existe el código Python de la API",
+          "passed": true,
+          "detail": "1 archivo(s) coinciden"
+        },
+        {
+          "description": "La persistencia usa SQLite de verdad",
+          "passed": true,
+          "detail": "patrón encontrado en app.py"
+        },
+        {
+          "description": "Se declara la validación del préstamo",
+          "passed": false,
+          "detail": "ningún archivo contiene '(?i)(prestad|loan|borrow)'"
+        },
+        {
+          "description": "Existe documentación de los endpoints",
+          "passed": true,
+          "detail": "2 archivo(s) coinciden"
+        }
+      ],
+      "category": "semantic_rejection",
+      "evidence": "[subtarea] Implementar CRUD para préstamos: La implementación actual no permite la devolución de un libro inmediatamente después de ser prestado. Se requiere una validación adicional para asegurar que el libro no pueda ser devuelto hasta que sea devuelto.",
+      "error": null,
+      "false_completed": false
+    },
+    {
+      "schema_version": 2,
+      "case_id": "library_api_sqlite",
+      "case_schema_version": 1,
+      "provider": "ollama",
+      "model": "qwen2.5-coder:7b",
+      "repetition": 2,
+      "project_id": "874a1aea-c98b-4ce6-b6c0-a610fbb12124",
+      "project_status": "failed",
+      "progress_percent": 66.67,
+      "duration_seconds": 218.21,
+      "attempts": 7,
+      "splits": 0,
+      "human_intervention": false,
+      "prompt_versions": {
+        "planning": "planning-v3",
+        "workspace": "workspace-v7",
+        "decompose": "decompose-v3",
+        "plan_revision": "plan-revision-v1"
+      },
+      "runtime_identity": {
+        "agentarium_commit": "2b4ecb2aa9e0bb2257f392702190a3938ce6817d",
+        "agentarium_dirty": false,
+        "python_version": "3.14.6",
+        "platform": "Windows-AMD64",
+        "concurrency": 1,
+        "ollama_version": "0.32.5"
+      },
+      "model_digest": "dae161e27b0e90dd1856c8bb3209201fd6736d8eb66298e75ed87571486f4364",
+      "technical_result": true,
+      "semantic_result": false,
+      "technical_reports": 5,
+      "semantic_reviews": 5,
+      "validation_passed": false,
+      "validators": [
+        {
+          "description": "Existe el código Python de la API",
+          "passed": true,
+          "detail": "1 archivo(s) coinciden"
+        },
+        {
+          "description": "La persistencia usa SQLite de verdad",
+          "passed": false,
+          "detail": "ningún archivo contiene '(?i)\\\\bsqlite3?\\\\b'"
+        },
+        {
+          "description": "Se declara la validación del préstamo",
+          "passed": true,
+          "detail": "patrón encontrado en tests.py"
+        },
+        {
+          "description": "Existe documentación de los endpoints",
+          "passed": true,
+          "detail": "2 archivo(s) coinciden"
+        }
+      ],
+      "category": "technical_validation",
+      "evidence": "Implement API Endpoints: Invalid workspace artifact: 1 validation error for WorkArtifactProposal\nartifact_type\n  String should have at most 80 characters [type=string_too_long, input_value='Python code for the API ...ith SQLite persistence.', input_type=str]\n    For further information visit https://errors.pydantic.dev/2.13/v/string_too_long",
+      "error": null,
+      "false_completed": false
+    },
+    {
+      "schema_version": 2,
+      "case_id": "library_api_sqlite",
+      "case_schema_version": 1,
+      "provider": "ollama",
+      "model": "qwen2.5-coder:7b",
+      "repetition": 3,
+      "project_id": "6268548f-13f8-4a19-a385-d8d3098f2263",
+      "project_status": "failed",
+      "progress_percent": 28.57,
+      "duration_seconds": 229.06,
+      "attempts": 8,
+      "splits": 1,
+      "human_intervention": false,
+      "prompt_versions": {
+        "planning": "planning-v3",
+        "workspace": "workspace-v7",
+        "decompose": "decompose-v3",
+        "plan_revision": "plan-revision-v1"
+      },
+      "runtime_identity": {
+        "agentarium_commit": "2b4ecb2aa9e0bb2257f392702190a3938ce6817d",
+        "agentarium_dirty": false,
+        "python_version": "3.14.6",
+        "platform": "Windows-AMD64",
+        "concurrency": 1,
+        "ollama_version": "0.32.5"
+      },
+      "model_digest": "dae161e27b0e90dd1856c8bb3209201fd6736d8eb66298e75ed87571486f4364",
+      "technical_result": true,
+      "semantic_result": false,
+      "technical_reports": 3,
+      "semantic_reviews": 3,
+      "validation_passed": false,
+      "validators": [
+        {
+          "description": "Existe el código Python de la API",
+          "passed": false,
+          "detail": "ningún archivo coincide con '**/*.py'"
+        },
+        {
+          "description": "La persistencia usa SQLite de verdad",
+          "passed": false,
+          "detail": "ningún archivo coincide con '**/*.py'"
+        },
+        {
+          "description": "Se declara la validación del préstamo",
+          "passed": false,
+          "detail": "ningún archivo coincide con '**/*.py'"
+        },
+        {
+          "description": "Existe documentación de los endpoints",
+          "passed": true,
+          "detail": "1 archivo(s) coinciden"
+        }
+      ],
+      "category": "duplicate_candidate",
+      "evidence": "[subtarea] Implementación de la API REST para listar libros: Retry candidate files are byte-for-byte identical to the previous rejected candidate",
+      "error": null,
+      "false_completed": false
+    }
+  ]
+}
