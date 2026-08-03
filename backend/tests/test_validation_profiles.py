@@ -1064,6 +1064,56 @@ async def test_script_execution_contract_fails_when_declared_output_is_missing(
 
 
 @pytest.mark.asyncio
+async def test_script_execution_contract_ignores_a_preexisting_produces_file(
+    tmp_path: Path,
+) -> None:
+    workspace_root = tmp_path / "workspaces"
+    materializer = WorkspaceMaterializer(workspace_root, _policy_path())
+    validator = ValidationProfileExecutor(workspace_root, _policy_path())
+    files = materializer.materialize(
+        "project",
+        "task",
+        1,
+        [
+            WorkspaceFileProposal(
+                path="tool.py",
+                content="# no hace nada\n",
+                purpose="Script vacio que no produce nada por si mismo",
+            ),
+            WorkspaceFileProposal(
+                path="result.json",
+                content='{"ya estaba aqui": true}',
+                # Simulates the file being materialized alongside the
+                # script, or left over from a previous attempt in the same
+                # worktree — not something tool.py itself created.
+                purpose="Artefacto preexistente, no generado por el script",
+            ),
+        ],
+    )
+
+    results = await validator.validate(
+        "project",
+        files,
+        execution_contract=ScriptExecutionContract(
+            entrypoint="tool.py", produces="result.json"
+        ),
+    )
+    script_results = [
+        result
+        for result in results
+        if result.profile is ValidationProfile.SCRIPT_EXECUTION
+    ]
+
+    # Without erasing the preexisting file before running, this would pass
+    # even though the script did nothing — exactly the false positive this
+    # guards against.
+    assert any(
+        not result.passed and "no aparece" in result.result.stderr
+        for result in script_results
+    )
+
+
+@pytest.mark.asyncio
 async def test_script_execution_contract_fails_when_entrypoint_is_missing(
     tmp_path: Path,
 ) -> None:
@@ -1137,7 +1187,7 @@ async def test_script_execution_contract_fails_when_no_python_files_exist(
 
 
 @pytest.mark.asyncio
-async def test_script_execution_contract_only_affects_the_matched_entrypoint(
+async def test_script_execution_contract_only_runs_the_declared_entrypoint(
     tmp_path: Path,
 ) -> None:
     workspace_root = tmp_path / "workspaces"
@@ -1159,8 +1209,11 @@ async def test_script_execution_contract_only_affects_the_matched_entrypoint(
             ),
             WorkspaceFileProposal(
                 path="helper.py",
-                content="print('ayudante')\n",
-                purpose="Script auxiliar sin contrato propio",
+                # Deliberately fails if executed standalone, even though it
+                # would be a perfectly valid module to import. Proves the
+                # contract is the sole authority: this must never run.
+                content="raise RuntimeError('helper.py no deberia ejecutarse solo')\n",
+                purpose="Modulo auxiliar sin contrato propio",
             ),
         ],
     )
@@ -1178,12 +1231,11 @@ async def test_script_execution_contract_only_affects_the_matched_entrypoint(
         if result.profile is ValidationProfile.SCRIPT_EXECUTION
     }
 
+    # Only the declared entrypoint was executed — no SCRIPT_EXECUTION result
+    # exists for helper.py at all, blind or otherwise.
+    assert script_results.keys() == {("tool.py",)}
     assert script_results[("tool.py",)].passed
     assert script_results[("tool.py",)].result.command[-1] == "valor"
-    # The other .py file keeps running blind, exactly like before this
-    # contract existed.
-    assert script_results[("helper.py",)].passed
-    assert script_results[("helper.py",)].result.command[-1] == "helper.py"
 
 
 @pytest.mark.asyncio

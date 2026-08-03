@@ -239,9 +239,13 @@ class ValidationProfileExecutor:
         project_root: Path,
     ) -> list[ValidationProfileResult]:
         """Invoke the entrypoint a work item declared, with its real args,
-        instead of running every `.py` file blind (ADR 0027). Only the
-        matched entrypoint is affected — every other delivered `.py` file
-        keeps running exactly as it does with no contract at all."""
+        instead of running every `.py` file blind (ADR 0027). A declared
+        contract is the sole authority once present: only its own entrypoint
+        gets executed. Every other delivered `.py` file already gets
+        `PYTHON_SYNTAX` (unconditional, checked earlier) but is no longer
+        also run blind as `SCRIPT_EXECUTION` — a helper module perfectly
+        valid when imported can be invalid to run standalone, so doing that
+        would reject good auxiliary code, not validate it."""
         matched_target = next(
             (
                 target
@@ -275,6 +279,15 @@ class ValidationProfileExecutor:
             ]
 
         contract_cwd = project_root / matched_target.parent
+        if contract.produces:
+            # The delivery must not be credited for an artifact that was
+            # already lying around — materialized alongside the script, or
+            # left over from a previous attempt in the same worktree. Same
+            # discipline as `benchmarks/functional.py::_prepare_run`
+            # ("a delivery that ships the answer must not be credited for
+            # it"). Erasing it first means the check below only passes if
+            # this run actually (re)created it.
+            (contract_cwd / contract.produces).unlink(missing_ok=True)
         results = [
             await self._execute(
                 ValidationProfile.SCRIPT_EXECUTION,
@@ -305,17 +318,6 @@ class ValidationProfileExecutor:
                         return_code=1,
                         timed_out=False,
                     ),
-                )
-            )
-        for script_target in script_targets:
-            if script_target == matched_target:
-                continue
-            results.append(
-                await self._execute(
-                    ValidationProfile.SCRIPT_EXECUTION,
-                    (script_target.as_posix(),),
-                    [sys.executable, script_target.name],
-                    project_root / script_target.parent,
                 )
             )
         return results

@@ -84,12 +84,19 @@ ambas sería una trampa). Con contrato presente:
   completo con `entrypoint` declarado. Sin coincidencia (incluye el caso de
   cero archivos `.py` entregados) → falla de inmediato nombrando el
   entrypoint declarado, nunca cae en silencio al modo ciego.
-- Con coincidencia, se invoca con los `args` declarados, en el mismo
-  directorio del script (`cwd = project_root / entrypoint.parent`) — el
-  mismo criterio de `cwd` que ya usa el modo ciego. Diverge a propósito de
+- Si hay `produces` declarado, se lo borra primero del `cwd` de la corrida
+  (`cwd = project_root / entrypoint.parent`) antes de ejecutar — mismo
+  principio que `benchmarks/functional.py::_prepare_run` ("una entrega no
+  puede llevarse el crédito por un artefacto que ya traía puesto"). Sin
+  este paso, un `produces` que ya viniera materializado junto al script (o
+  que hubiera quedado de un intento anterior en el mismo worktree) haría
+  pasar a un script que no hace nada — exactamente el falso positivo que
+  esta compuerta existe para cerrar.
+- Con coincidencia, se invoca con los `args` declarados, en ese mismo `cwd`
+  — el mismo criterio que ya usa el modo ciego. Diverge a propósito de
   `FunctionalCheck`, que usa `cwd=run_root` (la raíz de la entrega): acá se
-  prioriza consistencia con los demás `.py` de la misma entrega, que siguen
-  corriendo en modo ciego con ese mismo criterio.
+  prioriza consistencia con el criterio de `cwd` que el resto del perfil ya
+  usa.
 - Si la ejecución pasa (código 0 y sin timeout) y hay `produces` declarado,
   se verifica sólo la **existencia** del archivo relativo a ese mismo
   `cwd` — no se compara contenido ni se exige JSON. Es una versión
@@ -97,10 +104,15 @@ ambas sería una trampa). Con contrato presente:
   oculto para un proyecto real de usuario, mismo motivo por el que ADR 0016
   ya dejó fuera de alcance comparar salida real contra artefactos de otra
   tarea del mismo DAG.
-- Cualquier otro `.py` entregado que no coincide con el entrypoint sigue
-  corriendo en modo ciego exactamente como hoy — el cambio es aditivo, no
-  reemplaza el perfil completo.
-- Sin contrato, cero cambios de comportamiento.
+- **El contrato es la única autoridad una vez presente:** ningún otro `.py`
+  entregado se ejecuta como `SCRIPT_EXECUTION`, sólo el entrypoint
+  declarado. Los demás siguen recibiendo `PYTHON_SYNTAX` (incondicional, ya
+  corría antes de esto), pero no se los corre a ciegas como antes —
+  ejecutar un módulo auxiliar perfectamente válido para importar, pero no
+  pensado para correr solo, lo rechazaría sin razón. Distinto de la primera
+  versión de este diseño, que sí los corría — corregido antes de mergear.
+- Sin contrato, cero cambios de comportamiento: los demás `.py` sin
+  contrato propio siguen en modo ciego exactamente como antes de este ADR.
 
 **Deliberadamente no se toca** `planning/contracts.py`
 (`TaskProposal`/`SubtaskProposal`): agregar `execution_contract` ahí como
@@ -142,4 +154,11 @@ contexto de reintento válido para fallos ordinarios del modo ciego.
   produce el archivo declarado con datos incorrectos sigue sin ser
   detectado por esta compuerta. Ese es el mismo límite que ADR 0016 ya
   documentó para la comparación de salida entre tareas del mismo DAG, no
-  uno nuevo.
+  uno nuevo. Lo que sí queda cerrado es el caso más simple: un artefacto
+  que ya estaba ahí sin que el script lo haya tocado nunca cuenta, porque
+  se borra antes de cada corrida.
+- Un módulo `.py` que un work item entrega como apoyo del entrypoint
+  declarado (importado, no pensado para correr solo) ya no puede fallar
+  `SCRIPT_EXECUTION` por ejecutarse fuera de contexto — sólo se ejecuta lo
+  que el contrato nombra. Sigue recibiendo `PYTHON_SYNTAX`, así que un
+  error de sintaxis real en él se sigue detectando.
