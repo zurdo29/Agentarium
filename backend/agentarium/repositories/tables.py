@@ -67,6 +67,9 @@ class WorkItemRow(Base):
     shared_component: Mapped[str | None] = mapped_column(String(120), nullable=True)
     output_strategy: Mapped[str] = mapped_column(String(20), default="exclusive")
     split_depth: Mapped[int] = mapped_column(Integer, default=0)
+    execution_contract_json: Mapped[dict[str, Any] | None] = mapped_column(
+        JSON, nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 

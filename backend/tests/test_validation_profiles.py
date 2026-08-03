@@ -2,6 +2,7 @@ from pathlib import Path
 
 import pytest
 from agentarium.config.settings import project_root
+from agentarium.domain.models import ScriptExecutionContract
 from agentarium.execution import (
     ValidationProfile,
     ValidationProfileExecutor,
@@ -972,3 +973,296 @@ async def test_script_execution_profile_absent_without_execution_signals(
     assert not any(
         result.profile is ValidationProfile.SCRIPT_EXECUTION for result in results
     )
+
+
+@pytest.mark.asyncio
+async def test_script_execution_contract_uses_declared_args(tmp_path: Path) -> None:
+    workspace_root = tmp_path / "workspaces"
+    materializer = WorkspaceMaterializer(workspace_root, _policy_path())
+    validator = ValidationProfileExecutor(workspace_root, _policy_path())
+    files = materializer.materialize(
+        "project",
+        "task",
+        1,
+        [
+            WorkspaceFileProposal(
+                path="tool.py",
+                content=(
+                    "import sys\n"
+                    "if len(sys.argv) < 2:\n"
+                    "    raise SystemExit('falta el argumento de entrada')\n"
+                    "with open('output.txt', 'w', encoding='utf-8') as handle:\n"
+                    "    handle.write(sys.argv[1])\n"
+                ),
+                purpose="Herramienta que exige un argumento real",
+            ),
+        ],
+    )
+
+    results = await validator.validate(
+        "project",
+        files,
+        execution_contract=ScriptExecutionContract(entrypoint="tool.py", args=["hola"]),
+    )
+    script_result = next(
+        result
+        for result in results
+        if result.profile is ValidationProfile.SCRIPT_EXECUTION
+    )
+
+    assert script_result.passed, script_result.result.stderr
+
+
+@pytest.mark.asyncio
+async def test_script_execution_contract_fails_when_declared_output_is_missing(
+    tmp_path: Path,
+) -> None:
+    workspace_root = tmp_path / "workspaces"
+    materializer = WorkspaceMaterializer(workspace_root, _policy_path())
+    validator = ValidationProfileExecutor(workspace_root, _policy_path())
+    files = materializer.materialize(
+        "project",
+        "task",
+        1,
+        [
+            WorkspaceFileProposal(
+                path="tool.py",
+                content=(
+                    "try:\n"
+                    "    raise ValueError('deliberate')\n"
+                    "except Exception as error:\n"
+                    "    print(error)\n"
+                ),
+                purpose="Script que traga la excepcion sin sys.exit",
+            ),
+        ],
+    )
+
+    results = await validator.validate(
+        "project",
+        files,
+        execution_contract=ScriptExecutionContract(
+            entrypoint="tool.py", produces="result.json"
+        ),
+    )
+    script_results = [
+        result
+        for result in results
+        if result.profile is ValidationProfile.SCRIPT_EXECUTION
+    ]
+
+    # The raw execution "succeeds" (return code 0, exception swallowed)...
+    assert any(
+        result.passed and result.result.return_code == 0 for result in script_results
+    )
+    # ...but the profile still fails overall because the declared output
+    # never showed up, which is exactly the gap this contract closes.
+    assert any(
+        not result.passed and "no aparece" in result.result.stderr
+        for result in script_results
+    )
+
+
+@pytest.mark.asyncio
+async def test_script_execution_contract_fails_when_entrypoint_is_missing(
+    tmp_path: Path,
+) -> None:
+    workspace_root = tmp_path / "workspaces"
+    materializer = WorkspaceMaterializer(workspace_root, _policy_path())
+    validator = ValidationProfileExecutor(workspace_root, _policy_path())
+    files = materializer.materialize(
+        "project",
+        "task",
+        1,
+        [
+            WorkspaceFileProposal(
+                path="other.py",
+                content="print('hola')\n",
+                purpose="Script que no es el entrypoint declarado",
+            ),
+        ],
+    )
+
+    results = await validator.validate(
+        "project",
+        files,
+        execution_contract=ScriptExecutionContract(entrypoint="tool.py"),
+    )
+    script_results = [
+        result
+        for result in results
+        if result.profile is ValidationProfile.SCRIPT_EXECUTION
+    ]
+
+    # No silent fall back to blind mode for the file that IS there.
+    assert len(script_results) == 1
+    assert not script_results[0].passed
+    assert "tool.py" in script_results[0].result.stderr
+    assert "no lo incluye" in script_results[0].result.stderr
+
+
+@pytest.mark.asyncio
+async def test_script_execution_contract_fails_when_no_python_files_exist(
+    tmp_path: Path,
+) -> None:
+    workspace_root = tmp_path / "workspaces"
+    materializer = WorkspaceMaterializer(workspace_root, _policy_path())
+    validator = ValidationProfileExecutor(workspace_root, _policy_path())
+    files = materializer.materialize(
+        "project",
+        "task",
+        1,
+        [
+            WorkspaceFileProposal(
+                path="README.md",
+                content="# Herramienta\nEjecuta con `python tool.py`.",
+                purpose="Documentacion sin fuente",
+            ),
+        ],
+    )
+
+    results = await validator.validate(
+        "project",
+        files,
+        execution_contract=ScriptExecutionContract(entrypoint="tool.py"),
+    )
+    script_result = next(
+        result
+        for result in results
+        if result.profile is ValidationProfile.SCRIPT_EXECUTION
+    )
+
+    assert not script_result.passed
+    assert "tool.py" in script_result.result.stderr
+
+
+@pytest.mark.asyncio
+async def test_script_execution_contract_only_affects_the_matched_entrypoint(
+    tmp_path: Path,
+) -> None:
+    workspace_root = tmp_path / "workspaces"
+    materializer = WorkspaceMaterializer(workspace_root, _policy_path())
+    validator = ValidationProfileExecutor(workspace_root, _policy_path())
+    files = materializer.materialize(
+        "project",
+        "task",
+        1,
+        [
+            WorkspaceFileProposal(
+                path="tool.py",
+                content=(
+                    "import sys\n"
+                    "if len(sys.argv) < 2:\n"
+                    "    raise SystemExit('falta argumento')\n"
+                ),
+                purpose="Entrypoint declarado",
+            ),
+            WorkspaceFileProposal(
+                path="helper.py",
+                content="print('ayudante')\n",
+                purpose="Script auxiliar sin contrato propio",
+            ),
+        ],
+    )
+
+    results = await validator.validate(
+        "project",
+        files,
+        execution_contract=ScriptExecutionContract(
+            entrypoint="tool.py", args=["valor"]
+        ),
+    )
+    script_results = {
+        result.targets: result
+        for result in results
+        if result.profile is ValidationProfile.SCRIPT_EXECUTION
+    }
+
+    assert script_results[("tool.py",)].passed
+    assert script_results[("tool.py",)].result.command[-1] == "valor"
+    # The other .py file keeps running blind, exactly like before this
+    # contract existed.
+    assert script_results[("helper.py",)].passed
+    assert script_results[("helper.py",)].result.command[-1] == "helper.py"
+
+
+@pytest.mark.asyncio
+async def test_script_execution_contract_activates_profile_without_prose_signals(
+    tmp_path: Path,
+) -> None:
+    workspace_root = tmp_path / "workspaces"
+    materializer = WorkspaceMaterializer(workspace_root, _policy_path())
+    validator = ValidationProfileExecutor(workspace_root, _policy_path())
+    files = materializer.materialize(
+        "project",
+        "task",
+        1,
+        [
+            WorkspaceFileProposal(
+                path="tool.py",
+                content=(
+                    "with open('output.txt', 'w', encoding='utf-8') as handle:\n"
+                    "    handle.write('ok')\n"
+                ),
+                purpose="Herramienta",
+            ),
+        ],
+    )
+
+    # Same non-triggering prose as
+    # test_script_execution_profile_absent_without_execution_signals — the
+    # only difference is a declared contract, which must be enough on its
+    # own to activate the profile.
+    results = await validator.validate(
+        "project",
+        files,
+        acceptance_criteria=["Sumar dos numeros correctamente"],
+        execution_contract=ScriptExecutionContract(entrypoint="tool.py"),
+    )
+
+    assert any(
+        result.profile is ValidationProfile.SCRIPT_EXECUTION for result in results
+    )
+
+
+@pytest.mark.asyncio
+async def test_script_execution_contract_resolves_produces_relative_to_entrypoint_dir(
+    tmp_path: Path,
+) -> None:
+    workspace_root = tmp_path / "workspaces"
+    materializer = WorkspaceMaterializer(workspace_root, _policy_path())
+    validator = ValidationProfileExecutor(workspace_root, _policy_path())
+    files = materializer.materialize(
+        "project",
+        "task",
+        1,
+        [
+            WorkspaceFileProposal(
+                path="src/tool.py",
+                content=(
+                    "with open('result.json', 'w', encoding='utf-8') as handle:\n"
+                    "    handle.write('{}')\n"
+                ),
+                purpose="Herramienta en subdirectorio",
+            ),
+        ],
+    )
+
+    results = await validator.validate(
+        "project",
+        files,
+        execution_contract=ScriptExecutionContract(
+            entrypoint="src/tool.py", produces="result.json"
+        ),
+    )
+    script_results = [
+        result
+        for result in results
+        if result.profile is ValidationProfile.SCRIPT_EXECUTION
+    ]
+
+    # If `produces` resolved against the project root instead of the
+    # entrypoint's own directory, this would fail to find the file the
+    # script actually wrote.
+    assert len(script_results) == 1
+    assert script_results[0].passed, script_results[0].result.stderr

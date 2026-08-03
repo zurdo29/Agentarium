@@ -763,6 +763,7 @@ class Orchestrator:
                 validation_root=changes.session.path,
                 acceptance_criteria=item.acceptance_criteria,
                 expected_outputs=item.expected_outputs,
+                execution_contract=item.execution_contract,
             )
             validation_checks = [result.as_evidence() for result in validation_results]
         except CommandRejected as exc:
@@ -1389,6 +1390,9 @@ class Orchestrator:
                         else OutputStrategy.PATCH
                     ),
                     split_depth=item.split_depth + 1,
+                    # Deliberately not inherited (ADR 0027): the parent's
+                    # contract names a specific entrypoint file that a split
+                    # child may not even own post-split.
                 )
                 self.repository.add_work_item(child)
                 children.append(child)
@@ -1435,6 +1439,7 @@ class Orchestrator:
             # Same lineage as the children it consolidates: an exhausted
             # consolidation is terminal too, not a new decomposition round.
             split_depth=item.split_depth + 1,
+            # Same reasoning as the children: not inherited (ADR 0027).
         )
         self.repository.add_work_item(consolidation)
 

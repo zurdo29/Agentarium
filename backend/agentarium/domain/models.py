@@ -4,7 +4,7 @@ from datetime import UTC, datetime
 from typing import Any
 from uuid import uuid4
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from .enums import (
     AgentRole,
@@ -26,6 +26,19 @@ def new_id() -> str:
 
 def utc_now() -> datetime:
     return datetime.now(UTC)
+
+
+def _reject_unsafe_relative_path(value: str, field: str) -> str:
+    # Same discipline as the other local copies of this check
+    # (`planning/contracts.py`, `execution/contracts.py`,
+    # `benchmarks/functional.py`): kept local to this layer on purpose
+    # rather than imported across layers.
+    normalized = value.strip().replace("\\", "/")
+    if not normalized:
+        raise ValueError(f"{field} cannot be blank")
+    if normalized.startswith("/") or ":" in normalized or ".." in normalized.split("/"):
+        raise ValueError(f"{field} must be a safe relative path: {value!r}")
+    return normalized
 
 
 class DomainModel(BaseModel):
@@ -75,6 +88,40 @@ class Dependency(DomainModel):
     depends_on_id: str
 
 
+class ScriptExecutionContract(DomainModel):
+    """Entrypoint/args/output a work item declares for SCRIPT_EXECUTION to
+    invoke directly, instead of running every delivered `.py` file blind
+    with no arguments. See ADR 0027 — nothing constructs one of these today
+    (the planning LLM contract deliberately does not expose this field);
+    it exists so the validator side of the mechanism is real and tested."""
+
+    entrypoint: str
+    args: list[str] = Field(default_factory=list, max_length=20)
+    produces: str | None = None
+
+    @field_validator("entrypoint")
+    @classmethod
+    def validate_entrypoint(cls, value: str) -> str:
+        normalized = _reject_unsafe_relative_path(value, "entrypoint")
+        if not normalized.casefold().endswith(".py"):
+            raise ValueError(f"entrypoint must end in .py: {value!r}")
+        return normalized
+
+    @field_validator("produces")
+    @classmethod
+    def validate_produces(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return _reject_unsafe_relative_path(value, "produces")
+
+    @field_validator("args")
+    @classmethod
+    def reject_blank_args(cls, values: list[str]) -> list[str]:
+        if any(not value.strip() for value in values):
+            raise ValueError("args cannot contain blank entries")
+        return values
+
+
 class WorkItem(DomainModel):
     id: str = Field(default_factory=new_id)
     project_id: str
@@ -106,6 +153,7 @@ class WorkItem(DomainModel):
     # How many automatic splits this task descends from. A planned task is 0;
     # everything an automatic split creates is 1, and only depth 0 may split.
     split_depth: int = Field(default=0, ge=0)
+    execution_contract: ScriptExecutionContract | None = None
     created_at: datetime = Field(default_factory=utc_now)
     updated_at: datetime = Field(default_factory=utc_now)
 

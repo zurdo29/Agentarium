@@ -55,6 +55,10 @@ class Database:
         ("shared_component", "VARCHAR(120)"),
         ("output_strategy", "VARCHAR(20) NOT NULL DEFAULT 'exclusive'"),
         ("split_depth", "INTEGER NOT NULL DEFAULT 0"),
+        # Nullable, no backfill: unlike `split_depth`, `NULL` is already the
+        # right value for every row that predates this column (see ADR 0027
+        # — nothing constructs a work item with a contract yet).
+        ("execution_contract_json", "JSON"),
     )
 
     # A plain `DEFAULT 0` would tell every task in an existing database that it

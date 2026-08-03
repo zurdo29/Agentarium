@@ -13,6 +13,7 @@ from .models import (
     ProjectBrief,
     ResourceUsage,
     Review,
+    ScriptExecutionContract,
     TestReport,
     WorkItem,
 )
@@ -30,6 +31,7 @@ __all__ = [
     "ProjectBrief",
     "ResourceUsage",
     "Review",
+    "ScriptExecutionContract",
     "TestReport",
     "WorkItem",
 ]

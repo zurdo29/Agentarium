@@ -30,6 +30,7 @@ from agentarium.domain.models import (
     ProjectBrief,
     ResourceUsage,
     Review,
+    ScriptExecutionContract,
     TestReport,
     WorkItem,
     new_id,
@@ -187,6 +188,11 @@ class Repository:
                     shared_component=item.shared_component,
                     output_strategy=item.output_strategy.value,
                     split_depth=item.split_depth,
+                    execution_contract_json=(
+                        item.execution_contract.model_dump(mode="json")
+                        if item.execution_contract
+                        else None
+                    ),
                     created_at=item.created_at,
                     updated_at=item.updated_at,
                 )
@@ -776,6 +782,11 @@ class Repository:
             shared_component=row.shared_component,
             output_strategy=OutputStrategy(row.output_strategy),
             split_depth=row.split_depth,
+            execution_contract=(
+                ScriptExecutionContract.model_validate(row.execution_contract_json)
+                if row.execution_contract_json
+                else None
+            ),
             created_at=row.created_at,
             updated_at=row.updated_at,
         )

@@ -4,6 +4,8 @@ from pathlib import Path
 
 import pytest
 from agentarium.domain.enums import WorkItemStatus
+from agentarium.domain.models import Milestone, Project, ScriptExecutionContract, WorkItem
+from agentarium.repositories import Repository
 from agentarium.repositories.database import Database
 from sqlalchemy import text
 
@@ -171,7 +173,10 @@ def test_a_fresh_database_needs_no_backfill(tmp_path: Path) -> None:
     assert "split_depth" in columns
 
 
-@pytest.mark.parametrize("column", ["version", "owned_paths_json", "output_strategy"])
+@pytest.mark.parametrize(
+    "column",
+    ["version", "owned_paths_json", "output_strategy", "execution_contract_json"],
+)
 def test_every_declared_column_exists_after_upgrading_a_legacy_database(
     tmp_path: Path,
     column: str,
@@ -185,3 +190,67 @@ def test_every_declared_column_exists_after_upgrading_a_legacy_database(
             for row in connection.execute(text("PRAGMA table_info(work_items)"))
         }
     assert column in columns
+
+
+def _project_with_milestone(repository: Repository) -> Milestone:
+    project = repository.create_project(
+        Project(title="Schema migration test", goal="Round-trip a work item")
+    )
+    milestone = Milestone(
+        project_id=project.id,
+        title="Milestone",
+        description="Milestone",
+        order=0,
+    )
+    repository.add_milestone(milestone)
+    return milestone
+
+
+def test_a_work_item_execution_contract_round_trips(tmp_path: Path) -> None:
+    database = Database(f"sqlite:///{(tmp_path / 'agentarium.db').as_posix()}")
+    database.create_all()
+    repository = Repository(database)
+    milestone = _project_with_milestone(repository)
+    item = WorkItem(
+        project_id=milestone.project_id,
+        milestone_id=milestone.id,
+        title="task",
+        description="description",
+        expected_outputs=["tool.py"],
+        acceptance_criteria=["ejecuta correctamente"],
+        execution_contract=ScriptExecutionContract(
+            entrypoint="tool.py", args=["input.csv"], produces="result.json"
+        ),
+    )
+
+    repository.add_work_item(item)
+    reloaded = repository.get_work_item(item.id)
+
+    assert reloaded.execution_contract is not None
+    assert reloaded.execution_contract.entrypoint == "tool.py"
+    assert reloaded.execution_contract.args == ["input.csv"]
+    assert reloaded.execution_contract.produces == "result.json"
+    database.dispose()
+
+
+def test_a_work_item_without_a_contract_loads_execution_contract_as_none(
+    tmp_path: Path,
+) -> None:
+    database = Database(f"sqlite:///{(tmp_path / 'agentarium.db').as_posix()}")
+    database.create_all()
+    repository = Repository(database)
+    milestone = _project_with_milestone(repository)
+    item = WorkItem(
+        project_id=milestone.project_id,
+        milestone_id=milestone.id,
+        title="task",
+        description="description",
+        expected_outputs=["artifact"],
+        acceptance_criteria=["passes"],
+    )
+
+    repository.add_work_item(item)
+    reloaded = repository.get_work_item(item.id)
+
+    assert reloaded.execution_contract is None
+    database.dispose()
