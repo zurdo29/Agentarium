@@ -196,7 +196,9 @@ class Orchestrator:
                 description=task.description,
                 dependency_ids=dependency_ids,
                 expected_outputs=task.expected_outputs,
-                acceptance_criteria=task.acceptance_criteria,
+                acceptance_criteria=self._with_expected_output_criteria(
+                    task.expected_outputs, task.acceptance_criteria
+                ),
                 allowed_tools=["read_file", "write_file", "run_command"],
                 authorized_files=[f"workspaces/{project_id}/**"],
                 max_attempts=3,
@@ -1356,11 +1358,18 @@ class Orchestrator:
                         else [*item.dependency_ids, previous.id]
                     ),
                     expected_outputs=subtask.expected_outputs,
-                    # Always the parent's own wording, never the model's.
-                    acceptance_criteria=[
-                        item.acceptance_criteria[position]
-                        for position in assignment[index]
-                    ],
+                    # The inherited slice is always the parent's own wording,
+                    # never the model's — plus a fresh, deterministic criterion
+                    # for whatever new expected_outputs this subtask declares
+                    # on its own (P1.3b). Merging is idempotent, so this never
+                    # duplicates anything already present in the slice.
+                    acceptance_criteria=self._with_expected_output_criteria(
+                        subtask.expected_outputs,
+                        [
+                            item.acceptance_criteria[position]
+                            for position in assignment[index]
+                        ],
+                    ),
                     allowed_tools=list(item.allowed_tools),
                     authorized_files=list(item.authorized_files),
                     max_attempts=3,
@@ -1406,7 +1415,13 @@ class Orchestrator:
             # them without duplicating edges.
             dependency_ids=[tail.id for tail in chain_tails],
             expected_outputs=list(item.expected_outputs),
-            acceptance_criteria=list(item.acceptance_criteria),
+            # Defensively re-derived (not just copied): idempotent merging
+            # means this is a no-op when the parent's criteria already cover
+            # its own expected_outputs, without relying on that always being
+            # true elsewhere (P1.3b).
+            acceptance_criteria=self._with_expected_output_criteria(
+                item.expected_outputs, item.acceptance_criteria
+            ),
             allowed_tools=list(item.allowed_tools),
             authorized_files=list(item.authorized_files),
             max_attempts=3,
@@ -2014,6 +2029,29 @@ class Orchestrator:
             seen.add(key)
             unique.append(value)
         return unique
+
+    @staticmethod
+    def _expected_output_criterion(expected_output: str) -> str:
+        return f"El entregable esperado existe y está completo: {expected_output}"
+
+    @staticmethod
+    def _with_expected_output_criteria(
+        expected_outputs: list[str],
+        acceptance_criteria: list[str],
+    ) -> list[str]:
+        """Every declared expected_output becomes its own acceptance
+        criterion (P1.3b) — deterministically, without checking whether some
+        other criterion's wording already talks about it. Reuses
+        `_unique_planning_entries` for the merge, so calling this again on an
+        already-derived list (e.g. plan -> split -> consolidation) never
+        duplicates anything."""
+        derived = [
+            Orchestrator._expected_output_criterion(output)
+            for output in expected_outputs
+        ]
+        return Orchestrator._unique_planning_entries(
+            [*acceptance_criteria, *derived]
+        )
 
     @staticmethod
     def _validate_work(content: dict[str, Any]) -> WorkArtifactProposal:

@@ -16,14 +16,18 @@ crecer indefinidamente aquí.
 > igual sigue sin ser cero. Por eso P1.2 queda como medición completa, no
 > como fase cerrada, y **P1 sigue abierto**. P1.3 quedó dividido en cuatro PR
 > independientes (P1.3a–P1.3d) para cerrar mecánicamente las causas
-> observadas. **P1.3a ya cerró** (instrumentó tiempo de cola vs. tiempo de
-> generación con evidencia sintética, sin Ollama real): `asyncio.wait_for`
-> envolvía la espera del semáforo de concurrencia además de la llamada
-> real, y ahora un `agent_run` que falle por timeout puede decir cuál fue
-> — pero **todavía no se cambió ni se calibró ningún `timeout_seconds`**, y
-> sigue sin saberse si `qwen3:8b` de verdad supera 300s generando o si el
-> tiempo se va en cola en una corrida real. **El siguiente paso es P1.3b**
-> (`expected_outputs` no exigible). Detalle completo en "P1.2 — la matriz",
+> observadas. **P1.3a y P1.3b ya cerraron.** P1.3a instrumentó tiempo de
+> cola vs. tiempo de generación con evidencia sintética, sin Ollama real:
+> `asyncio.wait_for` envolvía la espera del semáforo de concurrencia además
+> de la llamada real, y ahora un `agent_run` que falle por timeout puede
+> decir cuál fue — pero **todavía no se cambió ni se calibró ningún
+> `timeout_seconds`**, y sigue sin saberse si `qwen3:8b` de verdad supera
+> 300s generando o si el tiempo se va en cola en una corrida real. P1.3b
+> hizo que cada `expected_output` genere su propio criterio de aceptación
+> determinista — probado hasta el revisor: el criterio derivado llega al
+> payload real y un resultado `false` bloquea la aprobación mecánicamente,
+> sin necesitar Ollama. **El siguiente paso es P1.3c**
+> (`SCRIPT_EXECUTION` sin oráculo). Detalle completo en "P1.2 — la matriz",
 > la sección "P1.3" más abajo, y `findings.md`. No cambiar prompts ni casos
 > de la suite
 > `p1-baseline-2026-08`: ya cumplió su propósito y queda congelada como
@@ -571,7 +575,8 @@ camino de fallo, `ResourceUsage` nunca registra `prompt_characters`, así que
 da 0 tanto si la tarea nunca llegó a generar como si llegó y fue cortada a
 mitad de respuesta. **No sabemos, con la telemetría actual, si la inferencia
 sola de `qwen3:8b` supera 300s o si el tiempo se va mayormente en cola.**
-P1.3a instrumenta esto antes de calibrar nada.
+P1.3a (cerrado) ya instrumentó esto; falta una corrida real que use ese
+dato antes de calibrar nada.
 
 **Criterios de salida — resultado real, no reinterpretado:**
 
@@ -599,11 +604,12 @@ Cuatro causas quedaron identificadas en la inspección read-only de P1.2
 criterio de salida (regla 1) — no se mezclan en un solo cambio (regla 9).
 Ninguna se resuelve "probando con otro prompt" (regla 4) ni persigue "cero
 falsos `completed`" repitiendo corridas (regla 5). P1.3a–d son
-independientes entre sí (ninguna bloquea a otra). **P1.3a ya cerró** (ver
-abajo); el prerrequisito para cualquier trabajo futuro de calibrar un
-timeout por modelo queda cumplido, pero esa calibración en sí **todavía no
-es un punto propio de P1.3 y no se ha iniciado** — sigue sin saberse si
-hace falta. El siguiente paso dentro de P1.3 es **P1.3b**.
+independientes entre sí (ninguna bloquea a otra). **P1.3a y P1.3b ya
+cerraron** (ver abajo). El prerrequisito para cualquier trabajo futuro de
+calibrar un timeout por modelo queda cumplido (P1.3a), pero esa
+calibración en sí **todavía no es un punto propio de P1.3 y no se ha
+iniciado** — sigue sin saberse si hace falta. El siguiente paso dentro de
+P1.3 es **P1.3c**.
 
 ##### P1.3a — instrumentar `queue_wait` vs. `generation_time` — CERRADO (3 de agosto de 2026)
 
@@ -646,19 +652,55 @@ poder decir si el tiempo se fue en cola o en generación — hoy no puede.
 Eso es lo que decide si calibrar el timeout es siquiera la corrección
 correcta, y esa decisión queda fuera de P1.3a a propósito.
 
-##### P1.3b — `expected_outputs` no se traduce en acceptance criteria exigibles
+##### P1.3b — `expected_outputs` no se traduce en acceptance criteria exigibles — CERRADO (3 de agosto de 2026)
 
-**Esfuerzo estimado:** 1 PR, 1–2 sesiones.
-
-Un work item puede listar un entregable en `expected_outputs` (p. ej. el
-Markdown de uso) sin que ningún `acceptance_criteria` lo fuerce, y el
-revisor semántico nunca lo evalúa. Confirmado en 2 de los 3 falsos
+Un work item podía listar un entregable en `expected_outputs` (p. ej. el
+Markdown de uso) sin que ningún `acceptance_criteria` lo forzara, y el
+revisor semántico nunca lo evaluaba. Confirmado en 2 de los 3 falsos
 `completed` de `csv_expenses_cli` (rep 2 y 3 — rep 1 falló únicamente por el
 bug de agregación de P1.3c, sin relación con documentación faltante).
 
-**Criterio de salida:** decisión explícita — o `decompose` deriva
-automáticamente un AC exigible de cada `expected_output`, o se documenta
-aquí como límite conocido con su razón.
+- `Orchestrator._with_expected_output_criteria` (nuevo): cada
+  `expected_output` único genera su propio criterio determinista — "El
+  entregable esperado existe y está completo: `<output>`" — sin intentar
+  adivinar si otro criterio ya lo cubre por coincidencia de texto. Reutiliza
+  `_unique_planning_entries` para el merge, así que aplicarla dos veces
+  sobre una lista ya derivada nunca duplica nada.
+- Aplicada en los tres sitios donde un `WorkItem` recibe
+  `acceptance_criteria`: el plan inicial (criterios del modelo más los
+  derivados de `task.expected_outputs`); las hijas de `_attempt_split` (la
+  porción heredada del padre por posición sigue intacta — "la palabra del
+  padre, nunca la del modelo" de ADR 0026 — más un criterio nuevo por cada
+  `expected_output` propio de la subtarea); y la consolidación (re-derivada
+  defensivamente sobre lo que ya trae el padre, no sólo copiada).
+- No se tocan tareas ya persistidas: la derivación vive en el orquestador,
+  no en el modelo de dominio `WorkItem`, así que sólo corre cuando una tarea
+  nueva se construye.
+
+**Criterio de salida cumplido, con evidencia sintética — sin Ollama real:**
+12 pruebas deterministas nuevas, más 2 preexistentes actualizadas.
+
+- Función pura (`test_expected_output_criteria.py`): un output, varios
+  outputs, duplicados (no duplica el criterio), un output en prosa,
+  idempotencia (aplicar dos veces no cambia el resultado), no adivina
+  cobertura por texto libre, preserva los criterios del modelo.
+- El plan inicial real (proveedor mock) deja el criterio derivado en cada
+  tarea, junto a los del modelo.
+- **Llega al revisor, y un resultado `false` bloquea la aprobación:** una
+  tarea aislada con un único criterio (el derivado) y el revisor forzado a
+  rechazarlo — el string exacto aparece en el payload que recibe el rol
+  revisor, y el veredicto mecánico (`_merge_review_fragments`, ya
+  existente, sin cambios) nunca aprueba mientras ese criterio quede en
+  `false`. El proyecto no completa alrededor de eso.
+- Split (`test_task_splitting.py`): las hijas heredan la palabra exacta del
+  padre y además reciben su propio criterio derivado por su nuevo
+  `expected_output`; una hija que declara el mismo output dos veces no
+  duplica su criterio.
+- Consolidación: no duplica lo que el padre ya traía derivado.
+- 2 pruebas preexistentes (`test_decompose_criteria_mapping.py`)
+  actualizadas: verificaban listas exactas de criterios en las hijas sin
+  contar el nuevo derivado — una aserción desactualizada, no un fallo del
+  cambio.
 
 ##### P1.3c — `SCRIPT_EXECUTION` corre sin argumentos y sin oráculo
 
@@ -802,12 +844,12 @@ botella resuelve.
    **Ejecutada: 27/27, criterio de calidad no cumplido (PR de medición
    P1.2).**
 3. **P1.3a–P1.3d — cerrar las causas mecánicas que P1.2 encontró, cuatro PR
-   independientes:** P1.3a instrumenta `queue_wait` vs. `generation_time`
-   (prerrequisito de cualquier calibración de timeout); P1.3b hace
-   exigible `expected_outputs`; P1.3c le da oráculo o límite documentado a
-   `SCRIPT_EXECUTION`; P1.3d audita los validadores del benchmark por
-   sobre-especificación respecto al `goal` (causa del falso negativo de
-   `architecture_document`). Bloquean empezar P2 con datos limpios.
+   independientes:** ~~P1.3a instrumenta `queue_wait` vs.
+   `generation_time`~~ y ~~P1.3b hace exigible `expected_outputs`~~
+   entregados. Queda **P1.3c**, que le da oráculo o límite documentado a
+   `SCRIPT_EXECUTION`; y P1.3d, que audita los validadores del benchmark
+   por sobre-especificación respecto al `goal` (causa del falso negativo
+   de `architecture_document`). Bloquean empezar P2 con datos limpios.
 4. **PR de capacidades (P2):** manifiesto del runtime y fallo temprano por
    capacidad no disponible.
 
