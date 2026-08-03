@@ -678,7 +678,7 @@ bug de agregación de P1.3c, sin relación con documentación faltante).
   nueva se construye.
 
 **Criterio de salida cumplido, con evidencia sintética — sin Ollama real:**
-14 pruebas deterministas nuevas.
+12 pruebas deterministas nuevas, más 2 preexistentes actualizadas.
 
 - Función pura (`test_expected_output_criteria.py`): un output, varios
   outputs, duplicados (no duplica el criterio), un output en prosa,
