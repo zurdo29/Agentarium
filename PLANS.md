@@ -14,15 +14,18 @@ crecer indefinidamente aquí.
 > reclasifica 1 como falso negativo del propio validador (exigía un
 > encabezado que el `goal` del caso nunca pidió). El resultado real es 3/27,
 > igual sigue sin ser cero. Por eso P1.2 queda como medición completa, no
-> como fase cerrada, y **P1 sigue abierto**. El siguiente paso es **P1.3**,
-> dividido en cuatro PR independientes (P1.3a–P1.3d) para cerrar
-> mecánicamente las causas observadas — empezando por P1.3a, que
-> **instrumenta** tiempo de cola vs. tiempo de generación antes de calibrar
-> ningún timeout por modelo: hoy `asyncio.wait_for` envuelve la espera del
-> semáforo de concurrencia además de la llamada real, así que todavía no se
-> sabe si `qwen3:8b` de verdad supera 300s generando o si el tiempo se va en
-> cola. Detalle completo en "P1.2 — la matriz", la nueva sección "P1.3" más
-> abajo, y `findings.md`. No cambiar prompts ni casos de la suite
+> como fase cerrada, y **P1 sigue abierto**. P1.3 quedó dividido en cuatro PR
+> independientes (P1.3a–P1.3d) para cerrar mecánicamente las causas
+> observadas. **P1.3a ya cerró** (instrumentó tiempo de cola vs. tiempo de
+> generación con evidencia sintética, sin Ollama real): `asyncio.wait_for`
+> envolvía la espera del semáforo de concurrencia además de la llamada
+> real, y ahora un `agent_run` que falle por timeout puede decir cuál fue
+> — pero **todavía no se cambió ni se calibró ningún `timeout_seconds`**, y
+> sigue sin saberse si `qwen3:8b` de verdad supera 300s generando o si el
+> tiempo se va en cola en una corrida real. **El siguiente paso es P1.3b**
+> (`expected_outputs` no exigible). Detalle completo en "P1.2 — la matriz",
+> la sección "P1.3" más abajo, y `findings.md`. No cambiar prompts ni casos
+> de la suite
 > `p1-baseline-2026-08`: ya cumplió su propósito y queda congelada como
 > registro histórico; cualquier remedición usa un nombre de suite nuevo.
 > Resultados versionados en `benchmarks/results/p1-baseline-2026-08/`
@@ -596,34 +599,52 @@ Cuatro causas quedaron identificadas en la inspección read-only de P1.2
 criterio de salida (regla 1) — no se mezclan en un solo cambio (regla 9).
 Ninguna se resuelve "probando con otro prompt" (regla 4) ni persigue "cero
 falsos `completed`" repitiendo corridas (regla 5). P1.3a–d son
-independientes entre sí (ninguna bloquea a otra) — pero **P1.3a sí bloquea a
-cualquier trabajo futuro de calibrar un timeout por modelo**, que
-deliberadamente todavía no es un punto propio de P1.3 porque no se sabe si
-hace falta: no tiene sentido tocar un número sin saber qué mide.
+independientes entre sí (ninguna bloquea a otra). **P1.3a ya cerró** (ver
+abajo); el prerrequisito para cualquier trabajo futuro de calibrar un
+timeout por modelo queda cumplido, pero esa calibración en sí **todavía no
+es un punto propio de P1.3 y no se ha iniciado** — sigue sin saberse si
+hace falta. El siguiente paso dentro de P1.3 es **P1.3b**.
 
-##### P1.3a — instrumentar `queue_wait` vs. `generation_time` (prerrequisito)
+##### P1.3a — instrumentar `queue_wait` vs. `generation_time` — CERRADO (3 de agosto de 2026)
 
-**Esfuerzo estimado:** 1 PR, 1 sesión.
-
-`roles.py:91-94` envuelve en un mismo `asyncio.wait_for` la espera del
+`roles.py:91-94` envolvía en un mismo `asyncio.wait_for` la espera del
 semáforo de `ResourceScheduler` (`model_concurrency`) y la llamada real al
-proveedor. Con el `resource_usage_json` actual no se puede saber cuánto de
-un `TimeoutError` fue cola y cuánto generación — ver `findings.md`.
+proveedor. Con el `resource_usage_json` de entonces no se podía saber
+cuánto de un `TimeoutError` era cola y cuánto generación — ver
+`findings.md`.
 
-1. Registrar por separado, en `ResourceUsage` (o un campo nuevo), el momento
-   en que la tarea entra a `scheduler.run`, el momento en que adquiere el
-   semáforo, y el momento en que `provider.generate()` retorna o falla — en
-   el camino de éxito **y** en el de fallo (hoy el de fallo no registra nada
-   de esto).
-2. Persistir `queue_wait_ms` y `generation_ms` (`null` si nunca llegó a
-   generar) en cada `agent_run`, no sólo `duration_ms`.
+- `ResourceUsage` gana `queue_wait_ms`/`generation_ms` (opcionales,
+  `default=None`; un registro viejo sin estas claves deserializa con
+  ambos en `None`, sin migración — es una columna `JSON`, no columnas
+  fijas).
+- `ResourceScheduler.run` acepta un `AttemptTiming` que marca cuándo entra
+  a la cola, cuándo adquiere el semáforo y cuándo termina la llamada real,
+  en el camino de éxito y en el de cancelación/fallo. `generation_ms`
+  queda `None` si la tarea nunca adquirió el semáforo — no si tardó cero.
+- Corregido de paso: `scheduler.queued` quedaba incrementado para siempre
+  si una tarea era cancelada mientras todavía esperaba el semáforo.
+- `RoleRunner.run` acumula ambos campos de todos los reintentos internos
+  de un mismo `AgentRun`, persistidos en éxito y en fallo.
 
-**Criterio de salida:** una prueba —sintética o real, no hace falta forzar
-ni esperar un `TimeoutError` real contra un modelo lento— demuestra que la
-instrumentación atribuye correctamente tiempo de cola vs. generación,
-incluido el camino de fallo (un doble del proveedor con demora controlada
-alcanza el mismo propósito que una corrida real). Sin este dato, ningún
-timeout se calibra por modelo — se estaría adivinando.
+**Criterio de salida cumplido, con evidencia sintética — no con una corrida
+real contra `qwen3:8b`:** 9 pruebas deterministas, sin Ollama, en
+`backend/tests/test_scheduler.py`, `test_role_timing.py` y el nuevo
+`test_agent_run_persistence.py`. Cubren: espera real detrás de otra
+llamada; cancelación mientras espera (`generation_ms=None`); timeout
+después de adquirir (la generación sí se registra); `queued`/`active`
+vuelven a cero; éxito y fallo persistidos en `AgentRun`; reintentos
+acumulando en vez de sobreescribir; **el caso exacto original desde
+`RoleRunner`** (otra tarea ocupa el semáforo, `RoleRunner` agota su propio
+timeout esperando, el `RoleExecutionError` resultante lleva `queue_wait_ms`
+con `generation_ms is None`); y round-trip real por el repositorio/DB de
+ambos campos, más la lectura de un `resource_usage_json` sin ellos.
+
+**Todavía no se cambió ni se calibró ningún `timeout_seconds`.** Esto es
+instrumentación pura: la próxima vez que la matriz corra con `qwen3:8b` (u
+otro modelo grande) contra un caso pesado, el `agent_run` que falle va a
+poder decir si el tiempo se fue en cola o en generación — hoy no puede.
+Eso es lo que decide si calibrar el timeout es siquiera la corrección
+correcta, y esa decisión queda fuera de P1.3a a propósito.
 
 ##### P1.3b — `expected_outputs` no se traduce en acceptance criteria exigibles
 
