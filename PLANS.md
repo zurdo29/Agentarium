@@ -6,13 +6,19 @@ en `docs/decisions/`. Si una investigación no cambia la arquitectura, debe
 quedar en el commit, el issue o el informe de benchmark correspondiente, no
 crecer indefinidamente aquí.
 
-> **Dónde estamos (2 de agosto de 2026).** P0, P1.1, P1.1b y P1.2a están
-> cerrados y mergeados en `main` (`6d11fd5`); árbol limpio, 294/294 en verde.
-> **El siguiente paso es ejecutar P1.2**, y está listo para correr: los
-> comandos exactos, el aislamiento de base y workspace, y qué revisar después
-> están en la sección "P1.2 — la matriz" más abajo. Empezar por la tanda de 9
-> con `qwen3:4b`; verificado con `--dry-run` que planifica exactamente esas 9.
-> No cambiar prompts, casos ni configuración hasta terminar la matriz.
+> **Dónde estamos (3 de agosto de 2026).** P0, P1.1, P1.1b y P1.2a siguen
+> cerrados. **P1.2 (la matriz 3×3×3) ya se ejecutó completa: 27/27 corridas
+> registradas**, pero su criterio de calidad ("cero falsos `completed`") **no
+> se cumplió** — 4/27. Por eso P1.2 queda como medición completa, no como
+> fase cerrada, y **P1 sigue abierto**. El siguiente paso es **P1.3**: cerrar
+> mecánicamente las causas ya observadas (timeout fijo de 300s ajeno al
+> modelo elegido, `expected_outputs` que no se traduce en acceptance
+> criteria exigibles, `SCRIPT_EXECUTION` sin argumentos ni oráculo, revisor
+> semántico sin señal de estructura) antes de tocar prompts, casos o
+> arrancar P2. Detalle completo en "P1.2 — la matriz" y la nueva sección
+> "P1.3" más abajo. No cambiar prompts ni casos de la suite
+> `p1-baseline-2026-08`: ya cumplió su propósito y queda congelada como
+> registro histórico; cualquier remedición usa un nombre de suite nuevo.
 
 ## Norte del producto
 
@@ -29,7 +35,7 @@ El objetivo del próximo ciclo no es añadir más roles. Es conseguir un MVP
 local-first confiable para proyectos pequeños y demostrarlo con mediciones
 repetibles.
 
-## Foto actual — 2 de agosto de 2026
+## Foto actual — 3 de agosto de 2026
 
 ### Lo que ya funciona
 
@@ -76,6 +82,12 @@ repetibles.
   buscando una salida distinta, y cada resultado se registró como salió,
   incluidos los negativos.
 - Los detalles y reproducciones están en ADR 0015–0026.
+- P1.2 corrió la matriz completa 3×3×3 contra la suite `p1-baseline-2026-08`
+  (27/27 registradas, HEAD `2b4ecb2`, árbol limpio): 3/27 `completed` reales
+  (11.1%), 4/27 falsos `completed`. Detalle e inspección de causas en
+  "P1.2 — la matriz" y en `runtime/benchmarks/p1-baseline-2026-08/` (`report.md`,
+  `report.json`, `environment.md`, versionados; el ledger y la DB de la
+  corrida no).
 
 ### Riesgos y límites actuales
 
@@ -85,7 +97,7 @@ repetibles.
 | División de tareas | Resuelto en P0: reparto por ids con partición determinista de respaldo | Queda que el título de una hija puede no describir bien los criterios que le tocaron tras una partición |
 | Calidad de la descomposición | El modelo repite el mismo candidato también a nivel de subtarea | Dividir reduce el alcance, no cambia esa conducta; un linaje agotado ahora para y espera intervención |
 | Dependencias de ejecución | El worker puede elegir paquetes no disponibles en el sandbox | El fallo aparece tarde, después de gastar inferencias e intentos |
-| Evaluación de modelos | La maquinaria de medición existe y es reproducible (P1.1); la matriz no se ha ejecutado | Sigue sin haber baseline: ninguna recomendación de modelo por rol todavía |
+| Evaluación de modelos | Matriz ejecutada (27/27, P1.2): 11.1–22.2% de completion real, 4/27 falsos `completed`. `qwen3:8b` en 0% pero confundido por un timeout de 300s insuficiente para su velocidad en esta máquina (ver P1.3) | Todavía ninguna recomendación de modelo por rol — la tasa de `qwen3:8b` no es comparable hasta corregir el timeout |
 | Compuerta de comandos | `deny_tokens` hacía match de subcadena: `models.py`, `registry.py` y `format_helper.js` quedaban rechazados. Corregido a límite de palabra | Ya no bloquea nombres de archivo normales; conviene revisar la lista si se agregan tokens cortos nuevos |
 | Mantenibilidad | `engine.py` tiene 2051 líneas y `app/page.tsx` 2207 | Cada cambio cruza demasiadas responsabilidades |
 | Interfaz | Sólo hay dos pruebas de render/strings; no prueban interacciones reales | Reintentos, acciones y SSE pueden romperse sin señal temprana |
@@ -209,12 +221,16 @@ Pendiente conocido, no bloqueante: la partición determinista de respaldo nunca
 llegó a ejercitarse en vivo — el modelo no rompió el mapeo en la corrida de
 confirmación. Sólo está cubierta por pruebas.
 
-### P1 — benchmark reproducible y taxonomía de fallos
+### P1 — benchmark reproducible y taxonomía de fallos — ABIERTO
 
-Dividido en dos entregas: **P1.1 (maquinaria, sin inferencia real)** y **P1.2
-(la matriz 3×3×3)**. P1.1 está cerrada.
+Dividido en tres entregas: **P1.1 (maquinaria, sin inferencia real)**, **P1.2
+(la matriz 3×3×3)** y **P1.3 (cerrar las causas que P1.2 encontró)**. P1.1,
+P1.1b y P1.2a están cerradas. **P1.2 ya midió (27/27), pero su criterio de
+calidad no se cumplió**, así que P1 en conjunto sigue abierto hasta que P1.3
+resuelva o acepte explícitamente las causas observadas — regla 6 (WIP
+limitado) sigue permitiendo esto porque es un único P1, no uno nuevo.
 
-**Esfuerzo estimado:** 2 PR, 4–6 sesiones más tiempo de inferencia en segundo
+**Esfuerzo estimado:** 3 PR, 4–6 sesiones más tiempo de inferencia en segundo
 plano.
 
 #### P1.1 — maquinaria medible sin inferencia — CERRADO (2 de agosto de 2026)
@@ -363,17 +379,30 @@ arquitectura producen la misma cadena; un parche del SO no invalida un
 baseline, mudarse de SO o arquitectura sí. El ledger pasa a
 `schema_version: 2`.
 
-#### P1.2 — la matriz — SIGUIENTE PASO, listo para ejecutar
+#### P1.2 — la matriz — MEDICIÓN COMPLETA (3 de agosto de 2026); criterio de calidad no cumplido
 
-Toda la maquinaria está cerrada y mergeada (P1.1, P1.1b, P1.2a). Falta
-únicamente correr la matriz de 3 casos × 3 modelos × 3 repeticiones. Las 27
-corridas son automatizadas; no se supervisan una por una.
+Las 27 corridas (3 casos × 3 modelos × 3 repeticiones) están hechas y
+registradas contra la suite `p1-baseline-2026-08`. La maquinaria (P1.1,
+P1.1b, P1.2a) se comportó como se diseñó: informe reproducible desde el
+ledger, cero drift, cero corridas perdidas. **Lo que no se cumplió es el
+criterio de calidad de la propia matriz** — 4 de 27 corridas son falsos
+`completed`, no cero. Eso no cierra P1.2 como fase exitosa; la deja como
+medición completa con un resultado real y abre P1.3 para cerrar
+mecánicamente las causas antes de tocar prompts, casos o empezar P2. La
+suite `p1-baseline-2026-08` queda congelada como registro histórico de este
+resultado — no se reutiliza para remedir después de un cambio; eso exige un
+nombre de suite nuevo.
 
-**Se ejecuta en dos tandas, en la misma suite.** Primero 9 —los tres casos
-contra `qwen3:4b`, el modelo más liviano— y sólo después las 18 restantes. Si
-hay un problema de infraestructura, de staging, del contrato funcional o de
-persistencia, aparece antes de gastar horas con los modelos grandes, y las
-tres repeticiones ya muestran si los resultados son inestables.
+Las secciones de aislamiento y comandos de abajo quedan como referencia
+reproducible de cómo se midió, no como un "próximo paso" pendiente.
+
+**Se ejecutó en dos tandas, en la misma suite.** Primero 9 —los tres casos
+contra `qwen3:4b`, el modelo más liviano— y sólo después las 18 restantes.
+Así, un problema de infraestructura, de staging, del contrato funcional o de
+persistencia habría aparecido antes de gastar horas con los modelos grandes.
+No apareció ninguno: lo que la tanda 2 sí mostró fue la señal de calidad de
+abajo, más un timeout mal calibrado para el modelo más grande (ver
+"Causas inspeccionadas" más abajo).
 
 ##### Aislamiento (obligatorio, en la misma sesión de PowerShell)
 
@@ -403,25 +432,23 @@ corrida crea worktrees de git, y con paths profundos reaparece el
   --repetitions 3
 ```
 
-Verificado con `--dry-run` sobre el commit `6d11fd5`: planifica exactamente 9
-corridas, congela el digest de `qwen3:4b` y sale con código 0.
+Verificado con `--dry-run` sobre el commit `6d11fd5` antes de correr:
+planificó exactamente 9 corridas, congeló el digest de `qwen3:4b` y salió con
+código 0. La tanda real corrió sobre `2b4ecb2` (un commit de docs encima,
+árbol limpio; no invalida nada porque el ledger todavía no tenía registros).
 
-Después, informe provisional:
+Informe provisional tras la tanda 1, mismo comando que para el informe final:
 
 ```powershell
 .\.venv\Scripts\agentarium.exe benchmark report --suite "p1-baseline-2026-08"
 ```
 
-**Qué revisar antes de seguir**, y nada más:
-
-1. que las nueve quedaron registradas (`Corridas registradas: 9`);
-2. que no hay falsos `completed` — el orquestador dando por buena una entrega
-   que los validadores rechazan;
-3. que las categorías de fallo son plausibles y no todas `infrastructure`.
-
-**No cambiar prompts, casos ni configuración aunque los resultados sean
-malos.** Un resultado malo es un dato del baseline; cambiar algo a mitad de
-camino invalida la suite y obliga a empezar de cero con otro nombre.
+**Lo que se revisó antes de seguir a la tanda 2**, y nada más: que las nueve
+quedaron registradas, que las categorías de fallo eran plausibles y no todas
+`infrastructure`, y **si había falsos `completed`.** Los había — 3 de 9, los
+tres en `csv_expenses_cli`. Eso no detuvo la matriz: un resultado malo es un
+dato del baseline, y la regla de no cambiar nada a mitad de camino se
+respetó. Detalle de esos 3 en "Causas inspeccionadas" más abajo.
 
 ##### Tanda 2 — las 18 restantes
 
@@ -449,19 +476,140 @@ anteriores: los digests se comparan por `(proveedor, modelo)`.
 | 5 | falta el digest de un modelo | `ollama serve` y `ollama pull <modelo>` |
 
 Es reanudable ante cualquier interrupción: volver a ejecutar el mismo comando
-continúa donde quedó. **No** hay que borrar el ledger para reintentar.
+continúa donde quedó. **No** hay que borrar el ledger para reintentar. (Las
+27 corrieron sin interrupciones — esto quedó sin ejercitarse en vivo esta
+vez, igual que la partición determinista de respaldo de P0.)
 
-**Criterios de salida:**
+##### Resultados (27/27)
 
-- informe Markdown/JSON reproducible desde el ledger;
-- cero falsos `completed` en los validadores independientes;
-- baseline de tasa de finalización, tiempo y causas de fallo;
-- ninguna recomendación de modelo por rol antes de tener esos datos.
+| Modelo | Corridas | Completadas | Tasa | Falsos `completed` | Segundos (media) |
+|---|---|---|---|---|---|
+| `qwen2.5-coder:7b` | 9 | 1 | 11.1% | 0 | 263 |
+| `qwen3:4b` | 9 | 2 | 22.2% | 3 | 252 |
+| `qwen3:8b` | 9 | 0 | 0.0% | 1 | 868 (hasta 1823s en una corrida) |
 
-**Expectativa honesta sobre el caso de biblioteca:** se dejó
-deliberadamente sin contrato de sólo-stdlib. Es probable que falle sobre todo
-por `unsupported_capability` (el modelo eligiendo Flask, ADR 0020). Eso es
-información real que P2 necesita, no un defecto de la medición.
+Categorías sobre las 27: `duplicate_candidate` 9, `technical_validation` 7,
+`completed` 3, `path_conflict` 2, `planning_contract` 2, `provider_failure`
+2, `semantic_rejection` 2. Ninguna `infrastructure`; ninguna
+`unsupported_capability` — ver la expectativa fallida más abajo.
+
+Los 4 falsos `completed`:
+
+| Caso | Modelo | Rep. | Validador que falló |
+|---|---|---|---|
+| `csv_expenses_cli` | `qwen3:4b` | 1 | procesa el CSV fixture y produce el resumen correcto |
+| `csv_expenses_cli` | `qwen3:4b` | 2 | documentación Markdown (ausente) |
+| `csv_expenses_cli` | `qwen3:4b` | 3 | documentación Markdown + procesamiento del CSV |
+| `architecture_document` | `qwen3:8b` | 2 | sección de decisiones de diseño |
+
+##### Causas inspeccionadas a fondo (read-only, sin re-correr nada)
+
+**Los 3 falsos `completed` de `csv_expenses_cli`/`qwen3:4b`:** los tres
+`expenses.py` entregados ignoran `sys.argv` por completo (hardcodean
+`input.csv`/`result.json`) y envuelven la lógica en `except Exception:
+print(...)` sin `sys.exit`, así que el proceso siempre devuelve código 0. El
+perfil interno `SCRIPT_EXECUTION` (`backend/agentarium/execution/validation.py`)
+corre el script sin argumentos y sólo mira el código de salida — no puede
+detectar nada de esto, y de todos modos nunca ejecuta contra el fixture
+oculto del caso. Rep 1: bug real de agregación (`monthly_totals[month] =
+sum(...)` sobreescribe entre fechas del mismo mes en vez de acumular). Rep 2
+y 3: el plan (`decompose`) nunca creó una tarea de documentación — en rep 3
+el Markdown ni siquiera queda como acceptance criterion de la tarea de
+consolidación, sólo como `expected_outputs`, que no se traduce en un check
+exigible. Es inconsistencia real del modelo combinada con un gap estructural
+del orquestador (sin oráculo de valores correctos; `expected_outputs` no
+fuerza acceptance criteria) — no un defecto del harness de medición.
+
+**El 4º falso `completed`, `architecture_document`/`qwen3:8b` rep 2:** el
+documento entregado (`arquitectura.md`) sí tiene el contenido de decisiones
+y alternativas — el revisor semántico interno lo aprobó explícitamente sobre
+esa base — pero lo escribió como texto dentro de "## Componentes
+Principales" en vez de bajo un encabezado propio. El validador exige
+estructura (`^#{1,6}...decisi[oó]n|dise[nñ]o`), no sólo contenido, por la
+misma razón de P1.1 (un check por contenido se parafrasea). El plan sí tenía
+una tarea dedicada "Detallar Decisiones de Diseño con Alternativas" con su
+propio acceptance criterion de contenido — cumplido — pero ningún AC exige
+la forma (encabezado dedicado). El revisor interno sólo evalúa contenido,
+nunca estructura.
+
+**Los 2 `provider_failure` de `library_api_sqlite`/`qwen3:8b`:** confirmado
+a nivel de milisegundo contra `agent_runs` — docenas de llamadas del rol
+`implementation_worker` cortadas a exactamente 300.00–300.06 segundos con
+`TimeoutError`, en las dos corridas, sobre tareas distintas ejecutadas en
+paralelo. `configs/roles/default.yaml` fija `timeout_seconds: 300` para
+`implementation_worker` **por rol, no por modelo**: el mismo número aplica a
+`mock`, a `qwen3:4b` y a `qwen3:8b`. En esta máquina, `qwen3:8b` necesita más
+de 300s para generar una implementación no trivial; el cliente HTTP
+(`http_providers.py`, `timeout=agent.timeout_seconds`) corta la conexión
+antes de que el modelo termine, se agotan los 3 intentos, y el proyecto
+muere sin haber tenido una oportunidad real de completar la tarea. **La tasa
+de 0% de `qwen3:8b` está confundida por esto**: no se puede leer como "el
+modelo no sabe resolver la tarea" sin antes corregir el timeout.
+
+**Criterios de salida — resultado real, no reinterpretado:**
+
+| Criterio | Resultado |
+|---|---|
+| Informe Markdown/JSON reproducible desde el ledger | Cumplido |
+| Baseline de tasa de finalización, tiempo y causas de fallo | Cumplido — tabla arriba |
+| Ninguna recomendación de modelo por rol antes de tener datos | Cumplido — no se recomienda ningún modelo todavía, y la tasa de `qwen3:8b` no es comparable hasta P1.3 |
+| Cero falsos `completed` en los validadores independientes | **No cumplido — 4/27.** Queda como criterio de calidad abierto; P1.3 cierra las causas mecánicas conocidas, no persigue "cero" a fuerza de repetir corridas (violaría la regla 5, sin fishing) |
+
+**Expectativa que no se cumplió — el caso de biblioteca:** se anticipaba que
+`library_api_sqlite` fallara sobre todo por `unsupported_capability` (el
+modelo eligiendo Flask, ADR 0020). **No ocurrió ni una vez en 27 corridas** —
+la categoría no aparece en el informe. Las causas reales fueron
+`semantic_rejection`, `technical_validation`, `duplicate_candidate`,
+`planning_contract` y los dos `provider_failure` de timeout ya descritos.
+Información real para P2 igual, pero distinta de la anticipada: el límite de
+capacidades no fue lo que más pesó esta vez.
+
+#### P1.3 — cerrar mecánicamente las causas que P1.2 encontró
+
+**Esfuerzo estimado:** 1 PR, 2–3 sesiones. Sin re-correr la matriz completa:
+cada punto tiene su propia verificación mínima, no una repetición de las 27
+corridas.
+
+Cuatro causas mecánicas quedaron identificadas en la inspección read-only de
+P1.2 (detalle arriba, en "Causas inspeccionadas a fondo"). P1.3 les da una
+resolución mecánica o una decisión explícita de aceptarlas como límite
+conocido — no intenta forzar "cero falsos `completed`" repitiendo corridas
+(violaría la regla 5, sin fishing).
+
+1. **Timeout de llamada LLM fijo por rol, no por modelo/target.**
+   `configs/roles/default.yaml` fija `implementation_worker.timeout_seconds:
+   300` sin importar qué modelo esté conectado. Confirmado que corta
+   sistemáticamente a `qwen3:8b` en tareas no triviales (`agent_runs` cortados
+   a 300.00–300.06s, dos corridas independientes). Hacerlo configurable por
+   target antes de volver a comparar modelos de tamaños muy distintos.
+2. **`expected_outputs` no se traduce en acceptance criteria exigibles.** Un
+   work item puede listar un entregable en `expected_outputs` (p. ej. el
+   Markdown de uso) sin que ningún `acceptance_criteria` lo fuerce, y el
+   revisor semántico nunca lo evalúa. Confirmado en 2 de los 4 falsos
+   `completed`. Decidir: ¿se deriva automáticamente un AC de cada
+   `expected_output` al descomponer, o se documenta como límite conocido?
+3. **`SCRIPT_EXECUTION` corre sin argumentos y sin oráculo.** El perfil
+   interno (`backend/agentarium/execution/validation.py`) ejecuta el script
+   entregado sin los argumentos del contrato real y sólo mira el código de
+   salida — no puede detectar una salida numéricamente incorrecta ni un
+   script que traga excepciones sin `raise`/`sys.exit`. Es una limitación
+   estructural conocida (el orquestador no tiene el fixture oculto), no
+   necesariamente un bug: decidir si conviene una señal mínima o si se acepta
+   como límite.
+4. **El revisor semántico evalúa contenido, nunca estructura.** El caso
+   `architecture_document`/`qwen3:8b` rep 2 tenía el contenido correcto bajo
+   el encabezado equivocado, y el revisor lo aprobó igual. Evaluar si el
+   revisor debería recibir alguna señal de la forma esperada, o si eso queda
+   exclusivamente del lado de los validadores del benchmark y nunca del
+   agente.
+
+**Criterios de salida:** cada uno de los cuatro puntos tiene una resolución
+mecánica mergeada o una nota explícita en este documento aceptándolo como
+límite conocido, con su razón. Ninguno se resuelve "probando con otro
+prompt" (regla 4: máximo un intento prompt-only, y los prompts ya se tratan
+como ayuda probabilística, no garantía). Sólo después de esto se decide si
+remedir con una suite nueva o pasar directo a P2 con las capacidades ya
+conocidas.
 
 ### P2 — contrato real de capacidades del runtime
 
@@ -551,9 +699,14 @@ botella resuelve.
    sus regresiones.~~ Entregado, ver P0 (PR #1).
 2. ~~**PR 2 — medición:** casos versionados, taxonomía y `benchmark report`.~~
    Entregado como P1.1 (PR #2), más P1.1b (PR #3, validación funcional) y
-   P1.2a (PR #4, identidad de la suite). **Queda ejecutar la matriz, P1.2.**
-3. **PR 3 — capacidades:** manifiesto del runtime y fallo temprano por capacidad
-   no disponible.
+   P1.2a (PR #4, identidad de la suite). ~~Queda ejecutar la matriz, P1.2.~~
+   **Ejecutada: 27/27, criterio de calidad no cumplido (PR de medición
+   P1.2).**
+3. **P1.3 — cerrar las causas mecánicas que P1.2 encontró:** timeout fijo por
+   rol, `expected_outputs` no exigible, `SCRIPT_EXECUTION` sin oráculo,
+   revisor sin señal de estructura. Bloquea empezar P2 con datos limpios.
+4. **PR de capacidades (P2):** manifiesto del runtime y fallo temprano por
+   capacidad no disponible.
 
 No empezar la modularización grande antes de que PR 2 congele el
 comportamiento que se debe preservar.
