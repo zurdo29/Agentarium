@@ -58,6 +58,27 @@ def test_the_three_versioned_cases_load_and_declare_their_schema() -> None:
     assert csv_case.functional is not None
 
 
+def test_the_architecture_document_goal_names_its_required_sections() -> None:
+    # P1.3d: estas secciones son exigidas por validadores estructurales
+    # (file_matches sobre un encabezado dedicado) — el goal tiene que
+    # pedirlas literalmente o el validador queda sin respaldo (PLANS.md).
+    case = next(one for one in load_cases() if one.id == "architecture_document")
+
+    assert "Componentes principales" in case.goal
+    assert "Decisiones de diseño" in case.goal
+    assert "Glosario" in case.goal
+    assert "lista o tabla" in case.goal
+
+
+def test_the_library_goal_names_the_endpoint_documentation() -> None:
+    # P1.3d: expected_artifacts por sí solo no puede justificar este
+    # validador — el modelo nunca lo ve, sólo goal (runner.py:245).
+    case = next(one for one in load_cases() if one.id == "library_api_sqlite")
+
+    assert "documentación" in case.goal.casefold()
+    assert "markdown" in case.goal.casefold()
+
+
 def test_every_case_file_is_named_after_its_id() -> None:
     for path in sorted(cases_root().glob("*.yaml")):
         raw = yaml.safe_load(path.read_text(encoding="utf-8"))
@@ -916,17 +937,8 @@ def test_the_architecture_case_rejects_a_document_that_only_echoes_the_goal(
     artifact with no architecture in it at all.
     """
     case = next(one for one in load_cases() if one.id == "architecture_document")
-    goal = next(
-        line
-        for line in [
-            "Crear un documento de arquitectura en Markdown para un sistema de "
-            "reservas: describe los componentes principales, las decisiones de "
-            "diseño con al menos una alternativa considerada para cada una, y "
-            "un glosario de los términos del dominio."
-        ]
-    )
     (tmp_path / "eco.md").write_text(
-        f"# Especificar el alcance\n\n## Objetivo\n{goal}\n", encoding="utf-8"
+        f"# Especificar el alcance\n\n## Objetivo\n{case.goal}\n", encoding="utf-8"
     )
 
     outcomes = BenchmarkRunner.validate_delivery(case, tmp_path)

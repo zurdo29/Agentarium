@@ -1,11 +1,12 @@
-schema_version: 1
+schema_version: 2
 id: library_api_sqlite
 title: API de biblioteca con SQLite
 goal: >-
   Crear una API REST en Python para gestionar el catálogo de una biblioteca:
   libros, autores y préstamos, con persistencia en SQLite. Debe permitir listar,
   agregar, actualizar y eliminar libros, y validar que un libro prestado no se
-  pueda volver a prestar hasta que sea devuelto.
+  pueda volver a prestar hasta que sea devuelto. Incluye además documentación
+  de los endpoints en un archivo Markdown.
 
 expected_artifacts:
   - Código fuente de la API REST en Python
@@ -15,6 +16,13 @@ expected_artifacts:
 # El objetivo con el que se verificaron ADR 0020-0026. Es el caso que más
 # problemas reveló: elección de librerías fuera del sandbox, colisión de
 # archivos entre tareas hermanas, y candidatos repetidos.
+#
+# P1.3d: el validador de documentación existía desde siempre, pero el `goal`
+# nunca la pedía — sólo aparecía en `expected_artifacts`, que `runner.py`
+# no le muestra al modelo (sólo usa `case.goal`). El requisito era real e
+# intencional (ya estaba en `expected_artifacts`); el arreglo es pedirlo
+# también en el `goal`, no aflojar el validador. `schema_version` sube a 2
+# porque cambia lo que este caso mide.
 validators:
   - kind: file_exists
     description: Existe el código Python de la API
@@ -31,5 +39,5 @@ validators:
     pattern: "(?i)(prestad|loan|borrow)"
 
   - kind: file_exists
-    description: Existe documentación de los endpoints
+    description: Existe el documento Markdown solicitado
     path_glob: "**/*.md"
