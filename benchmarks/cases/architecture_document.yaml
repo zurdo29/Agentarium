@@ -48,7 +48,7 @@ validators:
     pattern: "(?im)^#{1,6}[ \\t]+.*(decisi[oó]n|dise[nñ]o)"
 
   - kind: file_matches
-    description: Una decisión enuncia su alternativa descartada
+    description: Hay una alternativa considerada presentada en una lista o tabla
     path_glob: "**/*.md"
     pattern: "(?im)^[ \\t]*([-*+]|\\d+\\.|\\|)[^\\n]*alternativa"
 

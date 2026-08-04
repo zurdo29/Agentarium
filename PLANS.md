@@ -850,7 +850,7 @@ huérfanas:**
 | `file_exists` — Existe el documento en Markdown | "Crear un documento de arquitectura en Markdown" |
 | `file_matches` — Hay una sección dedicada a los componentes | "secciones Markdown dedicadas a Componentes principales…" |
 | `file_matches` — Hay una sección de decisiones de diseño | "…Decisiones de diseño…" |
-| `file_matches` — Una decisión enuncia su alternativa descartada | "presenta cada decisión y al menos una alternativa considerada mediante una lista o tabla" |
+| `file_matches` — Hay una alternativa considerada presentada en una lista o tabla | "presenta cada decisión y al menos una alternativa considerada mediante una lista o tabla" |
 | `file_matches` — Hay un glosario con términos definidos | "…y Glosario." |
 | `file_absent` — no entrega código ejecutable | "No incluyas código ejecutable ni archivos Python." |
 
