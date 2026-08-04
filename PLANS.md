@@ -16,7 +16,7 @@ crecer indefinidamente aquí.
 > igual sigue sin ser cero. Por eso P1.2 queda como medición completa, no
 > como fase cerrada, y **P1 sigue abierto**. P1.3 quedó dividido en cuatro PR
 > independientes (P1.3a–P1.3d) para cerrar mecánicamente las causas
-> observadas. **P1.3a, P1.3b y P1.3c ya cerraron.** P1.3a instrumentó tiempo de
+> observadas. **Las cuatro ya cerraron.** P1.3a instrumentó tiempo de
 > cola vs. tiempo de generación con evidencia sintética, sin Ollama real:
 > `asyncio.wait_for` envolvía la espera del semáforo de concurrencia además
 > de la llamada real, y ahora un `agent_run` que falle por timeout puede
@@ -33,10 +33,16 @@ crecer indefinidamente aquí.
 > `csv_expenses_cli` — pero **hoy ningún work item puede declarar ese
 > contrato todavía**: el contrato del LLM de planificación deliberadamente
 > no lo expone (ver ADR 0027), así que el mecanismo queda probado de punta a
-> punta pero inerte en cualquier corrida real. **El siguiente paso es
-> P1.3d** (auditar validadores del benchmark por sobre-especificación).
-> Detalle completo en "P1.2 — la matriz", la sección "P1.3" más abajo, y
-> `findings.md`. No cambiar prompts ni casos de la suite
+> punta pero inerte en cualquier corrida real. P1.3d construyó la
+> trazabilidad `goal` → validador completa de los tres casos y encontró un
+> segundo hallazgo real además del ya conocido (`library_api_sqlite` pedía
+> documentación que el `goal` nunca comunicaba al modelo) — ambos casos se
+> corrigieron extendiendo el `goal`, no aflojando validadores.
+> **P1.3 en conjunto queda cerrado. El siguiente paso es decidir si
+> remedir con una suite nueva o pasar directo a P2** con las capacidades ya
+> conocidas — todavía no decidido. Detalle completo en "P1.2 — la matriz",
+> la sección "P1.3" más abajo, y `findings.md`. No cambiar prompts ni casos
+> de la suite
 > `p1-baseline-2026-08`: ya cumplió su propósito y queda congelada como
 > registro histórico; cualquier remedición usa un nombre de suite nuevo.
 > Resultados versionados en `benchmarks/results/p1-baseline-2026-08/`
@@ -251,12 +257,15 @@ confirmación. Sólo está cubierta por pruebas.
 Dividido en entregas: **P1.1 (maquinaria, sin inferencia real)**, **P1.1b
 (validación funcional)**, **P1.2a (identidad de la suite)**, **P1.2 (la
 matriz 3×3×3)** y **P1.3a–P1.3d (cerrar las causas que P1.2 encontró, cuatro
-PR independientes)**. Las primeras tres están cerradas. **P1.2 ya midió
-(27/27), pero su criterio de calidad no se cumplió** (3/27 falsos
-`completed` confirmados tras adjudicación manual), así que P1 en conjunto
-sigue abierto hasta que P1.3a–d resuelvan o acepten explícitamente las
-causas observadas — regla 6 (WIP limitado) sigue permitiendo esto porque es
-un único P1, no uno nuevo.
+PR independientes)**. **P1.2 ya midió (27/27), pero su criterio de calidad
+no se cumplió** (3/27 falsos `completed` confirmados tras adjudicación
+manual). **Las cuatro P1.3a–d ya resolvieron o documentaron
+explícitamente cada causa observada** (timeout instrumentado, criterios
+derivados de `expected_outputs`, contrato de ejecución declarado para
+`SCRIPT_EXECUTION`, trazabilidad `goal` → validador). P1 en conjunto sigue
+abierto hasta decidir, en otra sesión, si remedir con una suite nueva o
+pasar directo a P2 con las capacidades ya conocidas — regla 6 (WIP
+limitado) sigue permitiendo esto porque es un único P1, no uno nuevo.
 
 **Esfuerzo estimado:** 4 PR más para P1.3a–d, 4–6 sesiones más tiempo de
 inferencia ya gastado en segundo plano (P1.2 no se re-corre).
@@ -802,34 +811,95 @@ lista de columnas ya parametrizada extendida en una línea.
   operación `test`, confirmando ahí que el `SCRIPT_EXECUTION` real usó los
   `args` declarados y satisfizo `produces` — sin tocar Ollama.
 
-##### P1.3d — auditar validadores del benchmark por sobre-especificación
-
-**Esfuerzo estimado:** 1 PR, 1 sesión.
+##### P1.3d — trazabilidad `goal` → validador de los tres casos — CERRADO (3 de agosto de 2026)
 
 El validador de `architecture_document` ("sección de decisiones de diseño")
-exigía un encabezado dedicado que el `goal` del caso nunca pidió, y produjo
-el falso negativo de P1.2 (ver arriba y `findings.md`). No es un problema
-del revisor semántico ni del orquestador — es el validador más estricto que
-el objetivo real del caso.
+exigía un encabezado dedicado que el `goal` del caso nunca pedía
+literalmente, y produjo el falso negativo confirmado de P1.2: una entrega
+de qwen3:8b (rep 2) con contenido de decisiones+alternativa completo y
+correcto, sólo organizado bajo el encabezado de "Componentes" en vez del
+suyo propio (ver `findings.md`). Al construir la tabla completa apareció un
+**segundo hallazgo real**, no señalado antes: en `library_api_sqlite`, el
+validador "documentación de los endpoints" no tenía ninguna base en el
+`goal` — sólo aparecía en `expected_artifacts`, campo puramente descriptivo
+que `runner.py` nunca pasa al modelo (`create_project(run.case.goal,
+title)`, sólo `goal`). El requisito no fue comunicado al modelo, así que un
+fallo en ese validador no podía atribuírsele justamente.
 
-1. Para cada validador estructural de los tres casos, construir
-   **trazabilidad explícita `goal` → validador**: qué frase o cláusula
-   literal del `goal` justifica esa exigencia. Un validador sin una frase
-   del `goal` que lo respalde queda marcado como sobre-especificación por
-   default, no como limitación aceptada tácitamente.
-2. Ajustar el validador de `architecture_document`, o incorporar al `goal`
-   del caso la exigencia de encabezado dedicado si se decide que es
-   intencional (para que quede trazable como las demás).
+**Decisión: en ambos casos el requisito medido era real e intencional —
+sólo que nunca se comunicó al modelo. El arreglo es extender el `goal`
+para pedirlo explícitamente, no debilitar el validador.** Debilitar la
+exigencia de encabezado en `architecture_document` habría reintroducido el
+riesgo que el propio caso ya documentaba: el proveedor mock, que repite el
+enunciado del objetivo, aprobaría un artefacto sin estructura real
+(confirmado por `test_the_architecture_case_rejects_a_document_that_only_echoes_the_goal`,
+que sigue pasando con el `goal` nuevo). `expected_artifacts` queda anotado
+en `contracts.py` como lo que es: metadato para humanos, nunca mostrado al
+modelo, incapaz de justificar un validador por sí solo.
 
-**Criterio de salida:** una tabla `validador → frase del goal que lo
-justifica` para los tres casos, sin entradas huérfanas salvo que queden
-documentadas explícitamente aquí como sobre-especificación deliberada, con
-su razón.
+Ambos casos suben de `schema_version: 1` a `2` porque cambia lo que miden.
+`csv_expenses_cli` no se tocó — ya estaba totalmente trazable.
 
-**Criterio de salida de P1.3 en conjunto:** las cuatro PR mergeadas, o cada
-causa aceptada explícitamente como límite conocido con su razón en este
-documento. Sólo después se decide si remedir con una suite nueva o pasar
-directo a P2 con las capacidades ya conocidas.
+**Tabla `validador → frase del goal que lo justifica` — cero entradas
+huérfanas:**
+
+**`architecture_document`** (v2):
+
+| Validador | Frase del `goal` |
+|---|---|
+| `file_exists` — Existe el documento en Markdown | "Crear un documento de arquitectura en Markdown" |
+| `file_matches` — Hay una sección dedicada a los componentes | "secciones Markdown dedicadas a Componentes principales…" |
+| `file_matches` — Hay una sección de decisiones de diseño | "…Decisiones de diseño…" |
+| `file_matches` — Hay una alternativa considerada presentada en una lista o tabla | "presenta cada decisión y al menos una alternativa considerada mediante una lista o tabla" |
+| `file_matches` — Hay un glosario con términos definidos | "…y Glosario." |
+| `file_absent` — no entrega código ejecutable | "No incluyas código ejecutable ni archivos Python." |
+
+**`csv_expenses_cli`** (v2, sin cambios en esta PR):
+
+| Validador | Frase del `goal` |
+|---|---|
+| `file_exists` — entrypoint declarado por el contrato | "El programa debe llamarse exactamente `expenses.py`" |
+| `file_exists` — documentación de uso en Markdown | "Incluye también un documento Markdown con las instrucciones de uso" |
+| `file_matches` — el script lee un CSV de verdad | "lea un archivo CSV de gastos" |
+| `file_matches` — la documentación explica cómo ejecutarlo | "instrucciones de uso" + comando exacto dado en el `goal` |
+| `functional` — procesa el CSV fixture y produce el resumen correcto | comando, columnas de entrada y claves de salida, todo literal en el `goal` |
+
+**`library_api_sqlite`** (v2):
+
+| Validador | Frase del `goal` |
+|---|---|
+| `file_exists` — código Python de la API | "Crear una API REST en Python" |
+| `file_matches` — la persistencia usa SQLite de verdad | "con persistencia en SQLite" |
+| `file_matches` — se declara la validación del préstamo | "validar que un libro prestado no se pueda volver a prestar hasta que sea devuelto" |
+| `file_exists` — existe el documento Markdown solicitado | "Incluye además documentación de los endpoints en un archivo Markdown" (nuevo) |
+
+**Efecto secundario real, encontrado y corregido en la misma PR:**
+`ledger.py::assert_comparable` compara explícitamente
+`case_schema_version` de cada registro del ledger contra la versión del
+caso recién cargado — aparte de la comparación de `runtime_identity`.
+Subir la versión de `architecture_document` habría hecho que
+`test_benchmark_identity.py` disparara `SuiteDrift` en varias pruebas por
+una razón ajena a lo que cada una intentaba probar (sus registros de
+ejemplo hardcodeaban `case_schema_version=1`). Corregido con un helper
+(`_architecture_record`) que deriva la versión del caso realmente cargado
+en vez de un literal fijo, aplicado en los 5 sitios que comparan contra
+`_case()`, más el doble de ejecución de
+`test_weights_that_change_between_runs_abort_the_matrix`.
+
+**Criterio de salida cumplido:** tabla completa arriba, cero huérfanos.
+`test_benchmarks.py`: la prueba que simula al proveedor mock repitiendo el
+`goal` (antes mantenía una copia manual del texto viejo) ahora usa
+`case.goal` directamente — no puede volver a desincronizarse del YAML; +2
+pruebas nuevas confirman que el `goal` de cada caso nombra literalmente lo
+que su validador corregido comprueba. `test_benchmark_identity.py`: 27/27
+en verde tras la corrección de `case_schema_version` descrita arriba. No
+se corrió la matriz, no se tocó Ollama, no se modificó el informe de P1.2
+(`report.md`/`report.json`/`findings.md` intactos — el falso negativo fue
+real bajo el `goal` anterior y así queda documentado, no borrado).
+
+**Criterio de salida de P1.3 en conjunto: cumplido — las cuatro PR
+(P1.3a/b/c/d) mergeadas.** Queda decidir, en otra sesión, si remedir con
+una suite nueva o pasar directo a P2 con las capacidades ya conocidas.
 
 ### P2 — contrato real de capacidades del runtime
 
@@ -924,11 +994,11 @@ botella resuelve.
    P1.2).**
 3. **P1.3a–P1.3d — cerrar las causas mecánicas que P1.2 encontró, cuatro PR
    independientes:** ~~P1.3a instrumenta `queue_wait` vs.
-   `generation_time`~~, ~~P1.3b hace exigible `expected_outputs`~~ y
+   `generation_time`~~, ~~P1.3b hace exigible `expected_outputs`~~,
    ~~P1.3c le da a `SCRIPT_EXECUTION` un contrato de ejecución declarado~~
-   entregados. Queda **P1.3d**, que audita los validadores del benchmark
-   por sobre-especificación respecto al `goal` (causa del falso negativo
-   de `architecture_document`). Bloquea empezar P2 con datos limpios.
+   y ~~P1.3d audita los validadores del benchmark por
+   sobre-especificación~~ — las cuatro entregadas. Queda decidir si
+   remedir con una suite nueva o pasar directo a P2 con datos limpios.
 4. **PR de capacidades (P2):** manifiesto del runtime y fallo temprano por
    capacidad no disponible.
 

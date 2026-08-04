@@ -1,11 +1,14 @@
-schema_version: 1
+schema_version: 2
 id: architecture_document
 title: Documento de arquitectura sin código
 goal: >-
-  Crear un documento de arquitectura en Markdown para un sistema de reservas de
-  un restaurante pequeño: describe los componentes principales, las decisiones
-  de diseño con al menos una alternativa considerada para cada una, y un
-  glosario de los términos del dominio.
+  Crear un documento de arquitectura en Markdown para un sistema de reservas
+  de un restaurante pequeño. Organiza el documento en secciones Markdown
+  dedicadas a Componentes principales, Decisiones de diseño y Glosario.
+
+  En la sección de decisiones, presenta cada decisión y al menos una
+  alternativa considerada mediante una lista o tabla. No incluyas código
+  ejecutable ni archivos Python.
 
 expected_artifacts:
   - Un documento de arquitectura en Markdown
@@ -20,6 +23,15 @@ expected_artifacts:
 # objetivo ya menciona "componentes", "alternativa" y "glosario". Verificado
 # contra el proveedor mock, que hace exactamente eso. Un encabezado dedicado
 # no se obtiene parafraseando el pedido.
+#
+# P1.3d: el `goal` antes no pedía explícitamente estas secciones como
+# encabezados dedicados — era una exigencia que sólo vivía en el validador,
+# no en lo que el modelo recibía. Eso produjo un falso negativo real en
+# P1.2 (qwen3:8b rep 2, ver findings.md): una entrega con contenido de
+# decisiones+alternativa completo y correcto, sólo organizada bajo el
+# encabezado de "Componentes" en vez del suyo propio. El `goal` ahora pide
+# la estructura literalmente y `schema_version` sube a 2 porque cambia lo
+# que este caso mide. Los validadores no cambiaron.
 validators:
   - kind: file_exists
     description: Existe el documento en Markdown
@@ -36,7 +48,7 @@ validators:
     pattern: "(?im)^#{1,6}[ \\t]+.*(decisi[oó]n|dise[nñ]o)"
 
   - kind: file_matches
-    description: Una decisión enuncia su alternativa descartada
+    description: Hay una alternativa considerada presentada en una lista o tabla
     path_glob: "**/*.md"
     pattern: "(?im)^[ \\t]*([-*+]|\\d+\\.|\\|)[^\\n]*alternativa"
 

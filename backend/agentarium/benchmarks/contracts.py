@@ -90,6 +90,10 @@ class BenchmarkCase(BenchmarkModel):
     id: str = Field(pattern=r"^[a-z][a-z0-9_]*$")
     title: str = Field(min_length=1)
     goal: str = Field(min_length=1)
+    # Descriptive metadata for humans reading the case file — never shown to
+    # the model (`runner.py` only ever passes `case.goal` to `create_project`).
+    # A validator cannot be justified by something listed only here; if it
+    # checks for X, X must also be in `goal` (P1.3d, PLANS.md).
     expected_artifacts: list[str] = Field(min_length=1)
     validators: list[CaseValidator] = Field(min_length=1)
     functional: FunctionalCheck | None = None

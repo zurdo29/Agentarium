@@ -72,6 +72,22 @@ def _case():  # type: ignore[no-untyped-def]
     return load_cases(only=["architecture_document"])[0]
 
 
+def _architecture_record(**overrides: object) -> BenchmarkRunRecord:
+    # `_record()` defaults `case_schema_version` to 1. `_case()` loads the
+    # real case file, whose schema_version can move independently (P1.3d
+    # bumped it to 2) — hardcoding 1 here would make every test that
+    # compares a record against `_case()` drift on case_schema_version for
+    # a reason unrelated to what it actually tests. Deriving it from the
+    # loaded case keeps this correct regardless of what schema_version the
+    # file declares.
+    case = _case()
+    return _record(
+        case_id=case.id,
+        case_schema_version=case.schema_version,
+        **overrides,
+    )
+
+
 def _runner(
     service: ApplicationService,
     tmp_path: Path,
@@ -184,7 +200,7 @@ def test_an_unchanged_environment_stays_comparable(
     tmp_path: Path,
 ) -> None:
     ledger = BenchmarkLedger(tmp_path / "ledger.jsonl")
-    ledger.append(_record(case_id="architecture_document"))
+    ledger.append(_architecture_record())
     runner = _runner(service, tmp_path)
 
     pending = runner.pending(
@@ -201,7 +217,7 @@ def test_a_digest_for_another_model_does_not_trip_the_comparison(
     # Digests are compared per (provider, model): a matrix that adds a second
     # model must not invalidate the first one's records.
     ledger = BenchmarkLedger(tmp_path / "ledger.jsonl")
-    ledger.append(_record(case_id="architecture_document"))
+    ledger.append(_architecture_record())
     runner = _runner(
         service,
         tmp_path,
@@ -279,7 +295,11 @@ async def test_weights_that_change_between_runs_abort_the_matrix(
         return "0.32.5"
 
     async def fake_run(self, run):  # type: ignore[no-untyped-def]
-        return _record(repetition=run.repetition, case_id=run.case.id)
+        return _record(
+            repetition=run.repetition,
+            case_id=run.case.id,
+            case_schema_version=run.case.schema_version,
+        )
 
     monkeypatch.setattr(runner_module, "ollama_model_digests", shifting_digests)
     monkeypatch.setattr(runner_module, "ollama_version", steady_version)
@@ -436,8 +456,7 @@ def test_a_mock_suite_resume_ignores_an_ollama_version_change(
     """
     ledger = BenchmarkLedger(tmp_path / "ledger.jsonl")
     ledger.append(
-        _record(
-            case_id="architecture_document",
+        _architecture_record(
             provider="mock",
             model="",
             model_digest=None,
@@ -466,7 +485,7 @@ def test_an_ollama_record_still_compares_its_version(
     # The exemption is scoped to records that did not use Ollama; one that did
     # must still notice the server moving underneath it.
     ledger = BenchmarkLedger(tmp_path / "ledger.jsonl")
-    ledger.append(_record(case_id="architecture_document"))
+    ledger.append(_architecture_record())
     runner = _runner(
         service,
         tmp_path,
@@ -483,7 +502,7 @@ def test_an_ollama_record_outside_the_current_matrix_is_not_compared(
 ) -> None:
     # Resuming a narrower matrix must not drift on a model it no longer runs.
     ledger = BenchmarkLedger(tmp_path / "ledger.jsonl")
-    ledger.append(_record(case_id="architecture_document", model="qwen3:8b"))
+    ledger.append(_architecture_record(model="qwen3:8b"))
     runner = _runner(
         service,
         tmp_path,
