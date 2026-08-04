@@ -5,9 +5,18 @@ from typing import Any, cast
 from agentarium.domain.enums import ReviewVerdict
 from agentarium.domain.models import Artifact, Review, WorkItem
 from agentarium.domain.models import TestReport as ReportModel
+from agentarium.execution.capabilities import RuntimeCapabilityManifest
 from agentarium.execution.validation import VALIDATION_CONTRACT_VERSION
 from agentarium.memory.context import ContextBuilder
 from agentarium.repositories import Repository
+
+
+def _capabilities() -> RuntimeCapabilityManifest:
+    return RuntimeCapabilityManifest(
+        python_version="3.14.0",
+        executables_allowed=["git", "python"],
+        executables_available=["git", "python"],
+    )
 
 
 class ContextRepository:
@@ -134,7 +143,7 @@ def test_operational_context_uses_only_approved_dependencies_and_retry_feedback(
         [dependency],
         [report],
     )
-    builder = ContextBuilder(cast(Repository, repository))
+    builder = ContextBuilder(cast(Repository, repository), _capabilities())
     monkeypatch.setattr(builder, "project", lambda _project_id: {"brief": {}})
     item = WorkItem(
         id="current",
@@ -233,7 +242,7 @@ def test_operational_context_excludes_dependency_with_foreign_criteria(
         acceptance_criteria=["Diseño listo"],
     )
     repository = ContextRepository([artifact], [review], [dependency])
-    builder = ContextBuilder(cast(Repository, repository))
+    builder = ContextBuilder(cast(Repository, repository), _capabilities())
     monkeypatch.setattr(builder, "project", lambda _project_id: {"brief": {}})
     item = WorkItem(
         id="current",
@@ -284,7 +293,7 @@ def test_dependency_artifacts_includes_approved_work_with_empty_addressed_list()
         acceptance_criteria=["Diseño listo"],
     )
     repository = ContextRepository([artifact], [review], [dependency])
-    builder = ContextBuilder(cast(Repository, repository))
+    builder = ContextBuilder(cast(Repository, repository), _capabilities())
     item = WorkItem(
         id="current",
         project_id="project",
@@ -299,3 +308,25 @@ def test_dependency_artifacts_includes_approved_work_with_empty_addressed_list()
     dependency_artifacts = builder.dependency_artifacts(item)
 
     assert [entry["id"] for entry in dependency_artifacts] == ["approved-no-addressed"]
+
+
+def test_operational_context_carries_the_runtime_capability_manifest(
+    monkeypatch: Any,
+) -> None:
+    repository = ContextRepository([], [], [])
+    capabilities = _capabilities()
+    builder = ContextBuilder(cast(Repository, repository), capabilities)
+    monkeypatch.setattr(builder, "project", lambda _project_id: {"brief": {}})
+    item = WorkItem(
+        id="current",
+        project_id="project",
+        milestone_id="milestone",
+        title="Crear herramienta",
+        description="Implementar lógica",
+        expected_outputs=["Código"],
+        acceptance_criteria=["Funciona"],
+    )
+
+    context = builder.operational(item)
+
+    assert context["runtime_capabilities"] == capabilities.model_dump(mode="json")

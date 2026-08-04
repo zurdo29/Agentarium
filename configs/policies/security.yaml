@@ -31,3 +31,13 @@ environment_allow:
   - TEMP
   - TMP
   - PYTHONPATH
+# Declared capability policy (P2.1, ADR 0028) — read by
+# execution/capabilities.py to build the manifest handed to the planner
+# and worker as data. Empty on purpose: Agentarium's own backend deps
+# (fastapi, pydantic, sqlalchemy, ...) happen to be importable in the same
+# venv, but that's an accident of implementation, never a guarantee for
+# delivered code. ADR 0020: enumerating them would couple generated
+# content to internal dependencies that can change.
+packages:
+  allowed: []
+network: deny

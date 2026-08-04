@@ -16,10 +16,10 @@ from agentarium.planning import BriefProposal, DecomposeProposal, PlanProposal
 
 from .base import ModelRequest
 
-PLANNING_PROMPT_VERSION = "planning-v3"
-WORKSPACE_PROMPT_VERSION = "workspace-v7"
+PLANNING_PROMPT_VERSION = "planning-v4"
+WORKSPACE_PROMPT_VERSION = "workspace-v8"
 DECOMPOSE_PROMPT_VERSION = "decompose-v3"
-PLAN_REVISION_PROMPT_VERSION = "plan-revision-v1"
+PLAN_REVISION_PROMPT_VERSION = "plan-revision-v2"
 
 _OPERATION_CONTRACTS: dict[str, type[BaseModel]] = {
     "brief": BriefProposal,
@@ -64,7 +64,12 @@ _OPERATION_INSTRUCTIONS = {
         "además de (no en vez de) declarar la dependencia si corresponde. "
         "Preferí dividir un componente compartido en archivos separados (por "
         "ejemplo módulos bajo una carpeta) en vez de forzar varias tareas "
-        "'exclusive' a escribir el mismo archivo."
+        "'exclusive' a escribir el mismo archivo. "
+        "SOLICITUD.payload.runtime_capabilities declara qué puede ejecutar el "
+        "worker (third_party_packages_allowed, network_policy). Si una tarea "
+        "sólo puede cumplirse con una capacidad fuera de esa declaración, no "
+        "la plantees como alcanzable sin más: decláralo explícitamente como "
+        "limitación conocida de la tarea."
     ),
     "plan_revision": (
         "SOLICITUD.payload.previous_plan tiene tareas cuyos owned_paths "
@@ -133,15 +138,16 @@ _OPERATION_INSTRUCTIONS = {
         "vertical); nunca es contenido de dominio ni una decisión de arquitectura "
         "del producto solicitado. No lo copies, resumas ni adaptes como si fuera "
         "parte del entregable. "
-        "Si un archivo .py declarado será ejecutado (criterios que exigen "
-        "herramienta ejecutable), ese script corre en un entorno aislado sin "
-        "acceso a red y sin instalación de paquetes: no puede importar nada fuera "
-        "de la biblioteca estándar de Python. No uses Flask, FastAPI, requests, "
-        "pandas ni ninguna dependencia de terceros en un script ejecutable; usa "
-        "sólo módulos como sqlite3, http.server, json, csv o argparse. Si el "
-        "objetivo pide explícitamente una librería de terceros como parte de la "
-        "entrega, decláralo como limitación en vez de producir un script que no "
-        "puede ejecutarse."
+        "Si un archivo .py declarado será ejecutado, corre bajo las restricciones "
+        "declaradas en SOLICITUD.payload.runtime_capabilities: "
+        "third_party_packages_allowed lista los paquetes de terceros permitidos "
+        "(vacía hoy: sólo biblioteca estándar de Python, por ejemplo sqlite3, "
+        "http.server, json, csv, argparse) y network_policy indica el acceso de "
+        "red disponible ('deny' hoy). No importes Flask, FastAPI, requests, "
+        "pandas ni nada fuera de third_party_packages_allowed. Si el objetivo "
+        "pide explícitamente una librería de terceros como parte de la entrega, "
+        "decláralo como limitación en vez de producir un script que no puede "
+        "ejecutarse."
     ),
     "test": (
         "Valida únicamente evidencia técnica: file_verified, checksums, aislamiento y "

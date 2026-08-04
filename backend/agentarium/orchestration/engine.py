@@ -149,7 +149,12 @@ class Orchestrator:
                 ModelRequest(
                     operation="plan",
                     project_id=project_id,
-                    payload={"brief": brief.model_dump(mode="json")},
+                    payload={
+                        "brief": brief.model_dump(mode="json"),
+                        "runtime_capabilities": self.memory.capabilities.model_dump(
+                            mode="json"
+                        ),
+                    },
                 ),
                 correlation_id,
             )
@@ -1959,6 +1964,9 @@ class Orchestrator:
                             "brief": brief.model_dump(mode="json"),
                             "previous_plan": current.model_dump(mode="json"),
                             "path_conflicts": conflicts,
+                            "runtime_capabilities": self.memory.capabilities.model_dump(
+                                mode="json"
+                            ),
                         },
                     ),
                     correlation_id,

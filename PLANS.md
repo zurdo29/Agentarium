@@ -6,7 +6,7 @@ en `docs/decisions/`. Si una investigación no cambia la arquitectura, debe
 quedar en el commit, el issue o el informe de benchmark correspondiente, no
 crecer indefinidamente aquí.
 
-> **Dónde estamos (3 de agosto de 2026).** P0, P1.1, P1.1b y P1.2a siguen
+> **Dónde estamos (4 de agosto de 2026).** P0, P1.1, P1.1b y P1.2a siguen
 > cerrados. **P1.2 (la matriz 3×3×3) ya se ejecutó completa: 27/27 corridas
 > registradas**, pero su criterio de calidad ("cero falsos `completed`") **no
 > se cumplió**: el informe automático señala 4/27; la adjudicación manual
@@ -38,11 +38,20 @@ crecer indefinidamente aquí.
 > segundo hallazgo real además del ya conocido (`library_api_sqlite` pedía
 > documentación que el `goal` nunca comunicaba al modelo) — ambos casos se
 > corrigieron extendiendo el `goal`, no aflojando validadores.
-> **P1.3 en conjunto queda cerrado. El siguiente paso es decidir si
-> remedir con una suite nueva o pasar directo a P2** con las capacidades ya
-> conocidas — todavía no decidido. Detalle completo en "P1.2 — la matriz",
-> la sección "P1.3" más abajo, y `findings.md`. No cambiar prompts ni casos
-> de la suite
+> **P1.3 en conjunto queda cerrado. Decisión: pasar directo a P2 sin
+> remedir P1 con una suite nueva, por ahora.** Razón: P1.3c deja
+> `SCRIPT_EXECUTION` con un contrato de ejecución declarado pero
+> deliberadamente inerte en corridas reales (nada lo puede poblar
+> todavía); gastar horas de matriz ahora no cerraría esa incertidumbre
+> concreta. Se acepta como límite conocido y se continúa con P2. **P2
+> también se divide en dos PR: P2.1 (manifiesto de capacidades del
+> runtime, incluido como datos en el contexto del planificador y del
+> worker) ya cerró; P2.2 (preflight de imports/comandos +
+> `unsupported_capability`) queda para después.** Remedir P1 sigue como
+> opción abierta, no descartada, para cuando haga falta comparar contra
+> una baseline real. Detalle completo en "P1.2 — la matriz", la sección
+> "P1.3" más abajo, la sección "P2" y `findings.md`. No cambiar prompts ni
+> casos de la suite
 > `p1-baseline-2026-08`: ya cumplió su propósito y queda congelada como
 > registro histórico; cualquier remedición usa un nombre de suite nuevo.
 > Resultados versionados en `benchmarks/results/p1-baseline-2026-08/`
@@ -903,21 +912,79 @@ una suite nueva o pasar directo a P2 con las capacidades ya conocidas.
 
 ### P2 — contrato real de capacidades del runtime
 
-**Esfuerzo estimado:** 1–2 PR, 2–3 sesiones.
+**Esfuerzo estimado:** 1–2 PR, 2–3 sesiones. Dividido en **P2.1**
+(manifiesto + inclusión como datos) y **P2.2** (preflight +
+`unsupported_capability`), misma disciplina de una hipótesis por PR que
+P1.3a–d. El ítem 5 original (instalación con red, entorno por proyecto)
+sigue fuera de alcance indefinidamente — para el MVP no se instalan
+paquetes dinámicamente durante una tarea: mezcla ejecución con red y
+autoridad, y complica mucho el aislamiento.
 
-Para el MVP no se instalarán paquetes dinámicamente durante una tarea. Esa
-opción mezcla ejecución con red y autoridad, y complica mucho el aislamiento.
+##### P2.1 — manifiesto de capacidades del runtime como datos — CERRADO (4 de agosto de 2026)
 
-1. Crear un manifiesto estructurado de capacidades: Python, paquetes
-   permitidos/disponibles, ejecutables y restricciones de red.
-2. Incluirlo en el contexto del planificador y del worker como datos, no sólo
-   como una frase de prompt.
-3. Hacer preflight de imports/comandos antes de gastar tester y revisor.
-4. Si falta una capacidad, terminar con `unsupported_capability` y una acción
-   concreta: elegir stack permitido, configurar un entorno o solicitar
-   aprobación.
-5. Dejar la creación de un entorno por proyecto y la instalación con red como
-   una mejora futura, siempre detrás de aprobación y allowlist.
+ADR 0020 agregó una frase de prompt avisando al worker que su sandbox es
+stdlib-only, sin red — verificado en vivo, no cambió nada (el modelo
+volvió a importar Flask, byte a byte idéntico). P2.1 prueba el siguiente
+rung: los mismos hechos como datos estructurados, no sólo prosa.
+
+- `RuntimeCapabilityManifest` (nuevo, `execution/capabilities.py`):
+  `python_version` (intérprete real, `sys.version.split()[0]`, misma
+  técnica que `identity.py`); `executables_allowed`/`executables_available`
+  (de `commands.allow` en `security.yaml` — "permitido por política" y
+  "de verdad resuelve en esta máquina vía `shutil.which`" son
+  afirmaciones distintas a propósito); `third_party_packages_allowed`
+  (nueva clave `packages.allowed`, vacía hoy); `network_policy:
+  Literal["deny"]` (nueva clave `network`, no `str` simple — mismo
+  patrón que `BenchmarkRunRecord.schema_version: Literal[2]`, y ampliarlo
+  después exige tocar el tipo en código, no sólo una línea de YAML). Una
+  única instancia construida en `build_application()`, compartida entre
+  `plan`, `plan_revision` y `work` — nunca reconstruida por separado.
+- **`executables_allowed` no es un sandbox del código entregado**: describe
+  qué invoca el propio pipeline de Agentarium contra la entrega, nunca un
+  límite sobre lo que un `subprocess` dentro del script podría hacer (ese
+  límite no existe en ningún nivel hoy — `run_command` es código muerto,
+  sin despachador, confirmado por grep completo).
+- **Límite conocido, documentado a propósito, no resuelto:** ni
+  `third_party_packages_allowed=[]` ni `network_policy="deny"` están
+  mecánicamente forzados hoy en el camino real de `SCRIPT_EXECUTION`
+  (`validation.py` invoca sin las flags `-E -s -S -B` que sí usa
+  `functional.py`). Cerrar esa brecha en el mismo PR habría impedido medir
+  después si un cambio de comportamiento vino del dato estructurado o de
+  que el validador empezó a rechazar algo distinto — se deja como ítem
+  futuro propio, no P2.2. Detalle completo, con citas textuales, en ADR
+  0028.
+- Las frases de prompt de ADR 0020 se **reescribieron** (no se agregaron
+  al lado) para apoyarse en `SOLICITUD.payload.runtime_capabilities`.
+  `PLANNING_PROMPT_VERSION`, `WORKSPACE_PROMPT_VERSION` y
+  `PLAN_REVISION_PROMPT_VERSION` subieron — un payload nuevo es cambio de
+  contrato (ADR 0003), con consumidor real en
+  `benchmarks/runner.py::prompt_versions()`/`ledger.py` aunque no en el
+  orquestador en vivo.
+
+**Criterio de salida cumplido, con evidencia sintética — sin Ollama real:**
+pruebas deterministas nuevas en `test_runtime_capabilities.py` (política
+real produce `third_party_packages_allowed=[]`/`network_policy="deny"`/
+ejecutables ordenados; `executables_available` es subconjunto de
+`executables_allowed`, determinista vía `shutil.which` interceptado;
+claves nuevas ausentes defaultean bien; `network_policy` inválido
+rechazado, justificando el `Literal`), `test_operational_context.py`
+(`operational()` incluye el manifiesto) y `test_planning_prompts.py`
+(payload real de `plan` y de `plan_revision`, vía el fixture `service`
+real, cargan la **misma** instancia — no dos copias que podrían
+divergir). `.\test.ps1` completo en verde.
+
+**Fuera de alcance a propósito:** sin enforcement, sin preflight, sin
+`unsupported_capability`, sin instalación, sin Ollama, sin matriz nueva,
+sin tocar `"brief"` ni `"decompose"`.
+
+##### P2.2 — preflight de imports/comandos + `unsupported_capability`
+
+**Esfuerzo estimado:** 1 PR, 1 sesión.
+
+1. Hacer preflight de imports/comandos antes de gastar tester y revisor.
+2. Si falta una capacidad, terminar con `unsupported_capability` y una
+   acción concreta: elegir stack permitido, configurar un entorno o
+   solicitar aprobación.
 
 **Criterio de salida:** el caso API nunca llega tarde a un
 `ModuleNotFoundError`; o usa una capacidad declarada o falla temprano con una
@@ -997,10 +1064,13 @@ botella resuelve.
    `generation_time`~~, ~~P1.3b hace exigible `expected_outputs`~~,
    ~~P1.3c le da a `SCRIPT_EXECUTION` un contrato de ejecución declarado~~
    y ~~P1.3d audita los validadores del benchmark por
-   sobre-especificación~~ — las cuatro entregadas. Queda decidir si
-   remedir con una suite nueva o pasar directo a P2 con datos limpios.
-4. **PR de capacidades (P2):** manifiesto del runtime y fallo temprano por
-   capacidad no disponible.
+   sobre-especificación~~ — las cuatro entregadas. **Decidido: pasar
+   directo a P2 sin remedir P1 con una suite nueva por ahora** (P1.3c
+   queda deliberadamente inerte en corridas reales; remedir ahora no
+   cerraría esa incertidumbre — límite conocido aceptado).
+4. **PR de capacidades (P2), dos PR:** ~~P2.1 manifiesto del runtime
+   incluido como datos~~ entregado. Queda **P2.2**, preflight + fallo
+   temprano por capacidad no disponible.
 
 No empezar la modularización grande antes de que PR 2 congele el
 comportamiento que se debe preservar.

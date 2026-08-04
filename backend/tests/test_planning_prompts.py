@@ -261,8 +261,104 @@ def test_work_prompt_exposes_versioned_workspace_contract() -> None:
     assert "placeholders" in rendered
     assert "funciones vacías" in rendered
     assert "project.decisions es un registro interno" in rendered
-    assert "sin acceso a red y sin instalación de paquetes" in rendered
+    assert "SOLICITUD.payload.runtime_capabilities" in rendered
+    assert "third_party_packages_allowed" in rendered
     assert "biblioteca estándar de Python" in rendered
+
+
+@pytest.mark.asyncio
+async def test_plan_payload_carries_the_runtime_capability_manifest(
+    service: ApplicationService,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Real build_application() wiring end to end, not a direct render_prompt
+    # call: confirms the same manifest instance built at startup actually
+    # reaches the "plan" operation's payload.
+    original_generate = MockProvider.generate
+    captured: list[dict[str, Any]] = []
+
+    async def capture_plan_payload(self, request, agent):  # type: ignore[no-untyped-def]
+        if request.operation == "plan":
+            captured.append(dict(request.payload))
+        return await original_generate(self, request, agent)
+
+    monkeypatch.setattr(MockProvider, "generate", capture_plan_payload)
+
+    project = service.create_project("Entregar un resultado verificable")
+    await service.orchestrator.plan_project(project.id)
+
+    assert captured, "la operacion plan nunca fue invocada"
+    manifest = captured[0]["runtime_capabilities"]
+    assert manifest["network_policy"] == "deny"
+    assert manifest["third_party_packages_allowed"] == []
+    assert manifest["executables_allowed"]
+
+
+@pytest.mark.asyncio
+async def test_plan_revision_payload_carries_the_same_manifest_instance(
+    service: ApplicationService,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    original_generate = MockProvider.generate
+    captured_plan: list[dict[str, Any]] = []
+    captured_revision: list[dict[str, Any]] = []
+
+    async def colliding_then_capture(self, request, agent):  # type: ignore[no-untyped-def]
+        if request.operation == "plan":
+            captured_plan.append(dict(request.payload))
+            content = {
+                "milestone": {
+                    "title": "MVP verificable",
+                    "description": "Del objetivo a un resultado integrado.",
+                },
+                "tasks": [
+                    {
+                        "key": "task_a",
+                        "title": "Tarea A",
+                        "description": "Primera mitad del módulo compartido.",
+                        "dependencies": [],
+                        "expected_outputs": ["parte a"],
+                        "acceptance_criteria": ["Existe la parte a"],
+                        "risk": "low",
+                        "priority": 90,
+                        "owned_paths": ["shared.py"],
+                    },
+                    {
+                        "key": "task_b",
+                        "title": "Tarea B",
+                        "description": "Segunda mitad del módulo compartido.",
+                        "dependencies": [],
+                        "expected_outputs": ["parte b"],
+                        "acceptance_criteria": ["Existe la parte b"],
+                        "risk": "low",
+                        "priority": 90,
+                        "owned_paths": ["shared.py"],
+                    },
+                ],
+            }
+            raw = json.dumps(content)
+            return ProviderResponse(
+                content=content,
+                raw_text=raw,
+                prompt_characters=len(raw),
+                response_characters=len(raw),
+            )
+        if request.operation == "plan_revision":
+            captured_revision.append(dict(request.payload))
+        return await original_generate(self, request, agent)
+
+    monkeypatch.setattr(MockProvider, "generate", colliding_then_capture)
+
+    project = service.create_project("Objetivo con conflicto de propiedad de archivo")
+    await service.orchestrator.plan_project(project.id)
+
+    assert captured_plan, "la operacion plan nunca fue invocada"
+    assert captured_revision, "la operacion plan_revision nunca fue invocada"
+    # Same manifest, not two independently-built copies that could drift.
+    assert (
+        captured_plan[0]["runtime_capabilities"]
+        == captured_revision[0]["runtime_capabilities"]
+    )
 
 
 @pytest.mark.parametrize(
