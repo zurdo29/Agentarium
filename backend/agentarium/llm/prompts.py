@@ -17,7 +17,7 @@ from agentarium.planning import BriefProposal, DecomposeProposal, PlanProposal
 from .base import ModelRequest
 
 PLANNING_PROMPT_VERSION = "planning-v4"
-WORKSPACE_PROMPT_VERSION = "workspace-v9"
+WORKSPACE_PROMPT_VERSION = "workspace-v10"
 DECOMPOSE_PROMPT_VERSION = "decompose-v3"
 PLAN_REVISION_PROMPT_VERSION = "plan-revision-v3"
 
@@ -143,8 +143,9 @@ _OPERATION_INSTRUCTIONS = {
         "vertical); nunca es contenido de dominio ni una decisión de arquitectura "
         "del producto solicitado. No lo copies, resumas ni adaptes como si fuera "
         "parte del entregable. "
-        "Si un archivo .py declarado será ejecutado, corre bajo las restricciones "
-        "declaradas en SOLICITUD.payload.runtime_capabilities: "
+        "Si un archivo .py declarado será ejecutado, debés respetar las "
+        "capacidades y políticas declaradas en "
+        "SOLICITUD.payload.runtime_capabilities: "
         "third_party_packages_allowed lista los paquetes de terceros permitidos "
         "(vacía hoy: sólo biblioteca estándar de Python, por ejemplo sqlite3, "
         "http.server, json, csv, argparse) y network_policy es la política "

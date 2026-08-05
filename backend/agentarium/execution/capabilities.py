@@ -1,4 +1,4 @@
-"""What the runtime can actually do, declared as data (P2.1, ADR 0028).
+"""Runtime capabilities and policies declared as data (P2.1, ADR 0028).
 
 ADR 0020 added a prompt sentence telling the worker its execution sandbox is
 stdlib-only, no network, no installs — verified live to change nothing: the

@@ -22,10 +22,12 @@ original (instalación con red, entorno por proyecto) sigue fuera de
 alcance indefinidamente.
 
 **Nota importante de honestidad, dicha explícitamente para que no se lea
-como una promesa implícita:** P2.1 sólo prueba si estructurar el dato
-cambia algo. No prueba que aplicar una consecuencia mecánica lo haga —
-eso es P2.2. Por la misma razón que ADR 0020 no alcanzó, no hay garantía
-de que datos estructurados sin consecuencia mecánica alguna sean
+como una promesa implícita:** P2.1 deja la infraestructura para poder
+medir después si estructurar el dato cambia algo — no hubo ninguna
+corrida real todavía, así que este PR no prueba comportamiento, sólo lo
+deja medible. Tampoco prueba que aplicar una consecuencia mecánica ayude
+— eso es P2.2. Por la misma razón que ADR 0020 no alcanzó, no hay
+garantía de que datos estructurados sin consecuencia mecánica alguna sean
 suficientes; sólo es el siguiente paso razonable antes de medirlo.
 
 ## Decisión
@@ -36,15 +38,15 @@ Nuevo módulo `backend/agentarium/execution/capabilities.py`:
 class RuntimeCapabilityManifest(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
     python_version: str
-    executables_allowed: list[str]
-    executables_available: list[str]
-    third_party_packages_allowed: list[str] = []
+    executables_allowed: tuple[str, ...]
+    executables_available: tuple[str, ...]
+    third_party_packages_allowed: tuple[str, ...] = ()
     network_policy: Literal["deny"] = "deny"
 ```
 
 Construido una única vez en `build_application()` y compartido — la misma
-instancia llega a `plan`, `plan_revision` y `work`, nunca reconstruida por
-separado para cada uno.
+instancia fuente se serializa por separado (`.model_dump()`) en `plan`,
+`plan_revision` y `work`, nunca reconstruida para cada uno.
 
 ### Fuentes de cada campo
 
