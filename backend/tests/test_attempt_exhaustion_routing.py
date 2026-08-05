@@ -294,6 +294,107 @@ async def test_infrastructure_failure_still_retries_while_attempts_remain(
     assert updated.attempt_count == 1
 
 
+# --- capability preflight short-circuits before tester/reviewer (P2.2) -----
+
+
+def _work_content_with_disallowed_import() -> dict[str, object]:
+    return _work_content(
+        [
+            {
+                "path": "library/api.py",
+                "content": "import flask\n\ndef listar():\n    return []\n",
+                "purpose": "Endpoints de la biblioteca",
+            }
+        ]
+    )
+
+
+def _fixed_work_response_recording_operations(
+    monkeypatch: pytest.MonkeyPatch,
+    content: dict[str, object],
+    operations: list[str],
+) -> None:
+    original_generate = MockProvider.generate
+
+    async def generate(self, request, agent):  # type: ignore[no-untyped-def]
+        operations.append(request.operation)
+        if request.operation != "work":
+            return await original_generate(self, request, agent)
+        raw = json.dumps(content)
+        return ProviderResponse(
+            content=content,
+            raw_text=raw,
+            prompt_characters=len(raw),
+            response_characters=len(raw),
+        )
+
+    monkeypatch.setattr(MockProvider, "generate", generate)
+
+
+@pytest.mark.asyncio
+async def test_unsupported_import_short_circuits_before_tester_and_reviewer(
+    service: ApplicationService,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project = service.create_project("Objetivo con import no permitido")
+    item = _exhausting_item(service, project.id, attempt_count=0, max_attempts=3)
+    operations: list[str] = []
+    _fixed_work_response_recording_operations(
+        monkeypatch, _work_content_with_disallowed_import(), operations
+    )
+
+    await service.orchestrator._execute_work_item(item, new_id())
+
+    assert "test" not in operations, operations
+    assert "review" not in operations, operations
+    assert service.repository.list_test_reports(project.id) == []
+    updated = service.repository.get_work_item(item.id)
+    assert updated.status is WorkItemStatus.READY
+    assert updated.attempt_count == 1
+    assert "Import no permitido" in str(updated.last_error)
+
+
+@pytest.mark.asyncio
+async def test_unsupported_import_event_carries_rejected_module_names(
+    service: ApplicationService,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project = service.create_project("Objetivo con import no permitido")
+    item = _exhausting_item(service, project.id, attempt_count=0, max_attempts=3)
+    _fixed_work_response(monkeypatch, _work_content_with_disallowed_import())
+
+    await service.orchestrator._execute_work_item(item, new_id())
+
+    capability_event = next(
+        event
+        for event in service.repository.list_events(project.id)
+        if event["action"] == "unsupported_capability_detected"
+    )
+    assert capability_event["metadata"]["rejected_imports"] == ["flask"]
+
+
+@pytest.mark.asyncio
+async def test_unsupported_import_at_last_attempt_still_uses_the_split_ladder(
+    service: ApplicationService,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project = service.create_project("Objetivo con import no permitido agotado")
+    item = _exhausting_item(service, project.id)
+    _fixed_work_response(monkeypatch, _work_content_with_disallowed_import())
+
+    await service.orchestrator._execute_work_item(item, new_id())
+
+    updated = service.repository.get_work_item(item.id)
+    assert updated.status is WorkItemStatus.CANCELLED
+    assert _split_happened(service, project.id)
+    children = [
+        candidate
+        for candidate in service.repository.list_work_items(project.id)
+        if candidate.title.startswith("[subtarea] ")
+    ]
+    assert len(children) >= 2
+
+
 # --- attempt accounting and worktree hygiene --------------------------------
 
 

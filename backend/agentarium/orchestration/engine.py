@@ -35,6 +35,7 @@ from agentarium.execution import (
     CommandRejected,
     ReviewEvaluationProposal,
     TestEvaluationProposal,
+    ValidationProfile,
     ValidationProfileExecutor,
     WorkArtifactProposal,
     WorkspaceFileEvidence,
@@ -811,6 +812,24 @@ class Orchestrator:
             },
             correlation_id=correlation_id,
         )
+        import_preflight_failure = next(
+            (
+                check
+                for check in validation_checks
+                if check.get("profile") == ValidationProfile.IMPORT_PREFLIGHT.value
+                and not check.get("passed")
+            ),
+            None,
+        )
+        if import_preflight_failure is not None:
+            # Capacidad ya conocida como no soportada (P2.2, ADR 0029): corta
+            # antes de gastar TESTER/CRITICAL_REVIEWER en una entrega que el
+            # preflight estático ya condenó, en vez de dejar que ambos roles
+            # la evalúen para terminar rechazada de todas formas.
+            await self._reject_unsupported_capability(
+                item, correlation_id, worker_run_id, import_preflight_failure
+            )
+            return
         report_passed = self._technical_evidence_passed(
             file_verified=file_verified,
             profiles_passed=profiles_passed,
@@ -1187,6 +1206,54 @@ class Orchestrator:
             )
         else:
             await self._on_attempts_exhausted(item, correlation_id, reason)
+
+    async def _reject_unsupported_capability(
+        self,
+        item: WorkItem,
+        correlation_id: str,
+        worker_run_id: str,
+        check: dict[str, object],
+    ) -> None:
+        """P2.2 (ADR 0029): the import preflight already condemned this
+        delivery — route it through the same `_request_changes` ladder as
+        any other technical rejection (CHANGES_REQUESTED -> READY if
+        attempts remain, else `_on_attempts_exhausted`), but record a
+        dedicated event first. That event is what
+        `ContextBuilder.operational()` reads back on the next attempt
+        (`cumulative_rejected_imports`) — without it, a retry after a
+        TESTER-skipping rejection would be as blind as retries were before
+        P2.1, since no `TestReport` gets created on this path.
+        """
+        targets = check.get("targets", [])
+        rejected = (
+            [str(module) for module in targets]
+            if isinstance(targets, (list, tuple))
+            else []
+        )
+        detail = str(check.get("stderr") or "").strip()
+        reason = (
+            "Import no permitido detectado antes de tester/revisor: "
+            f"{', '.join(rejected) or 'módulo no identificado'}. {detail}"
+        ).strip()
+        self._event(
+            item.project_id,
+            "unsupported_capability_detected",
+            (
+                f"Se rechazaron {len(rejected)} import(s) no soportados "
+                "antes de gastar tester/revisor."
+            ),
+            work_item_id=item.id,
+            agent_run_id=worker_run_id,
+            attempt=item.attempt_count,
+            error=reason,
+            metadata={
+                "rejected_imports": rejected,
+                "profile": check.get("profile"),
+                "detail": detail,
+            },
+            correlation_id=correlation_id,
+        )
+        await self._request_changes(item, correlation_id, reason)
 
     @staticmethod
     def _candidate_failure_policy(exc: Exception) -> tuple[bool, bool]:

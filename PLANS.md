@@ -990,18 +990,71 @@ subconjunto (`executables_available` con un elemento fuera de
 `unsupported_capability`, sin instalación, sin Ollama, sin matriz nueva,
 sin tocar `"brief"` ni `"decompose"`.
 
-##### P2.2 — preflight de imports/comandos + `unsupported_capability`
+##### P2.2 — preflight de imports + `unsupported_capability`
 
-**Esfuerzo estimado:** 1 PR, 1 sesión.
+**Esfuerzo estimado:** 1 PR, 1 sesión. **Entregado — sólo imports**, no
+"imports/comandos" como decía el ítem original: "comandos" (llamadas
+`subprocess`/CLI dentro del código entregado) se separó como su propio ítem
+futuro (ver más abajo), en vez de quedar a medio cumplir detrás de un
+encabezado que sugería lo contrario. Detalle completo, con citas textuales,
+en ADR 0029.
 
-1. Hacer preflight de imports/comandos antes de gastar tester y revisor.
-2. Si falta una capacidad, terminar con `unsupported_capability` y una
-   acción concreta: elegir stack permitido, configurar un entorno o
-   solicitar aprobación.
+**Diseño:**
+- Perfil de validación nuevo `IMPORT_PREFLIGHT` en `ValidationProfileExecutor`
+  (`backend/agentarium/execution/validation.py`): estático, vía `ast.walk`
+  completo (no sólo el nivel superior del módulo — un import dentro de una
+  función o detrás de un `try/except ImportError` de fallback sigue siendo
+  un import no permitido), contra `sys.stdlib_module_names` ∪
+  `third_party_packages_allowed` del manifiesto de P2.1, con exención sólo
+  para imports relativos y para módulos que son otro archivo de la misma
+  entrega (evita falsos positivos entre tareas hermanas del mismo
+  worktree). Nunca ejecuta el script: si falla, `SCRIPT_EXECUTION` para ese
+  script se salta (ya se sabe inútil). `VALIDATION_CONTRACT_VERSION` sube a
+  `profiles-v7` (mismo precedente que ADR 0016: activar un perfil nuevo
+  bumpea el contrato).
+- En el orquestador (`engine.py`), un fallo de `IMPORT_PREFLIGHT` corta
+  **antes** de llamar a TESTER y CRITICAL_REVIEWER — ambos se llamaban
+  igual hasta ahora aunque la validación técnica ya hubiera fallado por
+  cualquier motivo — y reusa la escalera de reintento existente
+  (`_request_changes`: `CHANGES_REQUESTED` → `READY` si quedan intentos, si
+  no `_on_attempts_exhausted`, mismo camino de split que cualquier otro
+  agotamiento).
+- Cortar antes de TESTER tiene un costo que había que resolver: el único
+  canal real que informaba a un reintento qué falló antes
+  (`retry_guidance.prior_validation_failures`) se alimenta de un
+  `TestReport`, que sólo existe si TESTER fue llamado. Canal nuevo,
+  independiente: un evento (`unsupported_capability_detected`,
+  `list_events_for_work_item` nuevo en `repository.py`) que
+  `ContextBuilder.operational()` lee a través de **todos** los intentos
+  previos del mismo work item y expone como
+  `retry_guidance.cumulative_rejected_imports`. `WORKSPACE_PROMPT_VERSION`
+  sube a `workspace-v11` (payload de `work` gana esa clave nueva).
+- `FailureCategory.UNSUPPORTED_CAPABILITY` (ya existía, para clasificar un
+  `ModuleNotFoundError` real post-hoc) gana una firma nueva y distinta en
+  `taxonomy.py` para este camino — decir "ModuleNotFoundError" sería falso
+  cuando el script nunca llegó a ejecutarse.
 
-**Criterio de salida:** el caso API nunca llega tarde a un
-`ModuleNotFoundError`; o usa una capacidad declarada o falla temprano con una
-explicación accionable.
+**Límite conocido, aceptado a propósito:** detección estática vía AST no
+cubre imports dinámicos (`importlib.import_module`, `__import__`) ni
+nombres armados en runtime — igual que `network_policy` en ADR 0028, es una
+consecuencia mecánica donde es barato aplicarla, no una garantía
+exhaustiva.
+
+**Criterio de salida cumplido:** el caso `library_api_sqlite` ya no puede
+llegar tarde a un `ModuleNotFoundError` — o usa una capacidad declarada o
+falla temprano (antes de tester/revisor) con una explicación accionable
+(qué módulo, por qué, y acumulada a través de reintentos).
+
+**Fuera de alcance, explícitamente separado de este ítem:** preflight de
+"comandos" (llamadas `subprocess`/CLI dentro del código entregado) — choca
+con un límite que ADR 0028 ya dejó escrito a propósito
+(`executables_allowed` describe lo que el propio pipeline de Agentarium
+invoca contra una entrega, no un sandbox para las llamadas `subprocess` del
+código entregado, así que "comandos permitidos para código entregado"
+sería un concepto nuevo, no una extensión de ese campo). Queda como ítem
+futuro propio, sin fecha. Tampoco enforcement real de
+`network_policy`/aislamiento de `SCRIPT_EXECUTION` (brecha de ADR 0028,
+sigue sin resolver, sigue sin ser P2.2).
 
 ### P3 — reducir el coste de cada cambio
 
@@ -1082,8 +1135,9 @@ botella resuelve.
    queda deliberadamente inerte en corridas reales; remedir ahora no
    cerraría esa incertidumbre — límite conocido aceptado).
 4. **PR de capacidades (P2), dos PR:** ~~P2.1 manifiesto del runtime
-   incluido como datos~~ entregado. Queda **P2.2**, preflight + fallo
-   temprano por capacidad no disponible.
+   incluido como datos~~ entregado. ~~P2.2 preflight de imports + fallo
+   temprano por capacidad no disponible~~ entregado. "Comandos" (subprocess/CLI
+   en código entregado) quedó fuera, separado como ítem futuro propio.
 
 No empezar la modularización grande antes de que PR 2 congele el
 comportamiento que se debe preservar.

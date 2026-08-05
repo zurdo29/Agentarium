@@ -48,6 +48,10 @@ class Classification:
 _ERROR_SIGNATURES: tuple[tuple[str, FailureCategory], ...] = (
     ("byte-for-byte identical", FailureCategory.DUPLICATE_CANDIDATE),
     ("collide with files already owned", FailureCategory.PATH_CONFLICT),
+    # P2.2 (ADR 0029): the static import preflight rejects before the script
+    # ever runs, so "ModuleNotFoundError" would be a false claim here — this
+    # signature is deliberately its own, not a reuse of the runtime one below.
+    ("import no permitido", FailureCategory.UNSUPPORTED_CAPABILITY),
     ("modulenotfounderror", FailureCategory.UNSUPPORTED_CAPABILITY),
     ("no module named", FailureCategory.UNSUPPORTED_CAPABILITY),
     ("importerror", FailureCategory.UNSUPPORTED_CAPABILITY),

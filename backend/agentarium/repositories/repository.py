@@ -668,6 +668,41 @@ class Repository:
             ).all()
             return [self._event_from_row(row) for row in rows]
 
+    def list_events_for_work_item(
+        self,
+        project_id: str,
+        work_item_id: str,
+        *,
+        limit: int = 250,
+    ) -> list[dict[str, Any]]:
+        """The `limit` most recent events for one work item, chronological.
+
+        Ordered `DESC` then reversed in Python, not `ASC` with a plain
+        `LIMIT` — an ascending order with a cap keeps the *oldest* `limit`
+        rows once a work item has more than `limit` events, which is
+        backwards for retry context (P2.2/ADR 0029): a worker needs to see
+        what happened most recently, not what happened first.
+
+        A separate method rather than filtering `list_events(project_id)`
+        in Python (the pattern `list_reviews`/`list_test_reports` already
+        use): `ContextBuilder.operational()` calls this on every attempt of
+        every work item — a hot path — and pulling every event in the
+        project to discard most of them in Python does not scale the same
+        way filtering `reviews`/`reports` does, where the per-project volume
+        is much smaller. `EventRow.work_item_id` is already indexed.
+        """
+        with self.database.session() as session:
+            rows = session.scalars(
+                select(EventRow)
+                .where(
+                    EventRow.project_id == project_id,
+                    EventRow.work_item_id == work_item_id,
+                )
+                .order_by(EventRow.sequence.desc())
+                .limit(limit)
+            ).all()
+            return [self._event_from_row(row) for row in reversed(rows)]
+
     def recover_interrupted(self, project_id: str | None = None) -> int:
         """Reset work items stuck mid-flight (ASSIGNED/RUNNING/
         AWAITING_REVIEW) back to READY. Only safe to call for a project that

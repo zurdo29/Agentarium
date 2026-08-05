@@ -110,6 +110,23 @@ class ContextBuilder:
                         and cleaned not in cumulative_validation_requirements
                     ):
                         cumulative_validation_requirements.append(cleaned)
+        # P2.2 (ADR 0029): independent of prior_validation_failures above,
+        # which only exists because a TestReport was written — and a
+        # capability-preflight rejection short-circuits before TESTER is
+        # ever called (engine.py::_reject_unsupported_capability), so no
+        # TestReport exists for that attempt. Sourced from events instead,
+        # across every prior attempt of this same item, not just the last.
+        capability_events = self.repository.list_events_for_work_item(
+            item.project_id, item.id
+        )
+        cumulative_rejected_imports: list[str] = []
+        for event in capability_events:
+            if event.get("action") != "unsupported_capability_detected":
+                continue
+            for module in event.get("metadata", {}).get("rejected_imports", []) or []:
+                cleaned = str(module).strip()
+                if cleaned and cleaned not in cumulative_rejected_imports:
+                    cumulative_rejected_imports.append(cleaned)
         is_retry = item.attempt_count > 1
         current_task_artifacts = [
             artifact
@@ -139,13 +156,16 @@ class ContextBuilder:
                     "Produce una entrega nueva para la tarea actual. No vuelvas a "
                     "entregar un artefacto de dependencia y corrige cada criterio "
                     "fallido del intento anterior. Corrige literalmente cada entrada "
-                    "de prior_validation_failures; son comprobaciones obligatorias."
+                    "de prior_validation_failures; son comprobaciones obligatorias. "
+                    "Nunca vuelvas a importar ningún módulo listado en "
+                    "cumulative_rejected_imports, ni con otro alias."
                 ),
                 "prior_review_feedback": prior_review_feedback[-3:],
                 "prior_validation_failures": prior_validation_failures[-3:],
                 "cumulative_validation_requirements": (
                     cumulative_validation_requirements[-20:]
                 ),
+                "cumulative_rejected_imports": cumulative_rejected_imports[-20:],
                 "prior_candidate_files": latest_candidate_files,
             },
             "dependency_artifacts": (

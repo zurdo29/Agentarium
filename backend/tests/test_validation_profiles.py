@@ -4,6 +4,7 @@ import pytest
 from agentarium.config.settings import project_root
 from agentarium.domain.models import ScriptExecutionContract
 from agentarium.execution import (
+    RuntimeCapabilityManifest,
     ValidationProfile,
     ValidationProfileExecutor,
     WorkspaceFileProposal,
@@ -398,6 +399,7 @@ async def test_fixed_profiles_capture_command_evidence(tmp_path: Path) -> None:
     assert {result.profile for result in results} == {
         ValidationProfile.WORKSPACE_INVENTORY,
         ValidationProfile.PYTHON_SYNTAX,
+        ValidationProfile.IMPORT_PREFLIGHT,
         ValidationProfile.JSON_SYNTAX,
         ValidationProfile.JAVASCRIPT_SYNTAX,
     }
@@ -837,6 +839,378 @@ async def test_web_profile_rejects_dom_coordinates_without_positioning(
     assert not web_result.passed
     assert "lack position" in web_result.result.stderr
     assert "position: relative" in web_result.result.stderr
+
+
+@pytest.mark.asyncio
+async def test_import_preflight_passes_stdlib_only_imports(tmp_path: Path) -> None:
+    workspace_root = tmp_path / "workspaces"
+    materializer = WorkspaceMaterializer(workspace_root, _policy_path())
+    validator = ValidationProfileExecutor(workspace_root, _policy_path())
+    files = materializer.materialize(
+        "project",
+        "task",
+        1,
+        [
+            WorkspaceFileProposal(
+                path="app.py",
+                content=(
+                    "import sqlite3\nimport json\n"
+                    "from http.server import HTTPServer\n"
+                ),
+                purpose="API stdlib-only",
+            ),
+        ],
+    )
+
+    results = await validator.validate("project", files)
+    preflight = next(
+        result
+        for result in results
+        if result.profile is ValidationProfile.IMPORT_PREFLIGHT
+    )
+
+    assert preflight.passed
+
+
+@pytest.mark.asyncio
+async def test_import_preflight_allows_future_annotations_import(
+    tmp_path: Path,
+) -> None:
+    workspace_root = tmp_path / "workspaces"
+    materializer = WorkspaceMaterializer(workspace_root, _policy_path())
+    validator = ValidationProfileExecutor(workspace_root, _policy_path())
+    files = materializer.materialize(
+        "project",
+        "task",
+        1,
+        [
+            WorkspaceFileProposal(
+                path="app.py",
+                content=(
+                    "from __future__ import annotations\n\n"
+                    "def f() -> None:\n    return None\n"
+                ),
+                purpose="Modulo con anotaciones diferidas",
+            ),
+        ],
+    )
+
+    results = await validator.validate("project", files)
+    preflight = next(
+        result
+        for result in results
+        if result.profile is ValidationProfile.IMPORT_PREFLIGHT
+    )
+
+    assert preflight.passed
+
+
+@pytest.mark.asyncio
+async def test_import_preflight_rejects_disallowed_third_party_import(
+    tmp_path: Path,
+) -> None:
+    workspace_root = tmp_path / "workspaces"
+    materializer = WorkspaceMaterializer(workspace_root, _policy_path())
+    validator = ValidationProfileExecutor(workspace_root, _policy_path())
+    files = materializer.materialize(
+        "project",
+        "task",
+        1,
+        [
+            WorkspaceFileProposal(
+                path="app.py",
+                content="import flask\n",
+                purpose="API con dependencia no permitida",
+            ),
+        ],
+    )
+
+    results = await validator.validate("project", files)
+    preflight = next(
+        result
+        for result in results
+        if result.profile is ValidationProfile.IMPORT_PREFLIGHT
+    )
+
+    assert not preflight.passed
+    assert preflight.targets == ("flask",)
+    assert "flask" in preflight.result.stderr
+
+
+@pytest.mark.asyncio
+async def test_import_preflight_allows_declared_third_party_package(
+    tmp_path: Path,
+) -> None:
+    workspace_root = tmp_path / "workspaces"
+    materializer = WorkspaceMaterializer(workspace_root, _policy_path())
+    capabilities = RuntimeCapabilityManifest(
+        python_version="3.11.0",
+        executables_allowed=("python",),
+        executables_available=("python",),
+        third_party_packages_allowed=("requests",),
+    )
+    validator = ValidationProfileExecutor(
+        workspace_root, _policy_path(), capabilities=capabilities
+    )
+    files = materializer.materialize(
+        "project",
+        "task",
+        1,
+        [
+            WorkspaceFileProposal(
+                path="client.py",
+                content="import requests\n",
+                purpose="Cliente HTTP con dependencia declarada",
+            ),
+        ],
+    )
+
+    results = await validator.validate("project", files)
+    preflight = next(
+        result
+        for result in results
+        if result.profile is ValidationProfile.IMPORT_PREFLIGHT
+    )
+
+    assert preflight.passed
+
+
+@pytest.mark.asyncio
+async def test_import_preflight_rejects_import_inside_function_body(
+    tmp_path: Path,
+) -> None:
+    workspace_root = tmp_path / "workspaces"
+    materializer = WorkspaceMaterializer(workspace_root, _policy_path())
+    validator = ValidationProfileExecutor(workspace_root, _policy_path())
+    files = materializer.materialize(
+        "project",
+        "task",
+        1,
+        [
+            WorkspaceFileProposal(
+                path="app.py",
+                content=(
+                    "def build_app():\n"
+                    "    import flask\n"
+                    "    return flask.Flask(__name__)\n"
+                ),
+                purpose="Import diferido dentro de una funcion",
+            ),
+        ],
+    )
+
+    results = await validator.validate("project", files)
+    preflight = next(
+        result
+        for result in results
+        if result.profile is ValidationProfile.IMPORT_PREFLIGHT
+    )
+
+    assert not preflight.passed
+    assert preflight.targets == ("flask",)
+
+
+@pytest.mark.asyncio
+async def test_import_preflight_rejects_import_behind_try_except_fallback(
+    tmp_path: Path,
+) -> None:
+    workspace_root = tmp_path / "workspaces"
+    materializer = WorkspaceMaterializer(workspace_root, _policy_path())
+    validator = ValidationProfileExecutor(workspace_root, _policy_path())
+    files = materializer.materialize(
+        "project",
+        "task",
+        1,
+        [
+            WorkspaceFileProposal(
+                path="app.py",
+                content=(
+                    "try:\n"
+                    "    import flask\n"
+                    "except ImportError:\n"
+                    "    flask = None\n"
+                ),
+                purpose="Import con guard de fallback",
+            ),
+        ],
+    )
+
+    results = await validator.validate("project", files)
+    preflight = next(
+        result
+        for result in results
+        if result.profile is ValidationProfile.IMPORT_PREFLIGHT
+    )
+
+    assert not preflight.passed
+    assert preflight.targets == ("flask",)
+
+
+@pytest.mark.asyncio
+async def test_import_preflight_allows_same_delivery_sibling_imports(
+    tmp_path: Path,
+) -> None:
+    workspace_root = tmp_path / "workspaces"
+    materializer = WorkspaceMaterializer(workspace_root, _policy_path())
+    validator = ValidationProfileExecutor(workspace_root, _policy_path())
+    files = materializer.materialize(
+        "project",
+        "task",
+        1,
+        [
+            WorkspaceFileProposal(
+                path="helpers.py",
+                content="def add(a, b):\n    return a + b\n",
+                purpose="Modulo auxiliar de la misma entrega",
+            ),
+            WorkspaceFileProposal(
+                path="app.py",
+                content="import helpers\n\nprint(helpers.add(1, 2))\n",
+                purpose="Modulo principal que importa a su hermano",
+            ),
+        ],
+    )
+
+    results = await validator.validate("project", files)
+    preflight = next(
+        result
+        for result in results
+        if result.profile is ValidationProfile.IMPORT_PREFLIGHT
+    )
+
+    assert preflight.passed
+
+
+@pytest.mark.asyncio
+async def test_import_preflight_absent_without_python_files(tmp_path: Path) -> None:
+    workspace_root = tmp_path / "workspaces"
+    materializer = WorkspaceMaterializer(workspace_root, _policy_path())
+    validator = ValidationProfileExecutor(workspace_root, _policy_path())
+    files = materializer.materialize(
+        "project",
+        "task",
+        1,
+        [
+            WorkspaceFileProposal(
+                path="README.md",
+                content="# Sin codigo Python\n",
+                purpose="Documentacion",
+            ),
+        ],
+    )
+
+    results = await validator.validate("project", files)
+
+    assert not any(
+        result.profile is ValidationProfile.IMPORT_PREFLIGHT for result in results
+    )
+
+
+@pytest.mark.asyncio
+async def test_import_preflight_survives_unparseable_source_without_crashing(
+    tmp_path: Path,
+) -> None:
+    workspace_root = tmp_path / "workspaces"
+    materializer = WorkspaceMaterializer(workspace_root, _policy_path())
+    validator = ValidationProfileExecutor(workspace_root, _policy_path())
+    files = materializer.materialize(
+        "project",
+        "task",
+        1,
+        [
+            WorkspaceFileProposal(
+                path="broken.py",
+                content="def broken(:\n    pass\n",
+                purpose="Fuente con error de sintaxis",
+            ),
+        ],
+    )
+
+    results = await validator.validate("project", files)
+
+    python_syntax = next(
+        result
+        for result in results
+        if result.profile is ValidationProfile.PYTHON_SYNTAX
+    )
+    assert not python_syntax.passed
+    preflight = next(
+        (
+            result
+            for result in results
+            if result.profile is ValidationProfile.IMPORT_PREFLIGHT
+        ),
+        None,
+    )
+    assert preflight is None or preflight.passed
+
+
+@pytest.mark.asyncio
+async def test_script_execution_skipped_when_import_preflight_fails(
+    tmp_path: Path,
+) -> None:
+    workspace_root = tmp_path / "workspaces"
+    materializer = WorkspaceMaterializer(workspace_root, _policy_path())
+    validator = ValidationProfileExecutor(workspace_root, _policy_path())
+    files = materializer.materialize(
+        "project",
+        "task",
+        1,
+        [
+            WorkspaceFileProposal(
+                path="tool.py",
+                content="import flask\n\nprint('never gets here')\n",
+                purpose="Herramienta con dependencia no permitida",
+            ),
+        ],
+    )
+
+    results = await validator.validate(
+        "project",
+        files,
+        acceptance_criteria=["Ejecutar la herramienta de linea de comandos en Python"],
+    )
+
+    assert not any(
+        result.profile is ValidationProfile.SCRIPT_EXECUTION for result in results
+    )
+    preflight = next(
+        result
+        for result in results
+        if result.profile is ValidationProfile.IMPORT_PREFLIGHT
+    )
+    assert not preflight.passed
+
+
+@pytest.mark.asyncio
+async def test_script_execution_contract_skipped_when_import_preflight_fails(
+    tmp_path: Path,
+) -> None:
+    workspace_root = tmp_path / "workspaces"
+    materializer = WorkspaceMaterializer(workspace_root, _policy_path())
+    validator = ValidationProfileExecutor(workspace_root, _policy_path())
+    files = materializer.materialize(
+        "project",
+        "task",
+        1,
+        [
+            WorkspaceFileProposal(
+                path="tool.py",
+                content="import flask\n\nprint('never gets here')\n",
+                purpose="Herramienta con dependencia no permitida",
+            ),
+        ],
+    )
+
+    results = await validator.validate(
+        "project",
+        files,
+        execution_contract=ScriptExecutionContract(entrypoint="tool.py", args=[]),
+    )
+
+    assert not any(
+        result.profile is ValidationProfile.SCRIPT_EXECUTION for result in results
+    )
 
 
 @pytest.mark.asyncio

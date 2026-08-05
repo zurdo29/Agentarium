@@ -462,6 +462,7 @@ def build_application(
     validations = ValidationProfileExecutor(
         resolved_settings.workspace_root,
         Path(resolved_settings.config_root) / "policies" / "security.yaml",
+        capabilities=capabilities,
     )
     isolation = GitWorktreeIsolation(
         resolved_settings.workspace_root,
