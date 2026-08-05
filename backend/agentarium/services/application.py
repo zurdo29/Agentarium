@@ -21,6 +21,7 @@ from agentarium.execution import (
     WorkspaceFileProposal,
     WorkspaceMaterializer,
     WorkspacePreview,
+    build_runtime_capabilities,
 )
 from agentarium.execution.scheduler import ResourceScheduler
 from agentarium.isolation import GitWorktreeIsolation
@@ -448,7 +449,10 @@ def build_application(
     )
     providers = ProviderRegistry(resolved_settings)
     runner = RoleRunner(catalog, providers, scheduler)
-    memory = ContextBuilder(repository)
+    capabilities = build_runtime_capabilities(
+        Path(resolved_settings.config_root) / "policies" / "security.yaml"
+    )
+    memory = ContextBuilder(repository, capabilities)
     artifact_store = ArtifactStore(resolved_settings.workspace_root)
     workspace = WorkspaceMaterializer(
         resolved_settings.workspace_root,

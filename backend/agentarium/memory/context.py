@@ -4,13 +4,17 @@ from typing import Any
 
 from agentarium.domain.enums import OutputStrategy, ReviewVerdict
 from agentarium.domain.models import WorkItem
+from agentarium.execution.capabilities import RuntimeCapabilityManifest
 from agentarium.execution.validation import VALIDATION_CONTRACT_VERSION
 from agentarium.repositories import Repository
 
 
 class ContextBuilder:
-    def __init__(self, repository: Repository) -> None:
+    def __init__(
+        self, repository: Repository, capabilities: RuntimeCapabilityManifest
+    ) -> None:
         self.repository = repository
+        self.capabilities = capabilities
 
     def dependency_artifacts(self, item: WorkItem) -> list[dict[str, Any]]:
         reviews = self.repository.list_reviews(item.project_id)
@@ -169,6 +173,7 @@ class ContextBuilder:
                 for artifact in approved_dependency_artifacts
             ],
             "project": self.project(item.project_id),
+            "runtime_capabilities": self.capabilities.model_dump(mode="json"),
         }
 
     def project(self, project_id: str) -> dict[str, Any]:

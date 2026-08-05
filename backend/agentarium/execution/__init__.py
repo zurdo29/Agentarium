@@ -1,5 +1,6 @@
 """Bounded execution facilities."""
 
+from .capabilities import RuntimeCapabilityManifest, build_runtime_capabilities
 from .contracts import (
     ReviewEvaluationProposal,
     TestCheckProposal,
@@ -25,7 +26,9 @@ from .workspace import (
 __all__ = [
     "CommandRejected",
     "CommandResult",
+    "RuntimeCapabilityManifest",
     "SafeCommandExecutor",
+    "build_runtime_capabilities",
     "ReviewEvaluationProposal",
     "TestCheckProposal",
     "TestEvaluationProposal",
