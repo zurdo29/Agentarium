@@ -512,11 +512,6 @@ class ValidationProfileExecutor:
         failure ADR 0020 already documented (prose-only guidance changes
         nothing) — just hidden behind a guard instead of ignored outright.
         """
-        local_names = {
-            path.stem
-            for path in project_root.rglob("*.py")
-            if ".git" not in path.parts
-        }
         rejected: dict[str, list[str]] = {}
         for target in python_targets:
             try:
@@ -528,6 +523,7 @@ class ValidationProfileExecutor:
                 # duplicate that, and must never let the exception escape
                 # and take the whole validate() call down with it.
                 continue
+            target_dir = project_root / target.parent
             for node in ast.walk(tree):
                 if isinstance(node, ast.Import):
                     roots = [alias.name.split(".", 1)[0] for alias in node.names]
@@ -541,7 +537,9 @@ class ValidationProfileExecutor:
                     if (
                         root in sys.stdlib_module_names
                         or root in third_party_allowed
-                        or root in local_names
+                        or ValidationProfileExecutor._resolves_as_sibling(
+                            target_dir, root
+                        )
                     ):
                         continue
                     rejected.setdefault(root, [])
@@ -586,6 +584,31 @@ class ValidationProfileExecutor:
                 timed_out=False,
             ),
         )
+
+    @staticmethod
+    def _resolves_as_sibling(directory: Path, root: str) -> bool:
+        """Whether `root` is importable as a sibling module or package of a
+        file that lives in `directory` — location-aware on purpose, not a
+        flat "does this name exist anywhere in the delivery" bag (that
+        earlier version had two failure modes: it rejected
+        `from library import models` when `library/` sat next to the
+        importing file, because only file *stems* were collected, never
+        directory/package names; and it silently allowed `import flask`
+        whenever *any* unrelated file elsewhere in the tree happened to be
+        named `flask.py`, even though that file is not on the path Python
+        would actually search from here — exactly the late
+        `ModuleNotFoundError` this profile exists to catch early).
+
+        Deliberately narrow to *siblings* of `directory`, not every
+        ancestor up to the project root: `SCRIPT_EXECUTION` invokes a
+        script with `cwd` set to that script's own directory, so that
+        directory is what actually ends up on `sys.path[0]` when
+        Agentarium runs it — not the whole project tree.
+        """
+        if (directory / f"{root}.py").is_file():
+            return True
+        package_dir = directory / root
+        return package_dir.is_dir() and any(package_dir.rglob("*.py"))
 
     async def _execute(
         self,

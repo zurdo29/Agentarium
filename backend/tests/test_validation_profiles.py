@@ -1082,6 +1082,85 @@ async def test_import_preflight_allows_same_delivery_sibling_imports(
 
 
 @pytest.mark.asyncio
+async def test_import_preflight_allows_import_from_local_subpackage(
+    tmp_path: Path,
+) -> None:
+    # Regression: the earlier implementation only collected file *stems*
+    # into a flat, location-blind set, so "library" (a directory, not a
+    # file) never matched and this got wrongly rejected as external.
+    workspace_root = tmp_path / "workspaces"
+    materializer = WorkspaceMaterializer(workspace_root, _policy_path())
+    validator = ValidationProfileExecutor(workspace_root, _policy_path())
+    files = materializer.materialize(
+        "project",
+        "task",
+        1,
+        [
+            WorkspaceFileProposal(
+                path="library/models.py",
+                content="class Book:\n    pass\n",
+                purpose="Submodulo del paquete local",
+            ),
+            WorkspaceFileProposal(
+                path="main.py",
+                content="from library import models\n\nprint(models.Book)\n",
+                purpose="Modulo principal que importa su propio subpaquete",
+            ),
+        ],
+    )
+
+    results = await validator.validate("project", files)
+    preflight = next(
+        result
+        for result in results
+        if result.profile is ValidationProfile.IMPORT_PREFLIGHT
+    )
+
+    assert preflight.passed
+
+
+@pytest.mark.asyncio
+async def test_import_preflight_rejects_disallowed_import_despite_unrelated_same_named_file(
+    tmp_path: Path,
+) -> None:
+    # Regression: the earlier implementation collected stems from every
+    # .py file anywhere in the delivery, so an unrelated otro/flask.py
+    # made `import flask` in app/main.py look "local" even though nothing
+    # under app/ actually makes it resolve -- exactly the late
+    # ModuleNotFoundError this profile exists to catch early instead.
+    workspace_root = tmp_path / "workspaces"
+    materializer = WorkspaceMaterializer(workspace_root, _policy_path())
+    validator = ValidationProfileExecutor(workspace_root, _policy_path())
+    files = materializer.materialize(
+        "project",
+        "task",
+        1,
+        [
+            WorkspaceFileProposal(
+                path="otro/flask.py",
+                content="# Coincidentally named, unrelated to app/.\n",
+                purpose="Archivo sin relacion, mismo nombre que una libreria externa",
+            ),
+            WorkspaceFileProposal(
+                path="app/main.py",
+                content="import flask\n",
+                purpose="Modulo que pretende usar Flask de verdad",
+            ),
+        ],
+    )
+
+    results = await validator.validate("project", files)
+    preflight = next(
+        result
+        for result in results
+        if result.profile is ValidationProfile.IMPORT_PREFLIGHT
+    )
+
+    assert not preflight.passed
+    assert preflight.targets == ("flask",)
+
+
+@pytest.mark.asyncio
 async def test_import_preflight_absent_without_python_files(tmp_path: Path) -> None:
     workspace_root = tmp_path / "workspaces"
     materializer = WorkspaceMaterializer(workspace_root, _policy_path())

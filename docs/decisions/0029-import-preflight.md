@@ -44,10 +44,44 @@ for node in ast.walk(tree):
 Cada raíz se compara contra `sys.stdlib_module_names` (estable desde
 Python 3.10; `requires-python = ">=3.11"` en `pyproject.toml`, sin guard
 de versión necesario) ∪ `RuntimeCapabilityManifest.third_party_packages_allowed`
-∪ los nombres de módulo de cualquier otro `.py` bajo el mismo `project_root`
-(exención de "nombre local" — sin ella, una tarea `consolidation`/`patch`
-que importe un módulo entregado por una tarea hermana ya integrada en un
-intento anterior generaría un falso positivo).
+∪ una resolución local con reconocimiento de ubicación
+(`_resolves_as_sibling`, ver corrección más abajo) — sin la última, una
+tarea `consolidation`/`patch` que importe un módulo entregado por una
+tarea hermana ya integrada en un intento anterior generaría un falso
+positivo.
+
+**Resolución local con reconocimiento de ubicación — corrección de una
+ronda de revisión posterior a abrir la PR, no de la sesión inicial.** La
+primera versión juntaba los *stems* de todos los `.py` de `project_root`
+en un único set plano, sin importar su ubicación, y la comparaba contra
+cada raíz importada. Eso falla en dos direcciones, ambas señaladas en
+revisión con ejemplos concretos:
+
+- **Falso positivo:** `main.py` hace `from library import models`, y
+  existe `library/models.py`. La raíz importada es `library` — un
+  directorio, no un archivo — así que su *stem* nunca aparecía en el set
+  (que sólo indexaba archivos). Se rechazaba como dependencia externa una
+  entrega perfectamente válida.
+- **Falso negativo:** existe `otro/flask.py` (un archivo sin relación,
+  casualmente con ese nombre) y `app/main.py` hace `import flask`
+  pretendiendo usar la librería de terceros real. Como *algún* archivo del
+  árbol se llama `flask.py`, el set plano lo marcaba como "local" sin
+  importar que `otro/` no tiene nada que ver con `app/` — exactamente el
+  `ModuleNotFoundError` tardío que este perfil existe para evitar, ahora
+  escondido detrás de una coincidencia de nombre en vez de evitado.
+
+Corregido con `_resolves_as_sibling(directory, root)`: para el import de
+un archivo dado, `directory` es el directorio de *ese* archivo (no
+`project_root`), y `root` se considera local sólo si existe
+`directory/root.py`, o si `directory/root/` es un directorio que contiene
+al menos un `.py` (cubre tanto paquetes con `__init__.py` como paquetes de
+namespace implícitos). Deliberadamente acotado a hermanos directos de
+`directory`, no a cualquier ancestro hasta `project_root`:
+`SCRIPT_EXECUTION` invoca un script con `cwd` en el directorio del propio
+script, así que ese directorio —no el árbol completo— es lo que
+efectivamente termina en `sys.path[0]` cuando Agentarium lo corre de
+verdad. Dos pruebas de regresión nuevas en `test_validation_profiles.py`
+fijan ambos casos.
 
 **`ast.walk` completo, no sólo el nivel superior del módulo — corrección
 sobre la propuesta inicial de esta misma sesión.** La primera versión
@@ -178,7 +212,9 @@ P2.2 lo hubiera cerrado.
 ## Consecuencias
 
 - El caso de benchmark `library_api_sqlite` ya no puede llegar tarde a un
-  `ModuleNotFoundError`: un import fuera de `third_party_packages_allowed`
+  `ModuleNotFoundError`, **para imports estáticos cubiertos por el
+  preflight** (no para `importlib.import_module`/`__import__`, ver
+  límite de arriba): un import fuera de `third_party_packages_allowed`
   se detecta antes de gastar TESTER y CRITICAL_REVIEWER, con un mensaje
   que nombra el módulo y por qué se rechazó.
 - Sigue sin haber garantía de que el worker deje de intentar el mismo

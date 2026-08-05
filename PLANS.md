@@ -1040,10 +1040,12 @@ nombres armados en runtime — igual que `network_policy` en ADR 0028, es una
 consecuencia mecánica donde es barato aplicarla, no una garantía
 exhaustiva.
 
-**Criterio de salida cumplido:** el caso `library_api_sqlite` ya no puede
-llegar tarde a un `ModuleNotFoundError` — o usa una capacidad declarada o
-falla temprano (antes de tester/revisor) con una explicación accionable
-(qué módulo, por qué, y acumulada a través de reintentos).
+**Criterio de salida cumplido, para imports estáticos cubiertos por el
+preflight** (el límite de la entrada anterior aplica: no para
+`importlib`/`__import__`): el caso `library_api_sqlite` ya no puede llegar
+tarde a un `ModuleNotFoundError` por esa vía — o usa una capacidad
+declarada o falla temprano (antes de tester/revisor) con una explicación
+accionable (qué módulo, por qué, y acumulada a través de reintentos).
 
 **Fuera de alcance, explícitamente separado de este ítem:** preflight de
 "comandos" (llamadas `subprocess`/CLI dentro del código entregado) — choca
