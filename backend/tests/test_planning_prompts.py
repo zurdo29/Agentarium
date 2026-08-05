@@ -272,8 +272,8 @@ async def test_plan_payload_carries_the_runtime_capability_manifest(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     # Real build_application() wiring end to end, not a direct render_prompt
-    # call: confirms the same manifest instance built at startup actually
-    # reaches the "plan" operation's payload.
+    # call: confirms the same source manifest instance built at startup is
+    # actually the one serialized into the "plan" operation's payload.
     original_generate = MockProvider.generate
     captured: list[dict[str, Any]] = []
 
@@ -354,7 +354,8 @@ async def test_plan_revision_payload_carries_the_same_manifest_instance(
 
     assert captured_plan, "la operacion plan nunca fue invocada"
     assert captured_revision, "la operacion plan_revision nunca fue invocada"
-    # Same manifest, not two independently-built copies that could drift.
+    # Same source instance serialized into both payloads, not two
+    # independently-built copies that could drift.
     assert (
         captured_plan[0]["runtime_capabilities"]
         == captured_revision[0]["runtime_capabilities"]

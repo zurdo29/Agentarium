@@ -17,9 +17,9 @@ from agentarium.planning import BriefProposal, DecomposeProposal, PlanProposal
 from .base import ModelRequest
 
 PLANNING_PROMPT_VERSION = "planning-v4"
-WORKSPACE_PROMPT_VERSION = "workspace-v8"
+WORKSPACE_PROMPT_VERSION = "workspace-v9"
 DECOMPOSE_PROMPT_VERSION = "decompose-v3"
-PLAN_REVISION_PROMPT_VERSION = "plan-revision-v2"
+PLAN_REVISION_PROMPT_VERSION = "plan-revision-v3"
 
 _OPERATION_CONTRACTS: dict[str, type[BaseModel]] = {
     "brief": BriefProposal,
@@ -86,7 +86,12 @@ _OPERATION_INSTRUCTIONS = {
         "final; (4) si alguna genuinamente depende de que la otra termine "
         "primero, agregá la dependencia Y un shared_component+output_strategy "
         "coherente — la dependencia sola no alcanza, no explica cómo combinar "
-        "el contenido. No dejes ningún path del conflicto sin resolver."
+        "el contenido. No dejes ningún path del conflicto sin resolver. "
+        "SOLICITUD.payload.runtime_capabilities sigue vigente en la revisión, "
+        "igual que en el plan original: si la reorganización de tareas exige una "
+        "capacidad fuera de lo declarado (third_party_packages_allowed, "
+        "network_policy), no la asumas disponible — decláralo como limitación "
+        "en la tarea correspondiente en vez de plantearla como resuelta."
     ),
     "work": (
         "La tarea actual es SOLICITUD.payload.task y tiene prioridad absoluta. Produce "
@@ -142,8 +147,9 @@ _OPERATION_INSTRUCTIONS = {
         "declaradas en SOLICITUD.payload.runtime_capabilities: "
         "third_party_packages_allowed lista los paquetes de terceros permitidos "
         "(vacía hoy: sólo biblioteca estándar de Python, por ejemplo sqlite3, "
-        "http.server, json, csv, argparse) y network_policy indica el acceso de "
-        "red disponible ('deny' hoy). No importes Flask, FastAPI, requests, "
+        "http.server, json, csv, argparse) y network_policy es la política "
+        "declarada que debe respetarse, no una garantía técnica de aislamiento "
+        "('deny' hoy: no accedas a la red). No importes Flask, FastAPI, requests, "
         "pandas ni nada fuera de third_party_packages_allowed. Si el objetivo "
         "pide explícitamente una librería de terceros como parte de la entrega, "
         "decláralo como limitación en vez de producir un script que no puede "

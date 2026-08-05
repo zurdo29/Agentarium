@@ -936,9 +936,17 @@ rung: los mismos hechos como datos estructurados, no sólo prosa.
   (nueva clave `packages.allowed`, vacía hoy); `network_policy:
   Literal["deny"]` (nueva clave `network`, no `str` simple — mismo
   patrón que `BenchmarkRunRecord.schema_version: Literal[2]`, y ampliarlo
-  después exige tocar el tipo en código, no sólo una línea de YAML). Una
-  única instancia construida en `build_application()`, compartida entre
-  `plan`, `plan_revision` y `work` — nunca reconstruida por separado.
+  después exige tocar el tipo en código, no sólo una línea de YAML; en
+  prompt, `network_policy` se describe siempre como política declarada
+  que debe respetarse, nunca como aislamiento o acceso de red efectivo).
+  Profundamente inmutable: todo campo colección es `tuple[str, ...]`, no
+  `list[str]` — `frozen=True` por sí solo sólo bloquea reasignar el
+  atributo, no `.append()` sobre una lista. Un `model_validator` rechaza
+  cualquier `RuntimeCapabilityManifest` donde `executables_available` no
+  sea subconjunto de `executables_allowed`. Una única instancia
+  construida en `build_application()`, compartida entre `plan`,
+  `plan_revision` y `work` — nunca reconstruida por separado, sólo
+  serializada por separado en cada payload.
 - **`executables_allowed` no es un sandbox del código entregado**: describe
   qué invoca el propio pipeline de Agentarium contra la entrega, nunca un
   límite sobre lo que un `subprocess` dentro del script podría hacer (ese
@@ -955,11 +963,14 @@ rung: los mismos hechos como datos estructurados, no sólo prosa.
   0028.
 - Las frases de prompt de ADR 0020 se **reescribieron** (no se agregaron
   al lado) para apoyarse en `SOLICITUD.payload.runtime_capabilities`.
-  `PLANNING_PROMPT_VERSION`, `WORKSPACE_PROMPT_VERSION` y
-  `PLAN_REVISION_PROMPT_VERSION` subieron — un payload nuevo es cambio de
-  contrato (ADR 0003), con consumidor real en
-  `benchmarks/runner.py::prompt_versions()`/`ledger.py` aunque no en el
-  orquestador en vivo.
+  `plan_revision` gana su propia frase explícita: una reasignación de
+  tareas al resolver un conflicto no puede asumir una capacidad fuera de
+  lo declarado. `PLANNING_PROMPT_VERSION`, `WORKSPACE_PROMPT_VERSION` y
+  `PLAN_REVISION_PROMPT_VERSION` subieron (esta última dos veces, dentro
+  del mismo PR sin mergear, para que la cadena versión↔contenido nunca
+  quede desalineada) — un payload nuevo es cambio de contrato (ADR 0003),
+  con consumidor real en `benchmarks/runner.py::prompt_versions()`/
+  `ledger.py` aunque no en el orquestador en vivo.
 
 **Criterio de salida cumplido, con evidencia sintética — sin Ollama real:**
 pruebas deterministas nuevas en `test_runtime_capabilities.py` (política
@@ -970,8 +981,10 @@ claves nuevas ausentes defaultean bien; `network_policy` inválido
 rechazado, justificando el `Literal`), `test_operational_context.py`
 (`operational()` incluye el manifiesto) y `test_planning_prompts.py`
 (payload real de `plan` y de `plan_revision`, vía el fixture `service`
-real, cargan la **misma** instancia — no dos copias que podrían
-divergir). `.\test.ps1` completo en verde.
+real, cargan la **misma instancia fuente serializada** — no dos copias
+independientes que podrían divergir), más un test nuevo del validador de
+subconjunto (`executables_available` con un elemento fuera de
+`executables_allowed` se rechaza). `.\test.ps1` completo en verde.
 
 **Fuera de alcance a propósito:** sin enforcement, sin preflight, sin
 `unsupported_capability`, sin instalación, sin Ollama, sin matriz nueva,

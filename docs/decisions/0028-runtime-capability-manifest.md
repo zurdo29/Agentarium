@@ -154,8 +154,10 @@ como parámetro requerido (sin default — `repository`, el parámetro
 hermano, tampoco lo tiene; un default acá sería una segunda fuente de
 verdad silenciosa compitiendo con `security.yaml`). `operational()`
 (payload de `work`) y `Orchestrator.plan_project`/la revisión de plan
-(payload de `plan` y `plan_revision`, vía `self.memory.capabilities`, la
-misma instancia) ganan la clave `runtime_capabilities`. **No** se agrega a
+(payload de `plan` y `plan_revision`, vía `self.memory.capabilities` — la
+misma instancia fuente, serializada por separado en cada payload con
+`.model_dump(mode="json")`, no tres copias independientes que podrían
+divergir) ganan la clave `runtime_capabilities`. **No** se agrega a
 `brief` (alcance/entregables, nunca enfoque de implementación) ni a
 `decompose` (reparación tras agotar intentos, no nombrado en el ítem 2 de
 `PLANS.md` — agregarlo sería alcance de más para este PR).
