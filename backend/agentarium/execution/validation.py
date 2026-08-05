@@ -538,7 +538,7 @@ class ValidationProfileExecutor:
                         root in sys.stdlib_module_names
                         or root in third_party_allowed
                         or ValidationProfileExecutor._resolves_as_sibling(
-                            target_dir, root
+                            target_dir, project_root, root
                         )
                     ):
                         continue
@@ -586,10 +586,10 @@ class ValidationProfileExecutor:
         )
 
     @staticmethod
-    def _resolves_as_sibling(directory: Path, root: str) -> bool:
-        """Whether `root` is importable as a sibling module or package of a
-        file that lives in `directory` — location-aware on purpose, not a
-        flat "does this name exist anywhere in the delivery" bag (that
+    def _resolves_as_sibling(directory: Path, project_root: Path, root: str) -> bool:
+        """Whether `root` is importable as a local module or package
+        reachable from `directory` — location-aware on purpose, not a flat
+        "does this name exist anywhere in the delivery" bag (that
         earlier version had two failure modes: it rejected
         `from library import models` when `library/` sat next to the
         importing file, because only file *stems* were collected, never
@@ -599,16 +599,38 @@ class ValidationProfileExecutor:
         would actually search from here — exactly the late
         `ModuleNotFoundError` this profile exists to catch early).
 
-        Deliberately narrow to *siblings* of `directory`, not every
-        ancestor up to the project root: `SCRIPT_EXECUTION` invokes a
-        script with `cwd` set to that script's own directory, so that
-        directory is what actually ends up on `sys.path[0]` when
-        Agentarium runs it — not the whole project tree.
+        Walks up from `directory` through every ancestor up to (and never
+        past) `project_root` — checking `directory` alone missed a very
+        common layout: a module referring to its own containing package by
+        top-level name (`library/api.py` doing `from library import
+        models`) is not a sibling of `api.py`'s own directory (`library/`)
+        — `library` sits one level *up*, at `project_root`. Once Python
+        resolves an absolute import it always searches from `sys.path`,
+        fixed once at process start by whichever file was actually invoked
+        as the entrypoint, never from the directory of whichever file's
+        source happens to contain the `import` statement — a submodule
+        several directories deep can import a package sitting anywhere
+        between its own directory and wherever the process was launched
+        from. This profile cannot know in advance which file will be the
+        entrypoint, so every level from the importing file up to
+        `project_root` counts as a plausible answer — erring toward
+        not-false-positiving, same principle as the exemption below,
+        extended one dimension. Never climbs past `project_root`: an
+        unrelated `otro/flask.py` sitting outside the importing file's own
+        ancestor chain must still not excuse `import flask` in
+        `app/main.py` — that is the second, distinct bug this method
+        already fixes, and widening the search must not reopen it.
         """
-        if (directory / f"{root}.py").is_file():
-            return True
-        package_dir = directory / root
-        return package_dir.is_dir() and any(package_dir.rglob("*.py"))
+        current = directory
+        while True:
+            if (current / f"{root}.py").is_file():
+                return True
+            package_dir = current / root
+            if package_dir.is_dir() and any(package_dir.rglob("*.py")):
+                return True
+            if current == project_root:
+                return False
+            current = current.parent
 
     async def _execute(
         self,

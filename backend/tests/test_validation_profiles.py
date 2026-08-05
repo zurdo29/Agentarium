@@ -1120,6 +1120,47 @@ async def test_import_preflight_allows_import_from_local_subpackage(
 
 
 @pytest.mark.asyncio
+async def test_import_preflight_allows_package_referring_to_its_own_name(
+    tmp_path: Path,
+) -> None:
+    # Regression: a module inside a package that refers to its own
+    # containing package by top-level name (library/api.py doing
+    # `from library import models`) is not a sibling of api.py's own
+    # directory (library/) -- "library" sits one level up, at the project
+    # root. A single-level sibling check (the previous fix) missed this
+    # very common layout and wrongly rejected it as external.
+    workspace_root = tmp_path / "workspaces"
+    materializer = WorkspaceMaterializer(workspace_root, _policy_path())
+    validator = ValidationProfileExecutor(workspace_root, _policy_path())
+    files = materializer.materialize(
+        "project",
+        "task",
+        1,
+        [
+            WorkspaceFileProposal(
+                path="library/models.py",
+                content="class Book:\n    pass\n",
+                purpose="Submodulo del paquete",
+            ),
+            WorkspaceFileProposal(
+                path="library/api.py",
+                content="from library import models\n\nprint(models.Book)\n",
+                purpose="Modulo que se refiere a su propio paquete contenedor",
+            ),
+        ],
+    )
+
+    results = await validator.validate("project", files)
+    preflight = next(
+        result
+        for result in results
+        if result.profile is ValidationProfile.IMPORT_PREFLIGHT
+    )
+
+    assert preflight.passed
+
+
+@pytest.mark.asyncio
 async def test_import_preflight_rejects_disallowed_import_despite_unrelated_same_named_file(
     tmp_path: Path,
 ) -> None:

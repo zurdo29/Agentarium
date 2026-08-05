@@ -70,18 +70,47 @@ revisión con ejemplos concretos:
   `ModuleNotFoundError` tardío que este perfil existe para evitar, ahora
   escondido detrás de una coincidencia de nombre en vez de evitado.
 
-Corregido con `_resolves_as_sibling(directory, root)`: para el import de
-un archivo dado, `directory` es el directorio de *ese* archivo (no
-`project_root`), y `root` se considera local sólo si existe
-`directory/root.py`, o si `directory/root/` es un directorio que contiene
-al menos un `.py` (cubre tanto paquetes con `__init__.py` como paquetes de
-namespace implícitos). Deliberadamente acotado a hermanos directos de
-`directory`, no a cualquier ancestro hasta `project_root`:
-`SCRIPT_EXECUTION` invoca un script con `cwd` en el directorio del propio
-script, así que ese directorio —no el árbol completo— es lo que
-efectivamente termina en `sys.path[0]` cuando Agentarium lo corre de
-verdad. Dos pruebas de regresión nuevas en `test_validation_profiles.py`
-fijan ambos casos.
+Corregido con `_resolves_as_sibling(directory, project_root, root)`: para
+el import de un archivo dado, `directory` es el directorio de *ese*
+archivo, y `root` se considera local si existe `nivel/root.py`, o si
+`nivel/root/` es un directorio que contiene al menos un `.py` (cubre tanto
+paquetes con `__init__.py` como paquetes de namespace implícitos), en
+`directory` **o en cualquiera de sus ancestros hasta `project_root`
+inclusive** (ver segunda corrección más abajo — la primera versión de este
+mismo arreglo sólo miraba `directory`, sin subir por ancestros, y eso
+todavía fallaba en un caso común). Dos pruebas de regresión en
+`test_validation_profiles.py` fijan el par falso-positivo/falso-negativo
+original.
+
+**Segunda corrección, misma ronda de revisión posterior a abrir la PR:**
+la primera versión de `_resolves_as_sibling` acotaba la búsqueda a
+hermanos directos de `directory` — deliberadamente, razonando que
+`SCRIPT_EXECUTION` invoca un script con `cwd` en su propio directorio, así
+que ese directorio es lo que efectivamente termina en `sys.path[0]`.
+Correcto para el par de casos que motivó esa versión, pero incompleto para
+un layout muy habitual: un módulo *dentro* de un paquete que se refiere a
+su propio paquete contenedor por nombre de nivel superior —
+`library/api.py` haciendo `from library import models`. `library` no es
+hermano del directorio de `api.py` (`library/`); vive un nivel *arriba*, en
+`project_root`. Ese caso se rechazaba como externo.
+
+La razón de fondo: una vez que Python resuelve un import absoluto, siempre
+busca desde `sys.path`, fijado una única vez al arrancar el proceso por
+el archivo que en verdad se invocó como entrypoint — nunca desde el
+directorio del archivo cuyo código fuente contiene la sentencia `import`.
+Un submódulo varios directorios más adentro puede importar un paquete que
+esté en cualquier punto entre su propio directorio y el directorio desde
+el que se lanzó el proceso. Este perfil no puede saber de antemano cuál
+archivo será el entrypoint, así que cada nivel entre el archivo que
+importa y `project_root` cuenta como respuesta plausible — mismo
+principio de "errar hacia no falso-positivar" que ya regía la primera
+corrección, extendido a una dimensión más. Nunca sube más allá de
+`project_root`: `otro/flask.py` fuera de la cadena de ancestros del
+archivo que importa sigue sin excusar `import flask` en `app/main.py` —
+ampliar la búsqueda no debía reabrir ese primer falso negativo, y no lo
+reabre (verificado con el mismo test de regresión, que sigue en verde).
+Una tercera prueba de regresión fija este layout de paquete
+autorreferenciado.
 
 **`ast.walk` completo, no sólo el nivel superior del módulo — corrección
 sobre la propuesta inicial de esta misma sesión.** La primera versión
