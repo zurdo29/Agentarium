@@ -10,7 +10,8 @@ Este documento es la guía operativa del proyecto: qué garantías ya existen, q
 - `main` después de P2.2: referencia de cierre `6174639` o posterior.
 - Verificación de P2.2: **372 passed + 1 skip preexistente**, Ruff/MyPy limpios y web en verde.
 - `P3.0` — **CERRADO (5 de agosto de 2026).** Corrida única `library_api_sqlite × ollama:qwen2.5-coder:7b × 1` (suite `p3.0-confirmation-2026-08`). El modelo propuso Flask, `IMPORT_PREFLIGHT` lo rechazó antes de tester/revisor, y el intento siguiente del mismo work item cambió a `http.server` (stdlib) — ocurrió el camino 2 previsto, con evidencia de autocorrección entre intentos. El proyecto terminó igual en `failed`/`path_conflict`, causa ajena a P2 (colisión de ownership de plan sobre `api.py`, mecanismo de P0), clasificada y mandada a backlog. Detalle en `benchmarks/results/p3.0-confirmation-2026-08/`.
-- Próximo paso: **P3.1 — tests de contrato API/UI antes del refactor**, alcance a confirmar con el usuario antes de empezar.
+- `P3.1a` — **CERRADO (6 de agosto de 2026).** Gate de drift backend/Pydantic ↔ TypeScript: `scripts/check-api-contract.mjs` (AST puro) + `backend/tests/contract_types.py`/`contract_registry.py` (selección, cero formas hardcodeadas -- se derivan de `model_fields` o de una llamada real a la API viá `TestClient`). Corrida contra el código real encontró y corrigió dos cosas antes de mergear: un bug real del extractor TS (`null` como tipo se representaba mal) y una regla demasiado estricta (un campo TS ausente en Python sólo es fallo si no es `optional`). Sin `response_model=`, sin tests de interacción UI, sin cambios funcionales -- eso es P3.1b. ADR 0030.
+- Próximo paso: **P3.1b — tests de interacción UI/API mock**, alcance ya aprobado por el usuario (ver sección P3.1 del roadmap abajo).
 
 > Regla de interpretación: una fase puede estar cerrada aunque su medición haya mostrado problemas. “Cerrar P1” significa que el baseline y las remediaciones previstas terminaron; no que el sistema haya alcanzado mágicamente cero errores.
 
@@ -224,9 +225,12 @@ Entregables:
 3. Test explícito para estados/campos que P4 vaya a consumir antes de extraer componentes.
 4. CI/test local falla si backend y frontend divergen en el contrato.
 
+
+**P3.1a — CERRADO (6 de agosto de 2026).** Entregables 2 y 4 (contrato verificable backend/Pydantic ↔ TypeScript, gate que falla si divergen). Investigar antes de implementar mostró que 'generar TS desde OpenAPI' no alcanzaba: ninguna ruta declara `response_model=`, así que el `openapi.json` autogenerado no describe formas de respuesta reales hoy. El mecanismo final deriva todo de fuentes reales (`model_fields` de las clases de dominio, o una llamada real a través de `TestClient` para los endpoints compuestos como `/api/dashboard`) -- el registro (`contract_registry.py`) sólo selecciona qué comparar, nunca declara una forma a mano. Detalle completo, incluidas dos correcciones encontradas en revisión y en la corrida real, en `docs/decisions/0030-*`.
+**P3.1b — pendiente.** Entregables 1 y 3 (tests de interacción de UI contra API mock para los flujos críticos, test explícito de estados/campos que P4 vaya a consumir). Rama nueva, alcance ya conversado con el usuario pero no arrancado todavía.
 No hacer aquí una reescritura visual de `page.tsx` ni dividir `engine.py` por estética.
 
-Criterio de cierre: los flujos críticos quedan protegidos de una regresión de contrato y se puede refactorizar sin depender de inspección manual.
+Criterio de cierre de P3.1 completo (a+b): los flujos críticos quedan protegidos de una regresión de contrato y se puede refactorizar sin depender de inspección manual. P3.1a ya cumple su mitad del criterio para el contrato backend↔TS específicamente.
 
 ### P3.2 — migraciones versionadas y backup de SQLite
 
@@ -367,9 +371,9 @@ Sólo promover uno de estos puntos cuando una limitación observada del MVP lo j
 
 Corrida dirigida `library_api_sqlite × qwen2.5-coder:7b × 1` ejecutada y documentada en `benchmarks/results/p3.0-confirmation-2026-08/`. Sin feature PR, como estaba previsto.
 
-### 2. P3.1 — siguiente
+### 2. P3.1a — CERRADO (6 de agosto de 2026), P3.1b — siguiente
 
-Tests de interacción API/UI y contrato automático backend ↔ TypeScript. Este es el cinturón de seguridad para el refactor y P4. Alcance exacto a confirmar con el usuario antes de empezar.
+P3.1a (contrato backend↔TypeScript + gate de drift) entregado, ver `docs/decisions/0030-*`. P3.1b (tests de interacción API/UI contra mock) es el cinturón de seguridad que falta antes del refactor y P4.
 
 ### 3. P3.2
 
@@ -383,7 +387,7 @@ Después: P3.3 modularización selectiva → P3.4 gate de autoridad → P4 repos
 
 Usar este texto literalmente como punto de partida:
 
-> Lee `CLAUDE.md`/las instrucciones del repo y `PLANS.md` completos. Verifica que estás sobre `main` actualizado y limpio. No reabras P0, P1 ni P2 salvo una regresión demostrable. P3.0 ya está cerrado (`benchmarks/results/p3.0-confirmation-2026-08/`) — no repetirlo. Empieza por **P3.1** con el alcance que el usuario haya aprobado en la sesión anterior; si no hay alcance aprobado todavía, proponélo y esperá confirmación antes de escribir código.
+> Lee `CLAUDE.md`/las instrucciones del repo y `PLANS.md` completos. Verifica que estás sobre `main` actualizado y limpio. No reabras P0, P1, P2 ni P3.1a salvo una regresión demostrable. Empieza por **P3.1b** (tests de interacción UI/API mock) -- el alcance ya fue aprobado por el usuario en la sesión de P3.1a; si necesitás reconfirmarlo, hacélo antes de escribir código.
 
 ---
 
@@ -396,6 +400,7 @@ Usar este texto literalmente como punto de partida:
 - `docs/decisions/0027-*` — contrato declarado de `SCRIPT_EXECUTION` y su límite de adopción.
 - `docs/decisions/0028-*` — manifiesto de capacidades del runtime.
 - `docs/decisions/0029-*` — preflight de imports.
+- `docs/decisions/0030-*` — gate de drift backend/Pydantic ↔ TypeScript (P3.1a).
 - `benchmarks/results/p1-baseline-2026-08/` — baseline, ambiente y adjudicación manual.
 - `benchmarks/results/p3.0-confirmation-2026-08/` — confirmación dirigida de P2 con modelo real, ambiente y hallazgos.
 
