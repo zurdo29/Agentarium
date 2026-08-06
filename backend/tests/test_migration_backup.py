@@ -24,6 +24,9 @@ from agentarium.repositories.backup import (
     create_validated_backup,
     restore,
 )
+from agentarium.repositories.backup import (
+    _integrity_ok as _real_integrity_ok,
+)
 from agentarium.repositories.database import Database
 from agentarium.repositories.migrations import CURRENT_SCHEMA_VERSION, SchemaTooNewError
 from sqlalchemy import text
@@ -351,3 +354,109 @@ def test_a_database_newer_than_this_code_is_rejected_without_writing_anything(
     assert _user_version(path) == CURRENT_SCHEMA_VERSION + 1
     assert _work_item_columns(path) == before
     assert not _backup_dir(path).exists()
+
+
+def test_a_too_new_database_missing_a_table_gets_zero_mutation(tmp_path: Path) -> None:
+    """reject_if_too_new must gate *every* mutation, including
+    Base.metadata.create_all()'s additive table creation -- not just the
+    versioned work_items steps. A too-new database missing a table this
+    code still knows about (simulating a future schema that dropped it)
+    must come back exactly as it was: the table must not be silently
+    recreated before the version is even checked."""
+    path = tmp_path / "agentarium.db"
+    database = Database(f"sqlite:///{path}")
+    database.create_all()
+    database.dispose()
+
+    connection = sqlite3.connect(str(path))
+    try:
+        connection.execute("DROP TABLE approval_requests")
+        connection.execute(f"PRAGMA user_version={CURRENT_SCHEMA_VERSION + 1}")
+        connection.commit()
+    finally:
+        connection.close()
+
+    database = Database(f"sqlite:///{path}")
+    with pytest.raises(SchemaTooNewError):
+        database.create_all()
+    database.dispose()
+
+    connection = sqlite3.connect(str(path))
+    try:
+        recreated = connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='approval_requests'"
+        ).fetchone()
+    finally:
+        connection.close()
+    assert recreated is None, "Base.metadata.create_all() ran before the version was checked"
+    assert _user_version(path) == CURRENT_SCHEMA_VERSION + 1
+    assert not _backup_dir(path).exists()
+
+
+def test_restore_refuses_when_another_connection_still_has_the_database_open(
+    tmp_path: Path,
+) -> None:
+    """The migration FileLock only serializes upgrade()/restore() calls
+    against each other -- it says nothing about an already-running
+    Agentarium process (e.g. the API server) that opened this database
+    through the ordinary application path and simply never closed its
+    connection. restore() must detect that without the other process
+    cooperating in any way, and refuse before touching any file."""
+    path = tmp_path / "agentarium.db"
+    database = Database(f"sqlite:///{path}")
+    database.create_all()
+    database.dispose()
+
+    backup_path = create_validated_backup(path, CURRENT_SCHEMA_VERSION)
+
+    # An open read transaction on a second, independent connection --
+    # exactly what a live application connection looks like from the
+    # outside, with no cooperation from that process required.
+    reader = sqlite3.connect(str(path))
+    reader.execute("BEGIN")
+    reader.execute("SELECT COUNT(*) FROM projects").fetchone()
+
+    original_bytes = path.read_bytes()
+    try:
+        with pytest.raises(RestoreError):
+            restore(path, backup_path)
+
+        assert path.read_bytes() == original_bytes
+        assert list(path.parent.glob(f"{path.name}.failed-*")) == []
+    finally:
+        reader.close()
+
+
+def test_a_concurrent_write_after_the_backup_snapshot_does_not_invalidate_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """create_validated_backup must not compare the backup's row counts
+    against the *source*'s row count read after VACUUM INTO already took
+    its snapshot: a write landing in that window is unrelated to whether
+    the backup itself is valid, and must not turn a good backup into a
+    reported failure."""
+    path = tmp_path / "legacy.db"
+    _legacy_db(path).dispose()
+
+    def _integrity_ok_and_then_write_to_source(check_path: Path) -> bool:
+        # Called on the *backup* file, right after VACUUM INTO captured its
+        # snapshot -- inject a write to the *source* in that exact window,
+        # before create_validated_backup finishes validating.
+        writer = sqlite3.connect(str(path))
+        writer.execute(
+            "INSERT INTO projects (id, title, goal, status, created_at, updated_at) "
+            "VALUES ('concurrent', 'x', 'y', 'draft', "
+            "'2026-08-06 00:00:00', '2026-08-06 00:00:00')"
+        )
+        writer.commit()
+        writer.close()
+        return _real_integrity_ok(check_path)
+
+    monkeypatch.setattr(
+        "agentarium.repositories.backup._integrity_ok",
+        _integrity_ok_and_then_write_to_source,
+    )
+
+    backup_path = create_validated_backup(path, CURRENT_SCHEMA_VERSION)
+
+    assert backup_path.exists()

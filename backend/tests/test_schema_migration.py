@@ -424,3 +424,83 @@ def test_upgrading_a_full_legacy_schema_reaches_current_version_without_touching
         "execution_contract_json",
     } <= columns
     database.dispose()
+
+
+def test_bootstrap_still_backfills_split_depth_when_the_column_exists_without_its_data(
+    tmp_path: Path,
+) -> None:
+    """satisfied() must check the *data* postcondition a backfill step
+    promises, not just that its column exists. A column added by hand (or
+    left behind by a pre-P3.2 run whose ALTER committed without its
+    UPDATE -- see ADR 0032 on pysqlite's non-transactional DDL) must still
+    get backfilled, and apply() must not try to re-ALTER a column that's
+    already there."""
+    path = tmp_path / "legacy.db"
+    database = Database(f"sqlite:///{path}")
+    with database.engine.connect() as connection:
+        for statement in _LEGACY_SCHEMA.strip().split(";"):
+            if statement.strip():
+                connection.execute(text(statement))
+        # shared_component and split_depth both exist, but split_depth was
+        # never backfilled -- every row, including ones the backfill's own
+        # title/shared_component patterns match, is still at its DEFAULT 0.
+        connection.execute(
+            text("ALTER TABLE work_items ADD COLUMN shared_component VARCHAR(120)")
+        )
+        connection.execute(
+            text("ALTER TABLE work_items ADD COLUMN split_depth INTEGER NOT NULL DEFAULT 0")
+        )
+        connection.execute(
+            text(_LEGACY_ROW),
+            {
+                "id": "child",
+                "title": "[subtarea] Listar libros",
+                "status": WorkItemStatus.FAILED.value,
+            },
+        )
+        connection.commit()
+
+    database.create_all()
+
+    assert _depths(database)["child"] == 1
+
+
+def test_out_of_order_legacy_steps_still_reach_current_version(
+    tmp_path: Path,
+) -> None:
+    """pending_steps() must not assume version implies a satisfied prefix in
+    either direction: a database can have a *later* step's column already
+    present while an *earlier* one is still missing (e.g. a hand-patched
+    database). The upgrade must still apply the missing step and land
+    exactly on CURRENT_SCHEMA_VERSION, not stall at whatever step happened
+    to be the last one actually applied."""
+    path = tmp_path / "legacy.db"
+    database = Database(f"sqlite:///{path}")
+    with database.engine.connect() as connection:
+        for statement in _LEGACY_SCHEMA.strip().split(";"):
+            if statement.strip():
+                connection.execute(text(statement))
+        # step 6 (execution_contract_json) present; step 5 (split_depth) and
+        # everything before it deliberately absent.
+        connection.execute(
+            text("ALTER TABLE work_items ADD COLUMN execution_contract_json JSON")
+        )
+        connection.commit()
+
+    database.create_all()
+
+    with database.engine.connect() as connection:
+        (version,) = connection.execute(text("PRAGMA user_version")).fetchone()
+        columns = {
+            row[1] for row in connection.execute(text("PRAGMA table_info(work_items)"))
+        }
+    assert version == CURRENT_SCHEMA_VERSION
+    assert {
+        "version",
+        "owned_paths_json",
+        "shared_component",
+        "output_strategy",
+        "split_depth",
+        "execution_contract_json",
+    } <= columns
+    database.dispose()

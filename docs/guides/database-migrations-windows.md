@@ -38,18 +38,24 @@ agentarium db restore "<carpeta-de-la-base>\backups\agentarium-pre-v<N>-<timesta
 
 `db restore`:
 
-- exige que ningún otro proceso de Agentarium tenga la base abierta (mismo
-  lock que usa el arranque normal);
+- adquiere el mismo lock que usa el arranque normal (evita que dos
+  `restore`/`init` corran a la vez sobre la misma base);
 - valida el backup antes de tocar nada;
+- confirma que ninguna otra conexión siga usando la base activa -- **no** es
+  el lock lo que garantiza esto (ver ADR 0032): cerrar sólo la terminal
+  donde corriste `agentarium init` o `agentarium project run` no alcanza si
+  el proceso de la API sigue corriendo en otro lado con la base abierta;
 - conserva la base reemplazada como `<archivo>.failed-<timestamp>` — nunca
   la borra;
 - limpia `-wal`/`-shm` viejos junto al archivo restaurado, para que SQLite
   no intente reproducir un WAL que no corresponde a la base nueva;
 - vuelve a validar la base restaurada antes de reportar éxito.
 
-Si `db restore` en sí falla (backup inválido, o el lock ocupado porque otro
-proceso sigue usando la base), no toca la base activa: cerrá el otro
-proceso, o pasá otro backup, y reintentá.
+Si `db restore` en sí falla, no toca la base activa. Motivos posibles:
+backup inválido; el lock ocupado (otro `init`/`restore` corriendo en ese
+instante); o una conexión activa detectada (la API, un
+`agentarium project run`, u otro proceso con la base abierta) -- cerrá ese
+proceso y reintentá.
 
 ## "La base de datos está en user_version=N, más nueva..."
 

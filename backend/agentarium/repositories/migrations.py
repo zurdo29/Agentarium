@@ -23,12 +23,38 @@ class MigrationStep:
     column: str
     definition: str
     backfill: tuple[str, ...] = field(default_factory=tuple)
+    # A SELECT COUNT(*) that returns 0 exactly when this step's backfill has
+    # nothing left to do -- the *data* postcondition the backfill exists to
+    # guarantee, not just "the column exists". None for steps with no
+    # backfill, where column presence alone is the whole contract.
+    postcondition: str | None = None
 
     def satisfied(self, connection: sqlite3.Connection) -> bool:
-        return self.column in _work_item_columns(connection)
+        if self.column not in _work_item_columns(connection):
+            return False
+        if self.postcondition is None:
+            return True
+        try:
+            (remaining,) = connection.execute(self.postcondition).fetchone()
+        except sqlite3.OperationalError:
+            # The postcondition itself references a column another,
+            # still-pending step is responsible for adding (e.g. this step's
+            # backfill matches on shared_component, added by an earlier
+            # step) -- definitely not satisfied yet.
+            return False
+        return bool(remaining == 0)
 
     def apply(self, connection: sqlite3.Connection) -> None:
-        connection.execute(f"ALTER TABLE work_items ADD COLUMN {self.column} {self.definition}")
+        # Idempotent regardless of why apply() is being called: a step
+        # missing its column always needs the ALTER, but a step whose column
+        # already exists with a pending backfill (satisfied() said False via
+        # the postcondition, not via column absence) must skip straight to
+        # the backfill -- ALTER TABLE ADD COLUMN on an existing column is a
+        # hard error, not a no-op.
+        if self.column not in _work_item_columns(connection):
+            connection.execute(
+                f"ALTER TABLE work_items ADD COLUMN {self.column} {self.definition}"
+            )
         for statement in self.backfill:
             connection.execute(statement)
 
@@ -63,6 +89,19 @@ STEPS: tuple[MigrationStep, ...] = (
                     OR shared_component LIKE 'split-%')
             """,
         ),
+        # Same predicate as the backfill's WHERE clause, as a COUNT: this
+        # step is only satisfied once nothing matches it any more. A column
+        # added by hand (or left by a pre-P3.2 run that committed the ALTER
+        # without its backfill, see ADR 0032) would otherwise read as
+        # "satisfied" from column presence alone, permanently skipping rows
+        # that still need split_depth = 1.
+        postcondition="""
+            SELECT COUNT(*) FROM work_items
+             WHERE split_depth = 0
+               AND (title LIKE '[subtarea] %'
+                    OR title LIKE 'Consolidar subtareas: %'
+                    OR shared_component LIKE 'split-%')
+            """,
     ),
     # Nullable, no backfill: NULL is already correct for every row that
     # predates this column (see ADR 0027 -- nothing constructed a work item
