@@ -1,0 +1,84 @@
+{
+  "totals": {
+    "runs": 1,
+    "completed": 0,
+    "completion_rate": 0.0,
+    "false_completed": 0
+  },
+  "categories": {
+    "path_conflict": 1
+  },
+  "by_target": {
+    "ollama:qwen2.5-coder:7b": {
+      "runs": 1,
+      "completed": 0,
+      "false_completed": 0,
+      "completion_rate": 0.0,
+      "average_seconds": 479.82
+    }
+  },
+  "false_completed_runs": [],
+  "runs": [
+    {
+      "schema_version": 2,
+      "case_id": "library_api_sqlite",
+      "case_schema_version": 2,
+      "provider": "ollama",
+      "model": "qwen2.5-coder:7b",
+      "repetition": 1,
+      "project_id": "c8a5e46f-9d51-4e23-b7fb-f0079be0b7d3",
+      "project_status": "failed",
+      "progress_percent": 35.71,
+      "duration_seconds": 479.82,
+      "attempts": 25,
+      "splits": 2,
+      "human_intervention": false,
+      "prompt_versions": {
+        "planning": "planning-v4",
+        "workspace": "workspace-v11",
+        "decompose": "decompose-v3",
+        "plan_revision": "plan-revision-v3"
+      },
+      "runtime_identity": {
+        "agentarium_commit": "61746397bea9f747e7109a6c64e469c483081c88",
+        "agentarium_dirty": false,
+        "python_version": "3.14.6",
+        "platform": "Windows-AMD64",
+        "concurrency": 1,
+        "ollama_version": "0.32.5"
+      },
+      "model_digest": "dae161e27b0e90dd1856c8bb3209201fd6736d8eb66298e75ed87571486f4364",
+      "technical_result": false,
+      "semantic_result": false,
+      "technical_reports": 6,
+      "semantic_reviews": 6,
+      "validation_passed": true,
+      "validators": [
+        {
+          "description": "Existe el código Python de la API",
+          "passed": true,
+          "detail": "2 archivo(s) coinciden"
+        },
+        {
+          "description": "La persistencia usa SQLite de verdad",
+          "passed": true,
+          "detail": "patrón encontrado en api.py"
+        },
+        {
+          "description": "Se declara la validación del préstamo",
+          "passed": true,
+          "detail": "patrón encontrado en api\\models.py"
+        },
+        {
+          "description": "Existe el documento Markdown solicitado",
+          "passed": true,
+          "detail": "1 archivo(s) coinciden"
+        }
+      ],
+      "category": "path_conflict",
+      "evidence": "[subtarea] Implementación del endpoint para listar libros: Workspace file paths collide with files already owned by an unrelated task: api.py",
+      "error": null,
+      "false_completed": false
+    }
+  ]
+}
