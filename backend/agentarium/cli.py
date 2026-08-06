@@ -7,13 +7,31 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
-from typing import Annotated, Any
+from typing import Annotated, Any, NoReturn
 
 import httpx
 import typer
 
 from agentarium.config.settings import get_settings, project_root
+from agentarium.repositories.backup import (
+    BackupValidationError,
+    MigrationFailedError,
+    RestoreError,
+    sqlite_path_from_url,
+)
+from agentarium.repositories.backup import (
+    restore as restore_database_file,
+)
+from agentarium.repositories.migrations import SchemaTooNewError
 from agentarium.services import ApplicationService, build_application
+
+# Distinct, stable exit codes for the three ways `Database.create_all()` can
+# refuse to start: each points at a different fix (retry/restore vs. upgrade
+# the code vs. a bad backup, see docs/decisions/0032-*.md).
+_EXIT_MIGRATION_FAILED = 6
+_EXIT_SCHEMA_TOO_NEW = 7
+_EXIT_BACKUP_INVALID = 9
+_EXIT_RESTORE_FAILED = 8
 
 app = typer.Typer(
     name="agentarium",
@@ -27,6 +45,20 @@ benchmark_app = typer.Typer(
     no_args_is_help=True,
 )
 app.add_typer(benchmark_app, name="benchmark")
+db_app = typer.Typer(help="Mantenimiento de la base de datos.", no_args_is_help=True)
+app.add_typer(db_app, name="db")
+
+
+_StartupFailure = MigrationFailedError | SchemaTooNewError | BackupValidationError
+
+
+def _exit_on_startup_failure(exc: _StartupFailure) -> NoReturn:
+    typer.echo(str(exc), err=True)
+    if isinstance(exc, MigrationFailedError):
+        raise typer.Exit(_EXIT_MIGRATION_FAILED) from exc
+    if isinstance(exc, SchemaTooNewError):
+        raise typer.Exit(_EXIT_SCHEMA_TOO_NEW) from exc
+    raise typer.Exit(_EXIT_BACKUP_INVALID) from exc
 
 
 def _service() -> ApplicationService:
@@ -36,7 +68,10 @@ def _service() -> ApplicationService:
     # only here; recovery stays scoped to genuine startups (`init`, the API
     # server) or to the specific project a `run` is about to drive.
     service = build_application()
-    service.ensure_ready()
+    try:
+        service.ensure_ready()
+    except (MigrationFailedError, SchemaTooNewError, BackupValidationError) as exc:
+        _exit_on_startup_failure(exc)
     return service
 
 
@@ -61,10 +96,43 @@ def doctor() -> None:
 @app.command("init")
 def initialize() -> None:
     """Inicializa directorios y base de datos."""
-    service = _service()
-    typer.echo(
-        f"Agentarium inicializado. Tareas recuperadas: {service.repository.recover_interrupted()}"
-    )
+    service = build_application()
+    try:
+        recovered = service.initialize()
+    except (MigrationFailedError, SchemaTooNewError, BackupValidationError) as exc:
+        _exit_on_startup_failure(exc)
+    typer.echo(f"Agentarium inicializado. Tareas recuperadas: {recovered}")
+
+
+@db_app.command("restore")
+def restore_database(
+    backup: Annotated[
+        Path,
+        typer.Argument(exists=True, dir_okay=False, help="Backup a restaurar (VACUUM INTO)."),
+    ],
+) -> None:
+    """Restaura la base de datos activa desde un backup validado.
+
+    No sobreescribe una base viva a ciegas: exige el mismo lock que usa el
+    arranque normal, valida el backup con PRAGMA integrity_check antes de
+    tocar nada, y conserva la base reemplazada como `<archivo>.failed-<ts>`
+    en vez de borrarla.
+    """
+    settings = get_settings()
+    db_path = sqlite_path_from_url(settings.resolved_database_url())
+    if db_path is None:
+        typer.echo(
+            "El backend configurado no es un archivo SQLite "
+            f"({settings.resolved_database_url()!r}); no hay nada que restaurar.",
+            err=True,
+        )
+        raise typer.Exit(_EXIT_RESTORE_FAILED)
+    try:
+        restore_database_file(db_path, backup)
+    except RestoreError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(_EXIT_RESTORE_FAILED) from exc
+    typer.echo(f"Base de datos restaurada desde {backup}.")
 
 
 @app.command()
