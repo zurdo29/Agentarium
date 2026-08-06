@@ -2,7 +2,7 @@
 
 Este documento es la guía operativa del proyecto: qué garantías ya existen, qué sigue abierto y en qué orden conviene trabajar. No es una bitácora detallada. La evidencia histórica y las decisiones de diseño viven en `docs/decisions/` y en `benchmarks/results/`.
 
-## Estado al 5 de agosto de 2026
+## Estado al 6 de agosto de 2026
 
 - `P0` — **CERRADO**. Rutas efectivas, ownership, colisiones, partición de criterios y profundidad de división quedaron mecanizadas.
 - `P1` — **CERRADO como fase de medición y remediación**. La matriz baseline se completó y sus causas principales fueron instrumentadas/corregidas. Esto **no** significa que el objetivo de calidad de cero falsos `completed` se haya demostrado todavía.
@@ -12,7 +12,8 @@ Este documento es la guía operativa del proyecto: qué garantías ya existen, q
 - `P3.0` — **CERRADO (5 de agosto de 2026).** Corrida única `library_api_sqlite × ollama:qwen2.5-coder:7b × 1` (suite `p3.0-confirmation-2026-08`). El modelo propuso Flask, `IMPORT_PREFLIGHT` lo rechazó antes de tester/revisor, y el intento siguiente del mismo work item cambió a `http.server` (stdlib) — ocurrió el camino 2 previsto, con evidencia de autocorrección entre intentos. El proyecto terminó igual en `failed`/`path_conflict`, causa ajena a P2 (colisión de ownership de plan sobre `api.py`, mecanismo de P0), clasificada y mandada a backlog. Detalle en `benchmarks/results/p3.0-confirmation-2026-08/`.
 - `P3.1a` — **CERRADO (6 de agosto de 2026).** Gate de drift backend/Pydantic ↔ TypeScript: `scripts/check-api-contract.mjs` (AST puro) + `backend/tests/contract_types.py`/`contract_registry.py` (selección, cero formas hardcodeadas -- se derivan de `model_fields` o de una llamada real a la API viá `TestClient`). Corrida contra el código real encontró y corrigió dos cosas antes de mergear: un bug real del extractor TS (`null` como tipo se representaba mal) y una regla demasiado estricta (un campo TS ausente en Python sólo es fallo si no es `optional`). Sin `response_model=`, sin tests de interacción UI, sin cambios funcionales -- eso es P3.1b. ADR 0030.
 - `P3.1b` — **CERRADO (6 de agosto de 2026).** 16 tests de interacción real (`@testing-library/react` + `user-event` + `jsdom`) contra `Home()`, API mockeada con match exacto y falla ruidosa ante ruta no registrada (`tests/support/fetch-mock.mjs`). Cubre crear/abrir/controlar un proyecto, retry/rework/escalate, aprobaciones, conectividad, y los campos de sólo lectura que P4.3/P4.4 van a necesitar (last_error, veredicto, evidencia de test report, decisiones, artifacts, métricas). Stack y decisiones durables (por qué `node:test`+`jsdom`+RTL y no otro runner, transpile a archivo temporal en vez de un loader, match exacto del mock) en ADR 0031; los tres problemas puntuales del arnés encontrados corriendo el mecanismo quedaron documentados como comentario junto al código que los resuelve en `tests/support/dom-setup.mjs`, no en el ADR. Sin refactor de `page.tsx`, sin cambios visuales/funcionales, sin response_model=.
-- Próximo paso: **P3.2 — migraciones versionadas y backup de SQLite** (P3.1 completo, a+b).
+- `P3.2` — **CERRADO (6 de agosto de 2026).** Migraciones versionadas (`PRAGMA user_version` + lista de pasos, sin Alembic) y backup validado antes de migrar, derivados del path real de cada base SQLite -- nunca de una carpeta global, porque esta app ya corre varias bases reales en paralelo (default, por suite de benchmark, por test). `agentarium db restore <backup>` reemplaza "copiar el archivo encima": adquiere el mismo lock que el arranque, valida el backup antes de tocar nada, preserva la base reemplazada como `.failed-<timestamp>`, limpia `-wal`/`-shm` viejos y revalida al final. Corrección encontrada antes de implementar nada (no en producción): `user_version == 0` es legacy/ambiguo, nunca un prefijo confiable de pasos ya aplicados -- confirmado necesario por un test ya existente en `main` que agrega una columna fuera de orden a propósito; el mecanismo revisa cada paso contra el schema real en vez de confiar en el número. `test_schema_migration.py` sigue verde sin cambiar ninguna aserción (se le sumó una prueba con las 11 tablas en su forma original de `fd83772`); `test_migration_backup.py` nuevo cubre disparo condicional del backup, backup/restore inválido, aislamiento entre bases, regresión concurrente y sabotaje controlado a mitad de migración. ADR 0032; runbook en `docs/guides/database-migrations-windows.md`.
+- Próximo paso: **P3.3 — modularización selectiva** (P3.1 y P3.2 completos).
 
 > Regla de interpretación: una fase puede estar cerrada aunque su medición haya mostrado problemas. “Cerrar P1” significa que el baseline y las remediaciones previstas terminaron; no que el sistema haya alcanzado mágicamente cero errores.
 
@@ -101,8 +102,7 @@ Estos puntos no deben maquillarse como resueltos:
 3. **`network_policy: deny` es política declarada, no sandbox de SO.** No afirmar lo contrario en UI, ADRs ni documentación.
 4. **qwen3:8b sigue sin calibración real después de la instrumentación.** Ya podemos separar cola de generación, pero todavía no hay evidencia suficiente para cambiar su timeout.
 5. **`engine.py` y `app/page.tsx` son grandes.** Es deuda de mantenibilidad, no una emergencia que justifique una reescritura antes de tener tests de contrato suficientes.
-6. **Las migraciones siguen siendo una fragilidad.** Los backfills manuales funcionaron, pero falta un mecanismo versionado con backup y prueba de upgrade.
-7. **El producto sigue orientado principalmente a greenfield.** El salto de valor real será trabajar con un repositorio existente sin arriesgar el original.
+6. **El producto sigue orientado principalmente a greenfield.** El salto de valor real será trabajar con un repositorio existente sin arriesgar el original.
 
 ---
 
@@ -247,6 +247,8 @@ Entregables:
 
 Criterio de cierre: una DB antigua puede actualizarse de forma reproducible y recuperar su estado previo si el upgrade falla.
 
+**Resultado (6 de agosto de 2026): CERRADO.** `PRAGMA user_version` + una lista ordenada de pasos (`backend/agentarium/repositories/migrations.py`) reemplaza la tupla implícita anterior; backup validado (`VACUUM INTO` + `integrity_check` + conteo de filas) y `FileLock`, ambos derivados del path real de cada base -- nunca de una carpeta global (`backend/agentarium/repositories/backup.py`). `agentarium db restore <backup>` es una operación real: exige el lock, valida el backup antes de tocar nada, preserva la base reemplazada (`.failed-<timestamp>`) y limpia sidecars `-wal`/`-shm`, en vez de copiar el archivo encima de una base WAL viva. Revisión previa a implementar corrigió dos supuestos del primer diseño: `user_version == 0` no puede tratarse como versión histórica exacta (el mecanismo revisa cada paso contra el schema real, sin asumir que sólo falta un *sufijo* ordenado -- un test ya existente en `main` agrega una columna fuera de orden a propósito y así lo confirmó antes de escribir ningún test nuevo); y backup/lock deben aislarse por base, no compartir una carpeta global, porque esta app ya corre varias bases SQLite reales en paralelo hoy. `test_schema_migration.py` sigue verde sin cambiar ninguna aserción (se le sumó una prueba con las 11 tablas en su forma original de `fd83772`, confirmando que las 10 que nunca cambiaron quedan intactas); `test_migration_backup.py` nuevo cubre disparo condicional del backup, backup/restore inválido, aislamiento entre bases, regresión concurrente (dos hilos migrando la misma base legacy) y sabotaje controlado a mitad de secuencia. `.\test.ps1` completo en verde (391 backend + web). Diseño completo en ADR 0032; runbook en `docs/guides/database-migrations-windows.md`.
+
 ### P3.3 — modularización selectiva
 
 **Objetivo:** reducir el coste de cambio justo donde P4 lo necesite, sin convertir el refactor en otro proyecto.
@@ -377,9 +379,9 @@ Corrida dirigida `library_api_sqlite × qwen2.5-coder:7b × 1` ejecutada y docum
 
 Contrato backend↔TypeScript (ADR 0030) + tests de interacción UI/API mock (ADR 0031) entregados. Cinturón de seguridad para el refactor y P4 completo.
 
-### 3. P3.2
+### 3. P3.2 — CERRADO (6 de agosto de 2026)
 
-Migraciones versionadas + backup/restore de SQLite.
+Migraciones versionadas (`PRAGMA user_version` + lista de pasos) + backup validado/restore real de SQLite, aislados por base. ADR 0032; runbook en `docs/guides/database-migrations-windows.md`.
 
 Después: P3.3 modularización selectiva → P3.4 gate de autoridad → P4 repositorios reales → matriz completa pre-MVP.
 
@@ -389,7 +391,7 @@ Después: P3.3 modularización selectiva → P3.4 gate de autoridad → P4 repos
 
 Usar este texto literalmente como punto de partida:
 
-> Lee `CLAUDE.md`/las instrucciones del repo y `PLANS.md` completos. Verifica que estás sobre `main` actualizado y limpio. No reabras P0, P1, P2 ni P3.1 (a+b) salvo una regresión demostrable. Empieza por **P3.2** — migraciones versionadas y backup de SQLite -- ver la sección P3.2 del roadmap para el alcance ya definido.
+> Lee `CLAUDE.md`/las instrucciones del repo y `PLANS.md` completos. Verifica que estás sobre `main` actualizado y limpio. No reabras P0, P1, P2, P3.1 (a+b) ni P3.2 salvo una regresión demostrable. Empieza por **P3.3** — modularización selectiva -- ver la sección P3.3 del roadmap para el alcance ya definido.
 
 ---
 
@@ -404,6 +406,8 @@ Usar este texto literalmente como punto de partida:
 - `docs/decisions/0029-*` — preflight de imports.
 - `docs/decisions/0030-*` — gate de drift backend/Pydantic ↔ TypeScript (P3.1a).
 - `docs/decisions/0031-*` — arnés de tests de interacción UI↔API mock (P3.1b).
+- `docs/decisions/0032-*` — migraciones versionadas + backup/restore de SQLite (P3.2).
+- `docs/guides/database-migrations-windows.md` — runbook Windows de backup, upgrade y restore (P3.2).
 - `benchmarks/results/p1-baseline-2026-08/` — baseline, ambiente y adjudicación manual.
 - `benchmarks/results/p3.0-confirmation-2026-08/` — confirmación dirigida de P2 con modelo real, ambiente y hallazgos.
 

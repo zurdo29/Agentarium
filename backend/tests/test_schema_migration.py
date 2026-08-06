@@ -7,6 +7,7 @@ from agentarium.domain.enums import WorkItemStatus
 from agentarium.domain.models import Milestone, Project, ScriptExecutionContract, WorkItem
 from agentarium.repositories import Repository
 from agentarium.repositories.database import Database
+from agentarium.repositories.migrations import CURRENT_SCHEMA_VERSION
 from sqlalchemy import text
 
 # The shape of `work_items` before ADR 0022/0023/0021-revisión added columns:
@@ -53,6 +54,118 @@ CREATE TABLE work_items (
     last_error TEXT,
     created_at DATETIME NOT NULL,
     updated_at DATETIME NOT NULL
+);
+"""
+
+# The other 8 tables this codebase has ever had, at their fd83772 shape --
+# confirmed identical to today's `tables.py` (`git show fd83772:...`): only
+# `work_items` has ever gained a column. Used by
+# test_upgrading_a_full_legacy_schema_reaches_current_version_without_touching_unchanged_tables
+# below to prove `create_all()` really does leave all 10 never-changed
+# tables alone, not just assume SQLAlchemy's documented create_all()
+# semantics without checking.
+_LEGACY_OTHER_TABLES = """
+CREATE TABLE dependencies (
+    id VARCHAR(36) NOT NULL PRIMARY KEY,
+    project_id VARCHAR(36) NOT NULL,
+    work_item_id VARCHAR(36) NOT NULL,
+    depends_on_id VARCHAR(36) NOT NULL
+);
+CREATE TABLE agent_runs (
+    id VARCHAR(36) NOT NULL PRIMARY KEY,
+    project_id VARCHAR(36) NOT NULL,
+    work_item_id VARCHAR(36),
+    agent_role VARCHAR(50) NOT NULL,
+    model VARCHAR(160) NOT NULL,
+    provider VARCHAR(80) NOT NULL,
+    attempt INTEGER NOT NULL,
+    outcome VARCHAR(50) NOT NULL,
+    input_summary TEXT NOT NULL,
+    output_summary TEXT NOT NULL,
+    resource_usage_json JSON NOT NULL,
+    correlation_id VARCHAR(36) NOT NULL,
+    error TEXT,
+    started_at DATETIME NOT NULL,
+    finished_at DATETIME NOT NULL
+);
+CREATE TABLE artifacts (
+    id VARCHAR(36) NOT NULL PRIMARY KEY,
+    project_id VARCHAR(36) NOT NULL,
+    work_item_id VARCHAR(36) NOT NULL,
+    agent_run_id VARCHAR(36) NOT NULL,
+    artifact_type VARCHAR(80) NOT NULL,
+    title VARCHAR(240) NOT NULL,
+    content_json JSON NOT NULL,
+    file_paths_json JSON NOT NULL,
+    schema_version VARCHAR(20) NOT NULL,
+    checksum VARCHAR(128),
+    created_at DATETIME NOT NULL
+);
+CREATE TABLE reviews (
+    id VARCHAR(36) NOT NULL PRIMARY KEY,
+    project_id VARCHAR(36) NOT NULL,
+    work_item_id VARCHAR(36) NOT NULL,
+    artifact_id VARCHAR(36) NOT NULL,
+    reviewer_run_id VARCHAR(36) NOT NULL,
+    verdict VARCHAR(40) NOT NULL,
+    reasons_json JSON NOT NULL,
+    acceptance_results_json JSON NOT NULL,
+    created_at DATETIME NOT NULL
+);
+CREATE TABLE test_reports (
+    id VARCHAR(36) NOT NULL PRIMARY KEY,
+    project_id VARCHAR(36) NOT NULL,
+    work_item_id VARCHAR(36) NOT NULL,
+    artifact_id VARCHAR(36) NOT NULL,
+    tester_run_id VARCHAR(36) NOT NULL,
+    passed BOOLEAN NOT NULL,
+    checks_json JSON NOT NULL,
+    command_evidence_json JSON NOT NULL,
+    summary TEXT NOT NULL,
+    created_at DATETIME NOT NULL
+);
+CREATE TABLE decisions (
+    id VARCHAR(36) NOT NULL PRIMARY KEY,
+    project_id VARCHAR(36) NOT NULL,
+    title VARCHAR(240) NOT NULL,
+    decision TEXT NOT NULL,
+    rationale TEXT NOT NULL,
+    reversible BOOLEAN NOT NULL,
+    alternatives_json JSON NOT NULL,
+    created_at DATETIME NOT NULL
+);
+CREATE TABLE approval_requests (
+    id VARCHAR(36) NOT NULL PRIMARY KEY,
+    project_id VARCHAR(36) NOT NULL,
+    work_item_id VARCHAR(36),
+    action TEXT NOT NULL,
+    reason TEXT NOT NULL,
+    risk VARCHAR(20) NOT NULL,
+    alternatives_json JSON NOT NULL,
+    affected_resources_json JSON NOT NULL,
+    status VARCHAR(20) NOT NULL,
+    comments TEXT,
+    created_at DATETIME NOT NULL,
+    resolved_at DATETIME
+);
+CREATE TABLE execution_events (
+    sequence INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+    id VARCHAR(36) NOT NULL UNIQUE,
+    project_id VARCHAR(36) NOT NULL,
+    work_item_id VARCHAR(36),
+    agent_run_id VARCHAR(36),
+    agent_role VARCHAR(50),
+    model VARCHAR(160),
+    action VARCHAR(100) NOT NULL,
+    message TEXT NOT NULL,
+    previous_state VARCHAR(40),
+    new_state VARCHAR(40),
+    attempt INTEGER,
+    error TEXT,
+    resource_usage_json JSON,
+    correlation_id VARCHAR(36) NOT NULL,
+    metadata_json JSON NOT NULL,
+    timestamp DATETIME NOT NULL
 );
 """
 
@@ -253,4 +366,61 @@ def test_a_work_item_without_a_contract_loads_execution_contract_as_none(
     reloaded = repository.get_work_item(item.id)
 
     assert reloaded.execution_contract is None
+    database.dispose()
+
+
+# The 10 tables besides work_items -- see _LEGACY_OTHER_TABLES above.
+_NEVER_CHANGED_TABLES = (
+    "projects",
+    "milestones",
+    "dependencies",
+    "agent_runs",
+    "artifacts",
+    "reviews",
+    "test_reports",
+    "decisions",
+    "approval_requests",
+    "execution_events",
+)
+
+
+def _table_info(database: Database, table: str) -> list[tuple[object, ...]]:
+    with database.engine.connect() as connection:
+        return [tuple(row) for row in connection.execute(text(f"PRAGMA table_info({table})"))]
+
+
+def test_upgrading_a_full_legacy_schema_reaches_current_version_without_touching_unchanged_tables(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "legacy-full.db"
+    database = Database(f"sqlite:///{path}")
+    with database.engine.connect() as connection:
+        for statement in (_LEGACY_SCHEMA + _LEGACY_OTHER_TABLES).strip().split(";"):
+            if statement.strip():
+                connection.execute(text(statement))
+        connection.commit()
+
+    before = {table: _table_info(database, table) for table in _NEVER_CHANGED_TABLES}
+
+    database.create_all()
+
+    with database.engine.connect() as connection:
+        (version,) = connection.execute(text("PRAGMA user_version")).fetchone()
+    assert version == CURRENT_SCHEMA_VERSION
+
+    after = {table: _table_info(database, table) for table in _NEVER_CHANGED_TABLES}
+    assert after == before
+
+    with database.engine.connect() as connection:
+        columns = {
+            row[1] for row in connection.execute(text("PRAGMA table_info(work_items)"))
+        }
+    assert {
+        "version",
+        "owned_paths_json",
+        "shared_component",
+        "output_strategy",
+        "split_depth",
+        "execution_contract_json",
+    } <= columns
     database.dispose()
