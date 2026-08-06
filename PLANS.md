@@ -11,7 +11,8 @@ Este documento es la guía operativa del proyecto: qué garantías ya existen, q
 - Verificación de P2.2: **372 passed + 1 skip preexistente**, Ruff/MyPy limpios y web en verde.
 - `P3.0` — **CERRADO (5 de agosto de 2026).** Corrida única `library_api_sqlite × ollama:qwen2.5-coder:7b × 1` (suite `p3.0-confirmation-2026-08`). El modelo propuso Flask, `IMPORT_PREFLIGHT` lo rechazó antes de tester/revisor, y el intento siguiente del mismo work item cambió a `http.server` (stdlib) — ocurrió el camino 2 previsto, con evidencia de autocorrección entre intentos. El proyecto terminó igual en `failed`/`path_conflict`, causa ajena a P2 (colisión de ownership de plan sobre `api.py`, mecanismo de P0), clasificada y mandada a backlog. Detalle en `benchmarks/results/p3.0-confirmation-2026-08/`.
 - `P3.1a` — **CERRADO (6 de agosto de 2026).** Gate de drift backend/Pydantic ↔ TypeScript: `scripts/check-api-contract.mjs` (AST puro) + `backend/tests/contract_types.py`/`contract_registry.py` (selección, cero formas hardcodeadas -- se derivan de `model_fields` o de una llamada real a la API viá `TestClient`). Corrida contra el código real encontró y corrigió dos cosas antes de mergear: un bug real del extractor TS (`null` como tipo se representaba mal) y una regla demasiado estricta (un campo TS ausente en Python sólo es fallo si no es `optional`). Sin `response_model=`, sin tests de interacción UI, sin cambios funcionales -- eso es P3.1b. ADR 0030.
-- Próximo paso: **P3.1b — tests de interacción UI/API mock**, alcance ya aprobado por el usuario (ver sección P3.1 del roadmap abajo).
+- `P3.1b` — **CERRADO (6 de agosto de 2026).** 16 tests de interacción real (`@testing-library/react` + `user-event` + `jsdom`) contra `Home()`, API mockeada con match exacto y falla ruidosa ante ruta no registrada (`tests/support/fetch-mock.mjs`). Cubre crear/abrir/controlar un proyecto, retry/rework/escalate, aprobaciones, conectividad, y los campos de sólo lectura que P4.3/P4.4 van a necesitar (last_error, veredicto, evidencia de test report, decisiones, artifacts, métricas). Stack y decisiones durables (por qué `node:test`+`jsdom`+RTL y no otro runner, transpile a archivo temporal en vez de un loader, match exacto del mock) en ADR 0031; los tres problemas puntuales del arnés encontrados corriendo el mecanismo quedaron documentados como comentario junto al código que los resuelve en `tests/support/dom-setup.mjs`, no en el ADR. Sin refactor de `page.tsx`, sin cambios visuales/funcionales, sin response_model=.
+- Próximo paso: **P3.2 — migraciones versionadas y backup de SQLite** (P3.1 completo, a+b).
 
 > Regla de interpretación: una fase puede estar cerrada aunque su medición haya mostrado problemas. “Cerrar P1” significa que el baseline y las remediaciones previstas terminaron; no que el sistema haya alcanzado mágicamente cero errores.
 
@@ -227,10 +228,10 @@ Entregables:
 
 
 **P3.1a — CERRADO (6 de agosto de 2026).** Entregables 2 y 4 (contrato verificable backend/Pydantic ↔ TypeScript, gate que falla si divergen). Investigar antes de implementar mostró que 'generar TS desde OpenAPI' no alcanzaba: ninguna ruta declara `response_model=`, así que el `openapi.json` autogenerado no describe formas de respuesta reales hoy. El mecanismo final deriva todo de fuentes reales (`model_fields` de las clases de dominio, o una llamada real a través de `TestClient` para los endpoints compuestos como `/api/dashboard`) -- el registro (`contract_registry.py`) sólo selecciona qué comparar, nunca declara una forma a mano. Detalle completo, incluidas dos correcciones encontradas en revisión y en la corrida real, en `docs/decisions/0030-*`.
-**P3.1b — pendiente.** Entregables 1 y 3 (tests de interacción de UI contra API mock para los flujos críticos, test explícito de estados/campos que P4 vaya a consumir). Rama nueva, alcance ya conversado con el usuario pero no arrancado todavía.
+**P3.1b — CERRADO (6 de agosto de 2026).** Entregables 1 y 3 (tests de interacción de UI contra API mock, estados/campos que P4 va a consumir). 16 tests nuevos bajo `tests/`, `node --test "tests/**/*.test.mjs"` los descubre solo (una línea en `package.json`). Decisiones durables del stack de testing en `docs/decisions/0031-*`; el detalle de los problemas puntuales del arnés (por qué cada workaround) vive como comentario junto al código en `tests/support/dom-setup.mjs`, no en el ADR -- no era una decisión arquitectónica, era log de implementación.
 No hacer aquí una reescritura visual de `page.tsx` ni dividir `engine.py` por estética.
 
-Criterio de cierre de P3.1 completo (a+b): los flujos críticos quedan protegidos de una regresión de contrato y se puede refactorizar sin depender de inspección manual. P3.1a ya cumple su mitad del criterio para el contrato backend↔TS específicamente.
+Criterio de cierre de P3.1 completo (a+b) — cumplido: los flujos críticos quedan protegidos de una regresión de contrato y de interacción, y se puede refactorizar sin depender de inspección manual.
 
 ### P3.2 — migraciones versionadas y backup de SQLite
 
@@ -362,6 +363,7 @@ Sólo promover uno de estos puntos cuando una limitación observada del MVP lo j
 - Reescritura del historial de `main` por los commits duplicados antiguos: es ruido cosmético y no justifica reescribir historia compartida.
 - Resolución de conflictos de ownership de plan (`plan_owned_path_conflict_unresolved`) más allá de la compuerta de ejecución actual — encontrado en P3.0, no bloquea nada hoy porque la compuerta final ya evita la sobreescritura silenciosa.
 - `agentarium benchmark run` con stdout redirigido en Windows sin forzar UTF-8 (`PYTHONUTF8=1`) — encontrado en P3.0 (`_echo` en `cli.py` usa `·`/`→`); no corrompe el ledger pero corta una matriz de más de una corrida a mitad de camino.
+- Cerrar la brecha TypeScript↔fixture-de-test en `tests/support/fixtures.mjs` (duplicado a mano de los tipos de `page.tsx`, puede desalinearse en silencio) — encontrado en P3.1b, aceptado a propósito por ahora (ver ADR 0031).
 
 ---
 
@@ -371,9 +373,9 @@ Sólo promover uno de estos puntos cuando una limitación observada del MVP lo j
 
 Corrida dirigida `library_api_sqlite × qwen2.5-coder:7b × 1` ejecutada y documentada en `benchmarks/results/p3.0-confirmation-2026-08/`. Sin feature PR, como estaba previsto.
 
-### 2. P3.1a — CERRADO (6 de agosto de 2026), P3.1b — siguiente
+### 2. P3.1 — CERRADO (a+b, 6 de agosto de 2026)
 
-P3.1a (contrato backend↔TypeScript + gate de drift) entregado, ver `docs/decisions/0030-*`. P3.1b (tests de interacción API/UI contra mock) es el cinturón de seguridad que falta antes del refactor y P4.
+Contrato backend↔TypeScript (ADR 0030) + tests de interacción UI/API mock (ADR 0031) entregados. Cinturón de seguridad para el refactor y P4 completo.
 
 ### 3. P3.2
 
@@ -387,7 +389,7 @@ Después: P3.3 modularización selectiva → P3.4 gate de autoridad → P4 repos
 
 Usar este texto literalmente como punto de partida:
 
-> Lee `CLAUDE.md`/las instrucciones del repo y `PLANS.md` completos. Verifica que estás sobre `main` actualizado y limpio. No reabras P0, P1, P2 ni P3.1a salvo una regresión demostrable. Empieza por **P3.1b** (tests de interacción UI/API mock) -- el alcance ya fue aprobado por el usuario en la sesión de P3.1a; si necesitás reconfirmarlo, hacélo antes de escribir código.
+> Lee `CLAUDE.md`/las instrucciones del repo y `PLANS.md` completos. Verifica que estás sobre `main` actualizado y limpio. No reabras P0, P1, P2 ni P3.1 (a+b) salvo una regresión demostrable. Empieza por **P3.2** — migraciones versionadas y backup de SQLite -- ver la sección P3.2 del roadmap para el alcance ya definido.
 
 ---
 
@@ -401,6 +403,7 @@ Usar este texto literalmente como punto de partida:
 - `docs/decisions/0028-*` — manifiesto de capacidades del runtime.
 - `docs/decisions/0029-*` — preflight de imports.
 - `docs/decisions/0030-*` — gate de drift backend/Pydantic ↔ TypeScript (P3.1a).
+- `docs/decisions/0031-*` — arnés de tests de interacción UI↔API mock (P3.1b).
 - `benchmarks/results/p1-baseline-2026-08/` — baseline, ambiente y adjudicación manual.
 - `benchmarks/results/p3.0-confirmation-2026-08/` — confirmación dirigida de P2 con modelo real, ambiente y hallazgos.
 
