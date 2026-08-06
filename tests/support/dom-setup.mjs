@@ -19,6 +19,15 @@ process.env.NEXT_PUBLIC_AGENTARIUM_API_URL = API_SENTINEL;
 // A stub, not a real EventSource -- neither Node nor jsdom provide one
 // (verified against jsdom's own source tree and this Node's own globals
 // while planning this).
+//
+// Note for whoever writes the first test that drives this: app/page.tsx's
+// SSE effect has `events` in its dependency array, so every incoming
+// message tears down and reconstructs the EventSource with a recomputed
+// `after_sequence`, rather than reusing one connection. Not a bug --
+// the dedup guard plus the recomputed `after_sequence` mean no message
+// is lost or double-applied -- but it does mean a test simulating two
+// sequential messages must call `StubEventSource.latest()` again between
+// them rather than holding onto the first instance.
 class StubEventSource {
   static instances = [];
 
