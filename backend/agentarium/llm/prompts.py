@@ -17,7 +17,7 @@ from agentarium.planning import BriefProposal, DecomposeProposal, PlanProposal
 from .base import ModelRequest
 
 PLANNING_PROMPT_VERSION = "planning-v4"
-WORKSPACE_PROMPT_VERSION = "workspace-v10"
+WORKSPACE_PROMPT_VERSION = "workspace-v11"
 DECOMPOSE_PROMPT_VERSION = "decompose-v3"
 PLAN_REVISION_PROMPT_VERSION = "plan-revision-v3"
 
@@ -154,7 +154,11 @@ _OPERATION_INSTRUCTIONS = {
         "pandas ni nada fuera de third_party_packages_allowed. Si el objetivo "
         "pide explícitamente una librería de terceros como parte de la entrega, "
         "decláralo como limitación en vez de producir un script que no puede "
-        "ejecutarse."
+        "ejecutarse. Un preflight estático rechaza estos imports antes de "
+        "llegar a tester/revisor (no es sólo una instrucción de prosa). Si "
+        "SOLICITUD.payload.retry_guidance.cumulative_rejected_imports no está "
+        "vacío, esos módulos ya fueron rechazados en un intento previo de "
+        "esta misma tarea: no los repitas, ni con otro alias."
     ),
     "test": (
         "Valida únicamente evidencia técnica: file_verified, checksums, aislamiento y "

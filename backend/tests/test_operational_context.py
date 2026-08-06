@@ -26,11 +26,13 @@ class ContextRepository:
         reviews: list[Review],
         work_items: list[WorkItem],
         reports: list[ReportModel] | None = None,
+        events: list[dict[str, Any]] | None = None,
     ) -> None:
         self.artifacts = artifacts
         self.reviews = reviews
         self.work_items = {item.id: item for item in work_items}
         self.reports = reports or []
+        self.events = events or []
 
     def list_artifacts(self, _project_id: str) -> list[Artifact]:
         return self.artifacts
@@ -43,6 +45,13 @@ class ContextRepository:
 
     def list_test_reports(self, _project_id: str) -> list[ReportModel]:
         return self.reports
+
+    def list_events_for_work_item(
+        self, _project_id: str, work_item_id: str, *, limit: int = 250
+    ) -> list[dict[str, Any]]:
+        return [
+            event for event in self.events if event.get("work_item_id") == work_item_id
+        ][:limit]
 
 
 def test_operational_context_uses_only_approved_dependencies_and_retry_feedback(
@@ -330,3 +339,80 @@ def test_operational_context_carries_the_runtime_capability_manifest(
     context = builder.operational(item)
 
     assert context["runtime_capabilities"] == capabilities.model_dump(mode="json")
+
+
+def test_operational_context_surfaces_cumulative_rejected_imports_from_prior_events(
+    monkeypatch: Any,
+) -> None:
+    repository = ContextRepository(
+        [],
+        [],
+        [],
+        events=[
+            {
+                "work_item_id": "current",
+                "action": "unsupported_capability_detected",
+                "metadata": {"rejected_imports": ["flask"]},
+            }
+        ],
+    )
+    builder = ContextBuilder(cast(Repository, repository), _capabilities())
+    monkeypatch.setattr(builder, "project", lambda _project_id: {"brief": {}})
+    item = WorkItem(
+        id="current",
+        project_id="project",
+        milestone_id="milestone",
+        title="Crear API",
+        description="Implementar lógica",
+        expected_outputs=["Código"],
+        acceptance_criteria=["Funciona"],
+    )
+
+    context = builder.operational(item)
+
+    assert context["retry_guidance"]["cumulative_rejected_imports"] == ["flask"]
+
+
+def test_operational_context_dedupes_rejected_imports_across_attempts(
+    monkeypatch: Any,
+) -> None:
+    repository = ContextRepository(
+        [],
+        [],
+        [],
+        events=[
+            {
+                "work_item_id": "current",
+                "action": "unsupported_capability_detected",
+                "metadata": {"rejected_imports": ["flask"]},
+            },
+            {
+                "work_item_id": "current",
+                "action": "unsupported_capability_detected",
+                "metadata": {"rejected_imports": ["flask", "requests"]},
+            },
+            {
+                "work_item_id": "other",
+                "action": "unsupported_capability_detected",
+                "metadata": {"rejected_imports": ["pandas"]},
+            },
+        ],
+    )
+    builder = ContextBuilder(cast(Repository, repository), _capabilities())
+    monkeypatch.setattr(builder, "project", lambda _project_id: {"brief": {}})
+    item = WorkItem(
+        id="current",
+        project_id="project",
+        milestone_id="milestone",
+        title="Crear API",
+        description="Implementar lógica",
+        expected_outputs=["Código"],
+        acceptance_criteria=["Funciona"],
+    )
+
+    context = builder.operational(item)
+
+    assert context["retry_guidance"]["cumulative_rejected_imports"] == [
+        "flask",
+        "requests",
+    ]

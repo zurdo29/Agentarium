@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import asyncio
 import sys
 import unicodedata
@@ -9,15 +10,21 @@ from pathlib import Path
 
 from agentarium.domain.models import ScriptExecutionContract
 
+from .capabilities import RuntimeCapabilityManifest
 from .safe_commands import CommandRejected, CommandResult, SafeCommandExecutor
 from .workspace import WorkspaceFileEvidence
 
-VALIDATION_CONTRACT_VERSION = "profiles-v6"
+# P2.2 (ADR 0029): bumped when IMPORT_PREFLIGHT was activated, following the
+# ADR 0016 precedent — activating a new validation profile bumps this
+# constant so retries already in flight don't inherit a failure produced by
+# semantics that didn't exist when they started.
+VALIDATION_CONTRACT_VERSION = "profiles-v7"
 
 
 class ValidationProfile(StrEnum):
     WORKSPACE_INVENTORY = "workspace_inventory"
     PYTHON_SYNTAX = "python_syntax"
+    IMPORT_PREFLIGHT = "import_preflight"
     JSON_SYNTAX = "json_syntax"
     JAVASCRIPT_SYNTAX = "javascript_syntax"
     WEB_APPLICATION = "web_application"
@@ -66,9 +73,16 @@ class ValidationProfileExecutor:
         "compile(Path(path).read_text(encoding='utf-8'),path,'exec')"
     )
 
-    def __init__(self, workspace_root: Path, policy_path: Path) -> None:
+    def __init__(
+        self,
+        workspace_root: Path,
+        policy_path: Path,
+        *,
+        capabilities: RuntimeCapabilityManifest | None = None,
+    ) -> None:
         self.workspace_root = workspace_root.resolve()
         self.executor = SafeCommandExecutor(self.workspace_root, policy_path)
+        self.capabilities = capabilities
 
     async def validate(
         self,
@@ -185,16 +199,33 @@ class ValidationProfileExecutor:
             for profile, command_targets, command in commands
         ]
 
+        script_targets = [
+            target for target in targets if target.suffix.casefold() == ".py"
+        ]
+        import_preflight_result: ValidationProfileResult | None = None
+        if script_targets:
+            third_party_allowed = (
+                frozenset(self.capabilities.third_party_packages_allowed)
+                if self.capabilities is not None
+                else frozenset()
+            )
+            import_preflight_result = self._check_import_preflight(
+                script_targets, project_root, third_party_allowed
+            )
+            results.append(import_preflight_result)
+
         script_execution_requested = (
             self._script_execution_requested(
                 [*(acceptance_criteria or []), *(expected_outputs or [])]
             )
             or execution_contract is not None
         )
-        script_targets = [
-            target for target in targets if target.suffix.casefold() == ".py"
-        ]
-        if script_execution_requested and execution_contract is not None:
+        if import_preflight_result is not None and not import_preflight_result.passed:
+            # La capacidad ya se sabe no soportada: correr SCRIPT_EXECUTION
+            # de verdad sólo repetiría el mismo fallo unos milisegundos más
+            # tarde, vía un ModuleNotFoundError real en vez de uno anticipado.
+            pass
+        elif script_execution_requested and execution_contract is not None:
             results.extend(
                 await self._run_declared_contract(
                     execution_contract, script_targets, project_root
@@ -466,6 +497,140 @@ class ValidationProfileExecutor:
         ):
             flags.append("--win-restart")
         return flags
+
+    @staticmethod
+    def _check_import_preflight(
+        python_targets: list[Path],
+        project_root: Path,
+        third_party_allowed: frozenset[str],
+    ) -> ValidationProfileResult:
+        """Static, in-process capability check (P2.2, ADR 0029) — no
+        subprocess. Walks the *entire* AST (`ast.walk`, not just top-level
+        statements): an import behind a function body or a
+        `try/except ImportError` fallback guard is still an import, and a
+        policy that only catches the top-level case would repeat the exact
+        failure ADR 0020 already documented (prose-only guidance changes
+        nothing) — just hidden behind a guard instead of ignored outright.
+        """
+        rejected: dict[str, list[str]] = {}
+        for target in python_targets:
+            try:
+                source = (project_root / target).read_text(encoding="utf-8")
+                tree = ast.parse(source, filename=target.as_posix())
+            except (OSError, UnicodeDecodeError, SyntaxError):
+                # PYTHON_SYNTAX already owns reporting an unreadable or
+                # syntactically invalid file; this profile must not
+                # duplicate that, and must never let the exception escape
+                # and take the whole validate() call down with it.
+                continue
+            target_dir = project_root / target.parent
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Import):
+                    roots = [alias.name.split(".", 1)[0] for alias in node.names]
+                elif isinstance(node, ast.ImportFrom):
+                    if node.level > 0 or node.module is None:
+                        continue  # relative import: part of this same delivery
+                    roots = [node.module.split(".", 1)[0]]
+                else:
+                    continue
+                for root in roots:
+                    if (
+                        root in sys.stdlib_module_names
+                        or root in third_party_allowed
+                        or ValidationProfileExecutor._resolves_as_sibling(
+                            target_dir, project_root, root
+                        )
+                    ):
+                        continue
+                    rejected.setdefault(root, [])
+                    posix_target = target.as_posix()
+                    if posix_target not in rejected[root]:
+                        rejected[root].append(posix_target)
+
+        if not rejected:
+            return ValidationProfileResult(
+                profile=ValidationProfile.IMPORT_PREFLIGHT,
+                targets=(),
+                result=CommandResult(
+                    command=[],
+                    cwd=str(project_root),
+                    stdout="",
+                    stderr="",
+                    return_code=0,
+                    timed_out=False,
+                ),
+            )
+
+        lines = [
+            "Import no permitido: los siguientes modulos no forman parte de "
+            "la biblioteca estandar ni de "
+            "runtime_capabilities.third_party_packages_allowed. Elegi una "
+            "alternativa de la biblioteca estandar o declaralo como "
+            "limitacion conocida de la tarea.",
+        ]
+        for module in sorted(rejected):
+            files = ", ".join(sorted(rejected[module]))
+            lines.append(f"- {module} (usado en {files})")
+
+        return ValidationProfileResult(
+            profile=ValidationProfile.IMPORT_PREFLIGHT,
+            targets=tuple(sorted(rejected)),
+            result=CommandResult(
+                command=[],
+                cwd=str(project_root),
+                stdout="",
+                stderr="\n".join(lines),
+                return_code=1,
+                timed_out=False,
+            ),
+        )
+
+    @staticmethod
+    def _resolves_as_sibling(directory: Path, project_root: Path, root: str) -> bool:
+        """Whether `root` is importable as a local module or package
+        reachable from `directory` — location-aware on purpose, not a flat
+        "does this name exist anywhere in the delivery" bag (that
+        earlier version had two failure modes: it rejected
+        `from library import models` when `library/` sat next to the
+        importing file, because only file *stems* were collected, never
+        directory/package names; and it silently allowed `import flask`
+        whenever *any* unrelated file elsewhere in the tree happened to be
+        named `flask.py`, even though that file is not on the path Python
+        would actually search from here — exactly the late
+        `ModuleNotFoundError` this profile exists to catch early).
+
+        Walks up from `directory` through every ancestor up to (and never
+        past) `project_root` — checking `directory` alone missed a very
+        common layout: a module referring to its own containing package by
+        top-level name (`library/api.py` doing `from library import
+        models`) is not a sibling of `api.py`'s own directory (`library/`)
+        — `library` sits one level *up*, at `project_root`. Once Python
+        resolves an absolute import it always searches from `sys.path`,
+        fixed once at process start by whichever file was actually invoked
+        as the entrypoint, never from the directory of whichever file's
+        source happens to contain the `import` statement — a submodule
+        several directories deep can import a package sitting anywhere
+        between its own directory and wherever the process was launched
+        from. This profile cannot know in advance which file will be the
+        entrypoint, so every level from the importing file up to
+        `project_root` counts as a plausible answer — erring toward
+        not-false-positiving, same principle as the exemption below,
+        extended one dimension. Never climbs past `project_root`: an
+        unrelated `otro/flask.py` sitting outside the importing file's own
+        ancestor chain must still not excuse `import flask` in
+        `app/main.py` — that is the second, distinct bug this method
+        already fixes, and widening the search must not reopen it.
+        """
+        current = directory
+        while True:
+            if (current / f"{root}.py").is_file():
+                return True
+            package_dir = current / root
+            if package_dir.is_dir() and any(package_dir.rglob("*.py")):
+                return True
+            if current == project_root:
+                return False
+            current = current.parent
 
     async def _execute(
         self,

@@ -231,6 +231,10 @@ def _item(status: WorkItemStatus, error: str | None = None) -> WorkItem:
             FailureCategory.PATH_CONFLICT,
         ),
         ("ModuleNotFoundError: No module named 'flask'", FailureCategory.UNSUPPORTED_CAPABILITY),
+        (
+            "Import no permitido detectado antes de tester/revisor: flask",
+            FailureCategory.UNSUPPORTED_CAPABILITY,
+        ),
         ("Workspace file could not be written: api.py", FailureCategory.INFRASTRUCTURE),
         ("Invalid workspace artifact: 1 validation error", FailureCategory.TECHNICAL_VALIDATION),
     ],
