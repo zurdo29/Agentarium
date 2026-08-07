@@ -42,8 +42,9 @@ test("server-renders the Agentarium command center", async () => {
 });
 
 test("removes all temporary starter UI markers", async () => {
-  const [page, layout, packageJson] = await Promise.all([
+  const [page, taskDrawer, layout, packageJson] = await Promise.all([
     readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/task-drawer.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/layout.tsx", import.meta.url), "utf8"),
     readFile(new URL("../package.json", import.meta.url), "utf8"),
   ]);
@@ -58,7 +59,9 @@ test("removes all temporary starter UI markers", async () => {
   assert.match(page, /Workspace materializado correctamente/);
   assert.match(page, /Comandos desactivados/);
   assert.match(page, /Perfiles controlados/);
-  assert.match(page, /perfiles registrados/);
   assert.match(page, /Worktrees activos/);
-  assert.match(page, /worktree verificado/);
+  // These two moved to task-drawer.tsx in P3.3 (TaskDrawer extraction) --
+  // still checked, just against their real file now.
+  assert.match(taskDrawer, /perfiles registrados/);
+  assert.match(taskDrawer, /worktree verificado/);
 });

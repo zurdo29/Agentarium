@@ -3,11 +3,10 @@
 // Workers build pipeline. Nothing here is imported by, or changes,
 // production code -- see docs/decisions/ for why (P3.1b plan).
 
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { join } from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
+import react from "@vitejs/plugin-react";
 import { JSDOM } from "jsdom";
-import ts from "typescript";
+import { createServer } from "vite";
 
 // Fixed on purpose, before anything imports page.tsx: `API` in page.tsx
 // reads `process.env.NEXT_PUBLIC_AGENTARIUM_API_URL` at module-eval time.
@@ -122,60 +121,50 @@ export function resetEventSource() {
 
 let homeComponentPromise = null;
 
-// Transpiles app/page.tsx with the same `typescript` package already
-// used by scripts/check-api-contract.mjs (P3.1a) -- no new dependency
-// for this step. Writes the plain-JS output to a unique file and imports
-// it from there, rather than a --experimental-loader hook: a loader
-// intercepts module resolution for the whole process (react, jsdom,
-// typescript, node:test itself), while a one-off transpile only touches
-// this one file. Memoized: page.tsx has no per-import side effects worth
-// re-running, and every test file wants the same compiled component.
+// A real Vite dev server in middleware mode, used only for its module
+// loader -- nothing here ever listens on a port (`ws: false` on top of
+// `hmr: false`: found by actually running this that `hmr: false` alone
+// still tried to open a WebSocket server, which broke down to a port
+// conflict warning when multiple `node --test` child processes -- one per
+// test file -- each started their own server; `ws: false` is the option
+// that actually suppresses it). `ssrLoadModule` resolves page.tsx's whole
+// relative-import graph itself (P3.3's task-drawer.tsx, and whatever P4
+// adds later) the same way Vite would for a real request, so this file
+// never needs to know the shape of that graph. Deliberately
+// `configFile: false`: the project's real vite.config.ts pulls in
+// vinext/@cloudflare/vite-plugin and Workers-deployment bindings (D1/R2)
+// that a test loading one React component for jsdom has no use for and
+// no reason to risk breaking on -- see docs/decisions/ (P3.3 plan) for
+// why that config was ruled out rather than reused.
 //
-// The temp file lives under node_modules/.cache/, not os.tmpdir():
-// found by actually running this that Node's ESM resolver walks *up*
-// from the importing file looking for node_modules, and a real
-// os.tmpdir() path (e.g. C:\Users\...\AppData\Local\Temp\...) has no
-// node_modules anywhere above it, so the transpiled file's own
-// `import "react"` failed with ERR_MODULE_NOT_FOUND. node_modules/ is
-// already fully gitignored (`/node_modules` in .gitignore), so
-// node_modules/.cache/ needs no new ignore rule -- same convention other
-// tools (babel, eslint, ...) already use for exactly this kind of
-// scratch output.
+// Memoized like the loaded component below: page.tsx has no per-import
+// side effects worth re-running, and every test in a file wants the same
+// compiled component. The server is closed as soon as it has produced
+// that one module -- found by actually running this that leaving it open
+// (even with `ws: false`) keeps a handle alive that stops `node --test`
+// from exiting once all tests finish; nothing about the already-evaluated
+// component depends on the server staying up afterwards.
 export async function loadHomeComponent() {
   homeComponentPromise ??= (async () => {
-    const projectRoot = new URL("../../", import.meta.url);
-    const sourcePath = new URL("app/page.tsx", projectRoot);
-    const sourceText = await readFile(sourcePath, "utf8");
-
-    const { outputText, diagnostics } = ts.transpileModule(sourceText, {
-      fileName: "page.tsx",
-      compilerOptions: {
-        jsx: ts.JsxEmit.ReactJSX,
-        module: ts.ModuleKind.ESNext,
-        target: ts.ScriptTarget.ES2022,
-        esModuleInterop: true,
-      },
-      reportDiagnostics: true,
+    const server = await createServer({
+      configFile: false,
+      root: fileURLToPath(new URL("../../", import.meta.url)),
+      plugins: [react()],
+      server: { middlewareMode: true, hmr: false, ws: false },
+      appType: "custom",
+      logLevel: "warn",
+      // Dependency pre-bundling exists to serve a browser efficiently; an
+      // SSR module load in Node mostly doesn't need it. `noDiscovery`
+      // skips scanning the whole source tree for importable deps (the
+      // expensive part on a project this size), telling Vite exactly what
+      // page.tsx's graph actually imports from node_modules instead.
+      optimizeDeps: { noDiscovery: true, include: ["react", "react-dom"] },
     });
-    if (diagnostics && diagnostics.length > 0) {
-      const formatted = ts.formatDiagnosticsWithColorAndContext(diagnostics, {
-        getCanonicalFileName: (fileName) => fileName,
-        getCurrentDirectory: () => process.cwd(),
-        getNewLine: () => "\n",
-      });
-      throw new Error(`Failed to transpile app/page.tsx for tests:\n${formatted}`);
-    }
-
-    const cacheRoot = join(fileURLToPath(projectRoot), "node_modules", ".cache", "agentarium-tests");
-    await mkdir(cacheRoot, { recursive: true });
-    const tempDir = await mkdtemp(join(cacheRoot, "page-"));
-    const tempPath = join(tempDir, `home-${process.pid}-${Date.now()}.mjs`);
-    await writeFile(tempPath, outputText, "utf8");
     try {
-      const moduleExports = await import(pathToFileURL(tempPath).href);
+      const moduleExports = await server.ssrLoadModule("/app/page.tsx");
       return moduleExports.default;
     } finally {
-      await rm(tempDir, { recursive: true, force: true });
+      await server.close();
     }
   })();
   return homeComponentPromise;
