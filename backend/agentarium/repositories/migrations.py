@@ -1,6 +1,7 @@
-"""Versioned schema evolution for `work_items`, the only table this codebase
-has ever altered after creation (see git history on tables.py: b966286,
-d5588c4, 28bc225 -- all ADD COLUMN, never a rename/drop).
+"""Versioned schema evolution for SQLite tables altered after creation (see
+git history on tables.py: b966286, d5588c4, 28bc225 -- all ADD COLUMN,
+never a rename/drop). Every step targets exactly one table (`work_items`
+for steps 1-6, `projects` starting with step 7, P3.4/ADR 0034).
 
 Pure schema logic: every function here takes a raw `sqlite3.Connection`,
 never a SQLAlchemy engine/session. `backup.py` owns the file/lock/backup
@@ -28,9 +29,13 @@ class MigrationStep:
     # guarantee, not just "the column exists". None for steps with no
     # backfill, where column presence alone is the whole contract.
     postcondition: str | None = None
+    # Always one of this module's own literals ("work_items", "projects"),
+    # never user input -- same invariant write_user_version already relies
+    # on for its own f-string interpolation below.
+    table: str = "work_items"
 
     def satisfied(self, connection: sqlite3.Connection) -> bool:
-        if self.column not in _work_item_columns(connection):
+        if self.column not in _table_columns(connection, self.table):
             return False
         if self.postcondition is None:
             return True
@@ -51,9 +56,9 @@ class MigrationStep:
         # the postcondition, not via column absence) must skip straight to
         # the backfill -- ALTER TABLE ADD COLUMN on an existing column is a
         # hard error, not a no-op.
-        if self.column not in _work_item_columns(connection):
+        if self.column not in _table_columns(connection, self.table):
             connection.execute(
-                f"ALTER TABLE work_items ADD COLUMN {self.column} {self.definition}"
+                f"ALTER TABLE {self.table} ADD COLUMN {self.column} {self.definition}"
             )
         for statement in self.backfill:
             connection.execute(statement)
@@ -107,13 +112,19 @@ STEPS: tuple[MigrationStep, ...] = (
     # predates this column (see ADR 0027 -- nothing constructed a work item
     # with a contract before it existed).
     MigrationStep(6, "execution_contract_json", "JSON"),
+    # First step to target a table other than work_items -- see the module
+    # docstring. `0 = False` is already correct for every row that predates
+    # this column: nothing before P4.1 (not built) can produce a project
+    # whose workspace came from an imported repository (P3.4/ADR 0034), so
+    # every legacy row backfills to "not imported" with no backfill needed.
+    MigrationStep(7, "imported", "BOOLEAN NOT NULL DEFAULT 0", table="projects"),
 )
 
 CURRENT_SCHEMA_VERSION = STEPS[-1].version
 
 
-def _work_item_columns(connection: sqlite3.Connection) -> set[str]:
-    return {row[1] for row in connection.execute("PRAGMA table_info(work_items)")}
+def _table_columns(connection: sqlite3.Connection, table: str) -> set[str]:
+    return {row[1] for row in connection.execute(f"PRAGMA table_info({table})")}
 
 
 def read_user_version(connection: sqlite3.Connection) -> int:

@@ -2,7 +2,7 @@
 
 Este documento es la guía operativa del proyecto: qué garantías ya existen, qué sigue abierto y en qué orden conviene trabajar. No es una bitácora detallada. La evidencia histórica y las decisiones de diseño viven en `docs/decisions/` y en `benchmarks/results/`.
 
-## Estado al 6 de agosto de 2026
+## Estado al 7 de agosto de 2026
 
 - `P0` — **CERRADO**. Rutas efectivas, ownership, colisiones, partición de criterios y profundidad de división quedaron mecanizadas.
 - `P1` — **CERRADO como fase de medición y remediación**. La matriz baseline se completó y sus causas principales fueron instrumentadas/corregidas. Esto **no** significa que el objetivo de calidad de cero falsos `completed` se haya demostrado todavía.
@@ -14,7 +14,8 @@ Este documento es la guía operativa del proyecto: qué garantías ya existen, q
 - `P3.1b` — **CERRADO (6 de agosto de 2026).** 16 tests de interacción real (`@testing-library/react` + `user-event` + `jsdom`) contra `Home()`, API mockeada con match exacto y falla ruidosa ante ruta no registrada (`tests/support/fetch-mock.mjs`). Cubre crear/abrir/controlar un proyecto, retry/rework/escalate, aprobaciones, conectividad, y los campos de sólo lectura que P4.3/P4.4 van a necesitar (last_error, veredicto, evidencia de test report, decisiones, artifacts, métricas). Stack y decisiones durables (por qué `node:test`+`jsdom`+RTL y no otro runner, transpile a archivo temporal en vez de un loader, match exacto del mock) en ADR 0031; los tres problemas puntuales del arnés encontrados corriendo el mecanismo quedaron documentados como comentario junto al código que los resuelve en `tests/support/dom-setup.mjs`, no en el ADR. Sin refactor de `page.tsx`, sin cambios visuales/funcionales, sin response_model=.
 - `P3.2` — **CERRADO (6 de agosto de 2026).** Migraciones versionadas (`PRAGMA user_version` + lista de pasos, sin Alembic) y backup validado antes de migrar, derivados del path real de cada base SQLite -- nunca de una carpeta global, porque esta app ya corre varias bases reales en paralelo (default, por suite de benchmark, por test). `agentarium db restore <backup>` reemplaza "copiar el archivo encima": adquiere el mismo lock que el arranque, valida el backup antes de tocar nada, preserva la base reemplazada como `.failed-<timestamp>`, limpia `-wal`/`-shm` viejos y revalida al final. Corrección encontrada antes de implementar nada (no en producción): `user_version == 0` es legacy/ambiguo, nunca un prefijo confiable de pasos ya aplicados -- confirmado necesario por un test ya existente en `main` que agrega una columna fuera de orden a propósito; el mecanismo revisa cada paso contra el schema real en vez de confiar en el número. `test_schema_migration.py` sigue verde sin cambiar ninguna aserción (se le sumó una prueba con las 11 tablas en su forma original de `fd83772`); `test_migration_backup.py` nuevo cubre disparo condicional del backup, backup/restore inválido, aislamiento entre bases, regresión concurrente y sabotaje controlado a mitad de migración. ADR 0032; runbook en `docs/guides/database-migrations-windows.md`.
 - `P3.3` — **CERRADO (7 de agosto de 2026).** Backend (`orchestration/engine.py`) **sin extracción** — sólo 4 métodos del `Orchestrator` se llaman desde fuera del archivo, y P4.1/P4.2/P4.4 no lo tocan; P4.3 ("recuperar artefacto"/"enviar candidato") ya llega vía `ApplicationService`, una frontera limpia y suficiente sin reorganizar el orchestrator interno -- resultado documentado, no un refactor pospuesto. Frontend: se extrajo `TaskDrawer` (`app/task-drawer.tsx`) con atadura escrita en el propio comentario de cabecera de `tests/home-work-items.test.mjs` (P3.1b), en diseño acíclico (`app/shared.tsx` como hoja pura para `ROLE_LABELS`/`dateLabel`/`Status`, evitando un ciclo runtime `page.tsx` ↔ `task-drawer.tsx`). El mecanismo de test (`tests/support/dom-setup.mjs`) pasó de transpilar un único archivo hardcodeado a un servidor Vite real (`createServer` + `ssrLoadModule`, ya devDependencies) que resuelve cualquier import relativo nuevo sin tocar el harness de nuevo. `contract_registry.py`/`test_type_contract.py` sin tocar (salida de `check-api-contract.mjs` idéntica antes/después); los 16 tests de interacción UI + SSR sin cambiar ninguna aserción salvo la que debía apuntar al archivo nuevo. `.\test.ps1` completo en verde (396 backend + 18 web). ADR 0033.
-- Próximo paso: **P3.4 — gate de autoridad/seguridad antes de repositorios reales** (P3.1, P3.2 y P3.3 completos).
+- `P3.4` — **CERRADO (7 de agosto de 2026).** `Project.imported: bool` (default `False`, persistido vía una nueva `MigrationStep` sobre `projects`) declara si un proyecto viene de un repositorio importado. La frontera es por perfil de validación, no por proyecto entero: `ValidationProfileExecutor` declara explícitamente qué perfiles no ejecutan el contenido entregado (`NON_EXECUTING_PROFILES`) y bloquea fail-closed cualquier otro cuando `allow_project_code_execution` es falso -- un `Artifact` se materializa y conserva siempre, pero el código nunca corre; una tarea que sólo necesita validación estática no se rechaza por estar en un proyecto importado. `Orchestrator._evaluate_candidate` pasa esa autoridad a `validate()` desde el único punto donde convergen los 3 caminos reales de ejecución (worker autónomo, recuperar artefacto, candidato de operador) y, ante un bloqueo, termina la tarea en `FAILED` directo -- sin tester/revisor, sin retry ni split. `P4.1` (importar un repo) todavía no existe, así que nada hoy puede producir `imported=True` fuera de un test que lo construye directamente. `.\test.ps1` completo en verde. ADR 0034.
+- Próximo paso: **P4 — convertir Agentarium en una herramienta útil sobre repositorios reales**, empezando por P4.1 (P3 completo).
 
 > Regla de interpretación: una fase puede estar cerrada aunque su medición haya mostrado problemas. “Cerrar P1” significa que el baseline y las remediaciones previstas terminaron; no que el sistema haya alcanzado mágicamente cero errores.
 
@@ -104,6 +105,7 @@ Estos puntos no deben maquillarse como resueltos:
 4. **qwen3:8b sigue sin calibración real después de la instrumentación.** Ya podemos separar cola de generación, pero todavía no hay evidencia suficiente para cambiar su timeout.
 5. **`engine.py` y `app/page.tsx` son grandes.** Es deuda de mantenibilidad, no una emergencia que justifique una reescritura antes de tener tests de contrato suficientes.
 6. **El producto sigue orientado principalmente a greenfield.** El salto de valor real será trabajar con un repositorio existente sin arriesgar el original.
+7. **El gate de P3.4 niega ejecución, no es un sandbox de SO.** Un proyecto importado no puede ejecutar código a través de Agentarium, pero los perfiles de validación que sí corren (inventario, sintaxis) siguen sin aislamiento de sistema operativo, y lo mismo vale para `SCRIPT_EXECUTION` en un proyecto no importado -- esta fase niega la ejecución para proyectos importados, no resuelve el aislamiento real que P3.4 dejó fuera de alcance a propósito.
 
 ---
 
@@ -307,6 +309,22 @@ Criterio de cierre: importar un repositorio no da al código generado autoridad 
 
 Los cambios que amplíen autoridad requieren decisión explícita del usuario.
 
+**Resultado (7 de agosto de 2026): CERRADO.** De las 3 opciones que este
+punto acepta, se eligió deshabilitar ejecución de scripts para proyectos
+importados hasta que exista aislamiento real -- no aprobación explícita
+ni aislamiento de proceso como frontera principal para esta fase.
+`Project.imported: bool` (persistido) es el hecho de dominio; la frontera
+vive dentro de `ValidationProfileExecutor`, fail-closed por identidad de
+perfil (`NON_EXECUTING_PROFILES` declara qué perfiles no ejecutan
+contenido entregado, cualquier otro queda bloqueado cuando la ejecución
+está deshabilitada) en vez de por heurística de texto/AST. El `Artifact`
+de cada intento se conserva siempre; una tarea que sólo necesita
+validación estática no se ve afectada. `Orchestrator._evaluate_candidate`
+aplica la misma frontera a los 3 caminos reales de ejecución (worker
+autónomo, recuperar artefacto, candidato de operador) y termina en
+`FAILED` directo, sin tester/revisor ni reintento. Detalle completo en
+ADR 0034.
+
 ---
 
 ## P4 — convertir Agentarium en una herramienta útil sobre repositorios reales
@@ -418,7 +436,7 @@ Después: P3.3 modularización selectiva → P3.4 gate de autoridad → P4 repos
 
 Usar este texto literalmente como punto de partida:
 
-> Lee `CLAUDE.md`/las instrucciones del repo y `PLANS.md` completos. Verifica que estás sobre `main` actualizado y limpio. No reabras P0, P1, P2, P3.1 (a+b), P3.2 ni P3.3 salvo una regresión demostrable o un requisito concreto de P4 que lo justifique (ver el disparador de revisión en ADR 0033 para el caso de backend). Empieza por **P3.4** — gate de autoridad/seguridad antes de repositorios reales -- ver la sección P3.4 del roadmap para el alcance ya definido.
+> Lee `CLAUDE.md`/las instrucciones del repo y `PLANS.md` completos. Verifica que estás sobre `main` actualizado y limpio. No reabras P0, P1, P2, P3.1 (a+b), P3.2, P3.3 ni P3.4 salvo una regresión demostrable o un requisito concreto de P4 que lo justifique (ver el disparador de revisión en ADR 0033 para el caso de backend, y la condición futura en ADR 0034 para habilitar ejecución aislada). Empieza por **P4.1** — importar un proyecto existente sin poner en riesgo el original -- ver la sección P4.1 del roadmap para el alcance ya definido.
 
 ---
 
@@ -436,6 +454,7 @@ Usar este texto literalmente como punto de partida:
 - `docs/decisions/0032-*` — migraciones versionadas + backup/restore de SQLite (P3.2).
 - `docs/guides/database-migrations-windows.md` — runbook Windows de backup, upgrade y restore (P3.2).
 - `docs/decisions/0033-*` — modularización selectiva: sin extracción de backend (resultado documentado), extracción de `TaskDrawer` y mecanismo de test Vite-based (P3.3).
+- `docs/decisions/0034-*` — frontera de autoridad para proyectos importados: `Project.imported`, bloqueo fail-closed por perfil de validación dentro de `ValidationProfileExecutor` (P3.4).
 - `benchmarks/results/p1-baseline-2026-08/` — baseline, ambiente y adjudicación manual.
 - `benchmarks/results/p3.0-confirmation-2026-08/` — confirmación dirigida de P2 con modelo real, ambiente y hallazgos.
 

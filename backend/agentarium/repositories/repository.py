@@ -77,6 +77,7 @@ class Repository:
                     brief_json=None,
                     current_milestone_id=project.current_milestone_id,
                     progress_percent=project.progress_percent,
+                    imported=project.imported,
                     created_at=project.created_at,
                     updated_at=project.updated_at,
                 )
@@ -786,6 +787,7 @@ class Repository:
             brief=brief,
             current_milestone_id=row.current_milestone_id,
             progress_percent=row.progress_percent,
+            imported=row.imported,
             created_at=row.created_at,
             updated_at=row.updated_at,
         )
