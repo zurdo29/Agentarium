@@ -13,7 +13,8 @@ Este documento es la guía operativa del proyecto: qué garantías ya existen, q
 - `P3.1a` — **CERRADO (6 de agosto de 2026).** Gate de drift backend/Pydantic ↔ TypeScript: `scripts/check-api-contract.mjs` (AST puro) + `backend/tests/contract_types.py`/`contract_registry.py` (selección, cero formas hardcodeadas -- se derivan de `model_fields` o de una llamada real a la API viá `TestClient`). Corrida contra el código real encontró y corrigió dos cosas antes de mergear: un bug real del extractor TS (`null` como tipo se representaba mal) y una regla demasiado estricta (un campo TS ausente en Python sólo es fallo si no es `optional`). Sin `response_model=`, sin tests de interacción UI, sin cambios funcionales -- eso es P3.1b. ADR 0030.
 - `P3.1b` — **CERRADO (6 de agosto de 2026).** 16 tests de interacción real (`@testing-library/react` + `user-event` + `jsdom`) contra `Home()`, API mockeada con match exacto y falla ruidosa ante ruta no registrada (`tests/support/fetch-mock.mjs`). Cubre crear/abrir/controlar un proyecto, retry/rework/escalate, aprobaciones, conectividad, y los campos de sólo lectura que P4.3/P4.4 van a necesitar (last_error, veredicto, evidencia de test report, decisiones, artifacts, métricas). Stack y decisiones durables (por qué `node:test`+`jsdom`+RTL y no otro runner, transpile a archivo temporal en vez de un loader, match exacto del mock) en ADR 0031; los tres problemas puntuales del arnés encontrados corriendo el mecanismo quedaron documentados como comentario junto al código que los resuelve en `tests/support/dom-setup.mjs`, no en el ADR. Sin refactor de `page.tsx`, sin cambios visuales/funcionales, sin response_model=.
 - `P3.2` — **CERRADO (6 de agosto de 2026).** Migraciones versionadas (`PRAGMA user_version` + lista de pasos, sin Alembic) y backup validado antes de migrar, derivados del path real de cada base SQLite -- nunca de una carpeta global, porque esta app ya corre varias bases reales en paralelo (default, por suite de benchmark, por test). `agentarium db restore <backup>` reemplaza "copiar el archivo encima": adquiere el mismo lock que el arranque, valida el backup antes de tocar nada, preserva la base reemplazada como `.failed-<timestamp>`, limpia `-wal`/`-shm` viejos y revalida al final. Corrección encontrada antes de implementar nada (no en producción): `user_version == 0` es legacy/ambiguo, nunca un prefijo confiable de pasos ya aplicados -- confirmado necesario por un test ya existente en `main` que agrega una columna fuera de orden a propósito; el mecanismo revisa cada paso contra el schema real en vez de confiar en el número. `test_schema_migration.py` sigue verde sin cambiar ninguna aserción (se le sumó una prueba con las 11 tablas en su forma original de `fd83772`); `test_migration_backup.py` nuevo cubre disparo condicional del backup, backup/restore inválido, aislamiento entre bases, regresión concurrente y sabotaje controlado a mitad de migración. ADR 0032; runbook en `docs/guides/database-migrations-windows.md`.
-- Próximo paso: **P3.3 — modularización selectiva** (P3.1 y P3.2 completos).
+- `P3.3` — **CERRADO (7 de agosto de 2026).** Backend (`orchestration/engine.py`) **sin extracción** — sólo 4 métodos del `Orchestrator` se llaman desde fuera del archivo, y P4.1/P4.2/P4.4 no lo tocan; P4.3 ("recuperar artefacto"/"enviar candidato") ya llega vía `ApplicationService`, una frontera limpia y suficiente sin reorganizar el orchestrator interno -- resultado documentado, no un refactor pospuesto. Frontend: se extrajo `TaskDrawer` (`app/task-drawer.tsx`) con atadura escrita en el propio comentario de cabecera de `tests/home-work-items.test.mjs` (P3.1b), en diseño acíclico (`app/shared.tsx` como hoja pura para `ROLE_LABELS`/`dateLabel`/`Status`, evitando un ciclo runtime `page.tsx` ↔ `task-drawer.tsx`). El mecanismo de test (`tests/support/dom-setup.mjs`) pasó de transpilar un único archivo hardcodeado a un servidor Vite real (`createServer` + `ssrLoadModule`, ya devDependencies) que resuelve cualquier import relativo nuevo sin tocar el harness de nuevo. `contract_registry.py`/`test_type_contract.py` sin tocar (salida de `check-api-contract.mjs` idéntica antes/después); los 16 tests de interacción UI + SSR sin cambiar ninguna aserción salvo la que debía apuntar al archivo nuevo. `.\test.ps1` completo en verde (396 backend + 18 web). ADR 0033.
+- Próximo paso: **P3.4 — gate de autoridad/seguridad antes de repositorios reales** (P3.1, P3.2 y P3.3 completos).
 
 > Regla de interpretación: una fase puede estar cerrada aunque su medición haya mostrado problemas. “Cerrar P1” significa que el baseline y las remediaciones previstas terminaron; no que el sistema haya alcanzado mágicamente cero errores.
 
@@ -262,6 +263,32 @@ Orden:
 
 Criterio de cierre: P4 puede evolucionar sin seguir acumulando responsabilidades en los dos archivos gigantes. No existe una meta arbitraria de número de líneas.
 
+**Resultado (7 de agosto de 2026): CERRADO.** Backend investigado, **sin
+extracción**: de los 40+ métodos de `Orchestrator`, sólo 4 se llaman desde
+fuera de `engine.py` (todos desde `ApplicationService`), y cruzando cada
+sub-fase de P4 contra el código real, ninguna necesita reorganizar el
+orchestrator -- P4.3 ("recuperar artefacto"/"enviar candidato") ya accede
+a esa lógica a través de `ApplicationService.recover_artifact`/
+`submit_candidate`, frontera suficiente para lo que un centro de
+reparación necesita construir encima. Frontend: única extracción,
+`TaskDrawer` (`app/task-drawer.tsx`), con atadura escrita -- no inferida
+-- en el comentario de cabecera de `tests/home-work-items.test.mjs`.
+Diseño acíclico (`app/shared.tsx` como hoja pura para los 3 valores que
+`TaskDrawer` comparte con `page.tsx`, tipos vía `import type` sin mover
+nada de `contract_registry.py`). El mecanismo de carga de tests
+(`tests/support/dom-setup.mjs`) se generalizó de transpilar un único
+archivo a un servidor Vite real (`createServer`+`ssrLoadModule`, cero
+dependencias nuevas), que resuelve cualquier import relativo nuevo que P4
+agregue sin tocar el harness otra vez -- más lento que el transpile de un
+solo archivo que reemplaza, aceptado a propósito porque el punto era
+generalidad, no velocidad.
+`contract_registry.py`/`test_type_contract.py` intactos (verificado
+comparando la salida de `check-api-contract.mjs` antes/después, idéntica);
+los 16 tests de interacción UI + los 2 de `rendered-html.test.mjs` sin
+cambiar ninguna aserción salvo la que debía apuntar al archivo nuevo.
+`.\test.ps1` completo en verde (396 backend + 18 web). Detalle completo en
+ADR 0033.
+
 ### P3.4 — gate de autoridad/seguridad antes de repositorios reales
 
 **Objetivo:** decidir honestamente qué código generado puede ejecutarse cuando Agentarium trabaje sobre un repo que al usuario le importa.
@@ -391,7 +418,7 @@ Después: P3.3 modularización selectiva → P3.4 gate de autoridad → P4 repos
 
 Usar este texto literalmente como punto de partida:
 
-> Lee `CLAUDE.md`/las instrucciones del repo y `PLANS.md` completos. Verifica que estás sobre `main` actualizado y limpio. No reabras P0, P1, P2, P3.1 (a+b) ni P3.2 salvo una regresión demostrable. Empieza por **P3.3** — modularización selectiva -- ver la sección P3.3 del roadmap para el alcance ya definido.
+> Lee `CLAUDE.md`/las instrucciones del repo y `PLANS.md` completos. Verifica que estás sobre `main` actualizado y limpio. No reabras P0, P1, P2, P3.1 (a+b), P3.2 ni P3.3 salvo una regresión demostrable o un requisito concreto de P4 que lo justifique (ver el disparador de revisión en ADR 0033 para el caso de backend). Empieza por **P3.4** — gate de autoridad/seguridad antes de repositorios reales -- ver la sección P3.4 del roadmap para el alcance ya definido.
 
 ---
 
@@ -408,6 +435,7 @@ Usar este texto literalmente como punto de partida:
 - `docs/decisions/0031-*` — arnés de tests de interacción UI↔API mock (P3.1b).
 - `docs/decisions/0032-*` — migraciones versionadas + backup/restore de SQLite (P3.2).
 - `docs/guides/database-migrations-windows.md` — runbook Windows de backup, upgrade y restore (P3.2).
+- `docs/decisions/0033-*` — modularización selectiva: sin extracción de backend (resultado documentado), extracción de `TaskDrawer` y mecanismo de test Vite-based (P3.3).
 - `benchmarks/results/p1-baseline-2026-08/` — baseline, ambiente y adjudicación manual.
 - `benchmarks/results/p3.0-confirmation-2026-08/` — confirmación dirigida de P2 con modelo real, ambiente y hallazgos.
 
