@@ -354,6 +354,64 @@ def test_a_project_created_with_imported_true_round_trips(tmp_path: Path) -> Non
     database.dispose()
 
 
+def test_projects_gains_import_metadata_columns_after_upgrading_a_legacy_database(
+    tmp_path: Path,
+) -> None:
+    """P4.1: same shape as the `imported` column test above, for the two
+    columns added alongside it (steps 8/9)."""
+    database = _legacy_database(tmp_path)
+    with database.engine.connect() as connection:
+        connection.execute(
+            text(
+                "INSERT INTO projects "
+                "(id, title, goal, status, progress_percent, created_at, updated_at) "
+                "VALUES ('p1', 'Legacy', 'Legacy goal', 'draft', 0, "
+                "'2026-07-31 00:00:00', '2026-07-31 00:00:00')"
+            )
+        )
+        connection.commit()
+
+    database.create_all()
+
+    with database.engine.connect() as connection:
+        columns = {
+            row[1] for row in connection.execute(text("PRAGMA table_info(projects)"))
+        }
+        assert "imported_source_path" in columns
+        assert "imported_commit" in columns
+        row = connection.execute(
+            text(
+                "SELECT imported_source_path, imported_commit FROM projects "
+                "WHERE id = 'p1'"
+            )
+        ).fetchone()
+    assert row is not None
+    assert row[0] is None
+    assert row[1] is None
+    database.dispose()
+
+
+def test_a_project_created_with_import_metadata_round_trips(tmp_path: Path) -> None:
+    database = Database(f"sqlite:///{(tmp_path / 'agentarium.db').as_posix()}")
+    database.create_all()
+    repository = Repository(database)
+
+    project = repository.create_project(
+        Project(
+            title="Imported project",
+            goal="Repo importado",
+            imported=True,
+            imported_source_path="C:\\Users\\dev\\my-repo",
+            imported_commit="a" * 40,
+        )
+    )
+    reloaded = repository.get_project(project.id)
+
+    assert reloaded.imported_source_path == "C:\\Users\\dev\\my-repo"
+    assert reloaded.imported_commit == "a" * 40
+    database.dispose()
+
+
 def _project_with_milestone(repository: Repository) -> Milestone:
     project = repository.create_project(
         Project(title="Schema migration test", goal="Round-trip a work item")

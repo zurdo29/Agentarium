@@ -787,6 +787,65 @@ textarea:focus-visible {
   font-size: 11px;
 }
 
+.import-path-row {
+  display: flex;
+  gap: 10px;
+  margin: 12px 0;
+}
+
+.import-path-row input,
+.import-title-input {
+  background: rgb(255 255 255 / 5%);
+  border: 1px solid rgb(255 255 255 / 11%);
+  border-radius: 11px;
+  color: white;
+  font-size: 13px;
+  min-height: 38px;
+  padding: 0 14px;
+}
+
+.import-path-row input {
+  flex: 1;
+  min-width: 0;
+}
+
+.import-title-input {
+  margin-top: 10px;
+  width: 100%;
+}
+
+.import-path-row input::placeholder,
+.import-title-input::placeholder {
+  color: #8e9a93;
+}
+
+.import-preview {
+  background: rgb(255 255 255 / 6%);
+  border: 1px solid rgb(140 201 170 / 35%);
+  border-radius: 11px;
+  margin-bottom: 14px;
+  padding: 12px 14px;
+}
+
+.import-preview p {
+  color: #dce7e1;
+  font-size: 12px;
+  line-height: 1.5;
+  margin: 5px 0 0;
+}
+
+.import-preview.ineligible {
+  border-color: rgb(216 138 122 / 45%);
+}
+
+.project-import-note {
+  color: var(--muted);
+  font-family: ui-monospace, "Cascadia Code", monospace;
+  font-size: 11px;
+  margin: 8px 0 0;
+  word-break: break-all;
+}
+
 .primary-button,
 .control-button {
   align-items: center;

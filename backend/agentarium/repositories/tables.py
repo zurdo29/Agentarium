@@ -20,6 +20,8 @@ class ProjectRow(Base):
     current_milestone_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     progress_percent: Mapped[float] = mapped_column(Float, default=0)
     imported: Mapped[bool] = mapped_column(Boolean, default=False)
+    imported_source_path: Mapped[str | None] = mapped_column(Text, nullable=True)
+    imported_commit: Mapped[str | None] = mapped_column(String(64), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 

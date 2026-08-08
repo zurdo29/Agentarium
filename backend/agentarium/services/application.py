@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from typing import Any
 
@@ -24,7 +25,7 @@ from agentarium.execution import (
     build_runtime_capabilities,
 )
 from agentarium.execution.scheduler import ResourceScheduler
-from agentarium.isolation import GitWorktreeIsolation
+from agentarium.isolation import GitWorktreeIsolation, ImportSource, SourceInspection
 from agentarium.llm import ProviderRegistry, ProviderSelection, ProviderSelectionStore
 from agentarium.memory import ContextBuilder
 from agentarium.orchestration import Orchestrator
@@ -43,6 +44,7 @@ class ApplicationService:
         providers: ProviderRegistry,
         provider_selection: ProviderSelectionStore,
         preview: WorkspacePreview,
+        import_source: ImportSource,
     ) -> None:
         self.settings = settings
         self.database = database
@@ -53,6 +55,7 @@ class ApplicationService:
         self.providers = providers
         self.provider_selection = provider_selection
         self.preview = preview
+        self.import_source = import_source
         self.approval_policy = ApprovalPolicy()
 
     def ensure_ready(self) -> None:
@@ -91,6 +94,67 @@ class ApplicationService:
             )
         )
         for approval in self.approval_policy.inspect_goal(project.id, cleaned):
+            self.repository.add_approval(approval)
+            self.repository.add_event(
+                ExecutionEvent(
+                    project_id=project.id,
+                    action="approval_requested",
+                    message=approval.reason,
+                    new_state=ApprovalStatus.PENDING.value,
+                    correlation_id=correlation_id,
+                )
+            )
+        return project
+
+    async def inspect_import_source(self, source_path: str) -> SourceInspection:
+        return await self.import_source.inspect(Path(source_path))
+
+    async def import_project(
+        self, source_path: str, goal: str, title: str | None = None
+    ) -> Project:
+        """P4.1. Mirrors `create_project`'s shape (title generation, the
+        same `project_created`-style event, the same `inspect_goal` call),
+        but the id is generated up front and the copy happens before any
+        row is persisted: if `import_source.import_into` fails partway,
+        nothing is left behind with `imported=True` and no real content on
+        disk. `inspect_goal` still runs unchanged -- its triggers are about
+        the goal text, not about the fact of importing."""
+        cleaned_goal = goal.strip()
+        if not cleaned_goal:
+            raise ValueError("Goal cannot be empty")
+        generated_title = (
+            title.strip() if title and title.strip() else self._title(cleaned_goal)
+        )
+        resolved_source = str(await asyncio.to_thread(Path(source_path).resolve))
+        project_id = new_id()
+        inspection = await self.import_source.import_into(Path(source_path), project_id)
+        project = self.repository.create_project(
+            Project(
+                id=project_id,
+                title=generated_title,
+                goal=cleaned_goal,
+                imported=True,
+                imported_source_path=resolved_source,
+                imported_commit=inspection.head_commit,
+            )
+        )
+        correlation_id = new_id()
+        self.repository.add_event(
+            ExecutionEvent(
+                project_id=project.id,
+                action="project_imported",
+                message=f"Proyecto importado desde {resolved_source}.",
+                previous_state=None,
+                new_state=ProjectStatus.DRAFT.value,
+                correlation_id=correlation_id,
+                metadata={
+                    "source_path": resolved_source,
+                    "commit": inspection.head_commit,
+                    "branch": inspection.branch,
+                },
+            )
+        )
+        for approval in self.approval_policy.inspect_goal(project.id, cleaned_goal):
             self.repository.add_approval(approval)
             self.repository.add_event(
                 ExecutionEvent(
@@ -468,6 +532,7 @@ def build_application(
         resolved_settings.workspace_root,
         Path(resolved_settings.config_root) / "policies" / "security.yaml",
     )
+    import_source = ImportSource(resolved_settings.workspace_root)
     orchestrator = Orchestrator(
         repository,
         runner,
@@ -487,4 +552,5 @@ def build_application(
         providers,
         provider_selection,
         preview,
+        import_source,
     )
