@@ -7,6 +7,9 @@ const eslintConfig = defineConfig([
   ...nextTs,
   // Override default ignores of eslint-config-next.
   globalIgnores([
+    // Agent-tool worktrees may contain their own build output (dist/, etc.)
+    // from stale/isolated sessions; never lint into them.
+    ".claude/**",
     // Default ignores of eslint-config-next:
     ".next/**",
     ".venv/**",
