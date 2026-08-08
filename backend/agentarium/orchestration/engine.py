@@ -567,7 +567,7 @@ class Orchestrator:
             self._event(
                 item.project_id,
                 "artifact_candidate_recovered",
-                "Un candidato anterior se rematerializÃ³ para reevaluaciÃ³n completa.",
+                "Un candidato anterior se rematerializó para reevaluación completa.",
                 work_item_id=item.id,
                 agent_run_id=source.agent_run_id,
                 attempt=item.attempt_count,
@@ -645,7 +645,7 @@ class Orchestrator:
             self._event(
                 item.project_id,
                 "operator_candidate_submitted",
-                "Un operador local presentÃ³ un candidato para evaluaciÃ³n completa.",
+                "Un operador local presentó un candidato para evaluación completa.",
                 work_item_id=item.id,
                 agent_run_id=run.id,
                 attempt=item.attempt_count,
@@ -1056,7 +1056,7 @@ class Orchestrator:
                 item.project_id,
                 "review_initial_response_recovered",
                 (
-                    "La respuesta inicial del revisor no cumpliÃ³ el contrato; "
+                    "La respuesta inicial del revisor no cumplió el contrato; "
                     "se reevaluaron individualmente todos los criterios."
                 ),
                 work_item_id=item.id,
