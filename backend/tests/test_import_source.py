@@ -134,6 +134,38 @@ async def test_import_detects_and_rejects_source_modified_during_clone(
     assert not (workspace_root / "project").exists()
 
 
+@pytest.mark.asyncio
+async def test_import_rejects_when_destination_head_does_not_match_expected(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "source"
+    _init_git_repo(source)
+    (source / "file.txt").write_text("v1", encoding="utf-8")
+    _commit_all(source, "initial")
+
+    workspace_root = tmp_path / "workspaces"
+    import_source = ImportSource(workspace_root)
+    original_run_git_checked = ImportSourceClass._run_git_checked
+
+    async def spoofing_run_git_checked(self, args, *, cwd, timeout_seconds=30):  # type: ignore[no-untyped-def]
+        if args[:2] == ["rev-parse", "HEAD"] and Path(cwd) != source.resolve():
+            # checkout -f really ran and really succeeded (untouched
+            # above) -- this only spoofs the *verification* read that
+            # follows it, to prove that a mismatch there is caught on its
+            # own, independent of checkout's own exit code.
+            return "f" * 40
+        return await original_run_git_checked(
+            self, args, cwd=cwd, timeout_seconds=timeout_seconds
+        )
+
+    monkeypatch.setattr(ImportSourceClass, "_run_git_checked", spoofing_run_git_checked)
+
+    with pytest.raises(ImportSourceError, match="no coincide"):
+        await import_source.import_into(source, "project")
+
+    assert not (workspace_root / "project").exists()
+
+
 # -- overlap / absolute-path rejection ------------------------------------------
 
 
@@ -422,6 +454,29 @@ async def test_import_rejects_flat_folder_with_symlink(tmp_path: Path) -> None:
         await import_source.import_into(source, "project")
 
     assert not (workspace_root / "project").exists()
+
+
+@pytest.mark.asyncio
+async def test_inspect_reports_flat_folder_with_symlink_as_ineligible(
+    tmp_path: Path,
+) -> None:
+    # The UI must already know before the user clicks "importar" -- a
+    # source inspect() calls eligible only for import_into() to reject it
+    # moments later is a preview that lied.
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "file.txt").write_text("content", encoding="utf-8")
+    outside_target = tmp_path / "outside"
+    junction = source / "escape"
+    if not _try_create_junction(junction, outside_target):
+        pytest.skip("No se pudo crear una junction en este entorno")
+
+    import_source = ImportSource(tmp_path / "workspaces")
+    inspection = await import_source.inspect(source)
+
+    assert not inspection.eligible
+    assert inspection.reason is not None
+    assert not inspection.is_git_repo
 
 
 @pytest.mark.asyncio

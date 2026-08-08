@@ -102,6 +102,12 @@ modificación concurrente durante la copia no tiene mecanismo de
 detección en esta fase. Los submódulos se detectan y se rechazan, no se
 resuelven -- resolverlos exigiría acceso de red, que este mecanismo no
 introduce bajo ninguna circunstancia. No hay selector de carpeta nativo.
+La API de importación (`/api/projects/import[/inspect]`) presupone el
+binding local/loopback actual de Agentarium: cualquier ruta absoluta
+que el proceso backend pueda leer es candidata a import, sin ninguna
+frontera de autenticación/autoridad propia más allá de eso. Exponerla
+más allá de loopback exige agregar esa frontera antes de aceptar
+tráfico remoto.
 
 ## Qué queda para P4.2
 

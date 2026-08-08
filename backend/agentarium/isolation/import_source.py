@@ -134,11 +134,18 @@ class ImportSource:
         detached = False
         is_dirty = False
         has_submodules = False
+        reparse_point: Path | None = None
         if is_git_repo:
             head_commit, is_dirty = await self._capture_snapshot(resolved)
             if head_commit is not None:
                 has_submodules = await self._has_submodules(resolved)
                 branch, detached = await self._branch_info(resolved)
+        else:
+            # Mirrors _import_flat's own rejection: a symlink/junction the
+            # UI never flagged as ineligible would let a user click
+            # "importar" believing it will succeed and only find out from
+            # import_into()'s rejection -- inspect() must already know.
+            reparse_point = await asyncio.to_thread(self._find_reparse_point, resolved)
 
         file_count, size_bytes = await asyncio.to_thread(self._estimate_size, resolved)
 
@@ -153,6 +160,12 @@ class ImportSource:
         elif is_git_repo and has_submodules:
             eligible = False
             reason = "El repositorio tiene submódulos; no soportado en esta fase."
+        elif reparse_point is not None:
+            eligible = False
+            reason = (
+                "La carpeta contiene un symlink/junction/reparse point no "
+                f"soportado: {reparse_point}"
+            )
 
         return SourceInspection(
             eligible=eligible,
@@ -279,6 +292,21 @@ class ImportSource:
         # from it without needing to know in advance which case this is.
         await self._run_git_checked(["checkout", "-f", "HEAD"], cwd=destination)
 
+        # `checkout -f` exiting 0 is not itself proof the destination
+        # landed on the right commit -- verified directly, not assumed,
+        # the same discipline as everything else in this method. A
+        # mismatch here (a corrupted clone, an unexpected default-branch
+        # resolution, ...) must reject and clean up rather than persist
+        # a `head_commit` that does not actually match what was cloned.
+        destination_head = (
+            await self._run_git_checked(["rev-parse", "HEAD"], cwd=destination)
+        ).strip()
+        if destination_head != expected_head:
+            raise ImportSourceError(
+                "El commit resultante en el destino no coincide con el "
+                "commit esperado del origen; la importación se rechazó."
+            )
+
         # TOCTOU close: re-read the source now that the copy is done. A
         # single check before cloning cannot catch a change that happens
         # *during* the clone -- only a before-and-after comparison can
@@ -384,7 +412,7 @@ class ImportSource:
             size_bytes_estimate=None,
         )
 
-    def _reject_reparse_points(self, source: Path) -> None:
+    def _find_reparse_point(self, source: Path) -> Path | None:
         for root, dirs, files in os.walk(source, followlinks=False):
             root_path = Path(root)
             relative_parts = root_path.relative_to(source).parts
@@ -394,10 +422,16 @@ class ImportSource:
             for name in (*dirs, *files):
                 entry = root_path / name
                 if _is_reparse_point(entry):
-                    raise ImportSourceError(
-                        "La carpeta contiene un symlink/junction/reparse "
-                        f"point no soportado: {entry}"
-                    )
+                    return entry
+        return None
+
+    def _reject_reparse_points(self, source: Path) -> None:
+        found = self._find_reparse_point(source)
+        if found is not None:
+            raise ImportSourceError(
+                "La carpeta contiene un symlink/junction/reparse "
+                f"point no soportado: {found}"
+            )
 
     def _copy_tree(self, source: Path, destination: Path) -> None:
         # Never shutil.copytree(): it follows symlinks/junctions outward
