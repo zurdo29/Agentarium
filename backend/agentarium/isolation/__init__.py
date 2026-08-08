@@ -8,14 +8,18 @@ from .git_worktree import (
     IsolationError,
     WorktreeSession,
 )
+from .import_source import ImportSource, ImportSourceError, SourceInspection
 
 __all__ = [
     "ChangeSet",
     "GitChangeSet",
     "GitWorktreeIsolation",
+    "ImportSource",
+    "ImportSourceError",
     "IntegrationResult",
     "IsolationBackend",
     "IsolationError",
     "LocalWorkspaceIsolation",
+    "SourceInspection",
     "WorktreeSession",
 ]

@@ -118,6 +118,11 @@ STEPS: tuple[MigrationStep, ...] = (
     # whose workspace came from an imported repository (P3.4/ADR 0034), so
     # every legacy row backfills to "not imported" with no backfill needed.
     MigrationStep(7, "imported", "BOOLEAN NOT NULL DEFAULT 0", table="projects"),
+    # P4.1: display/audit metadata for an imported project. Nullable, no
+    # backfill -- nothing before this step (nor any legacy row) can have a
+    # real value for either, so NULL is correct throughout.
+    MigrationStep(8, "imported_source_path", "TEXT", table="projects"),
+    MigrationStep(9, "imported_commit", "VARCHAR(64)", table="projects"),
 )
 
 CURRENT_SCHEMA_VERSION = STEPS[-1].version

@@ -4,6 +4,7 @@ import asyncio
 import json
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
@@ -13,6 +14,7 @@ from fastapi.responses import FileResponse, RedirectResponse, StreamingResponse
 
 from agentarium.domain.enums import ApprovalStatus
 from agentarium.execution import PreviewUnavailable, WorkspacePreview
+from agentarium.isolation import ImportSourceError
 from agentarium.repositories.repository import NotFoundError
 from agentarium.services import ApplicationService, build_application
 
@@ -20,6 +22,8 @@ from .schemas import (
     CreateApprovalRequest,
     CreateProjectRequest,
     EscalateRequest,
+    ImportProjectRequest,
+    InspectImportRequest,
     PriorityRequest,
     ProviderSelectionRequest,
     ResolveApprovalRequest,
@@ -73,6 +77,10 @@ def create_app(service: ApplicationService | None = None) -> FastAPI:
     async def preview_unavailable_handler(_: Request, exc: PreviewUnavailable) -> Any:
         return _error_response(404, str(exc))
 
+    @api.exception_handler(ImportSourceError)
+    async def import_source_error_handler(_: Request, exc: ImportSourceError) -> Any:
+        return _error_response(409, str(exc))
+
     @api.get("/api/health")
     async def health() -> dict[str, Any]:
         runtime = _runtime_status(resolved_service)
@@ -125,6 +133,22 @@ def create_app(service: ApplicationService | None = None) -> FastAPI:
         project = resolved_service.create_project(body.goal, body.title)
         if body.auto_plan:
             project = await resolved_service.plan_project(project.id)
+        return resolved_service.project_detail(project.id)
+
+    @api.post("/api/projects/import/inspect")
+    async def inspect_import_source(body: InspectImportRequest) -> dict[str, Any]:
+        # Deliberately always 200: "doesn't exist", "dirty", "not git",
+        # "has submodules", "overlaps the workspace" are all expected
+        # inspection outcomes, not server errors -- only /import (which
+        # actually commits to copying something) raises for those.
+        inspection = await resolved_service.inspect_import_source(body.source_path)
+        return asdict(inspection)
+
+    @api.post("/api/projects/import", status_code=201)
+    async def import_project(body: ImportProjectRequest) -> dict[str, Any]:
+        project = await resolved_service.import_project(
+            body.source_path, body.goal, body.title
+        )
         return resolved_service.project_detail(project.id)
 
     @api.get("/api/projects/{project_id}")

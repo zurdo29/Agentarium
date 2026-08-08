@@ -213,6 +213,24 @@ export function buildDashboard(overrides = {}) {
   };
 }
 
+export function buildSourceInspection(overrides = {}) {
+  return {
+    eligible: true,
+    reason: null,
+    exists: true,
+    is_directory: true,
+    is_git_repo: true,
+    head_commit: "a".repeat(40),
+    branch: "main",
+    detached_head: false,
+    is_dirty: false,
+    has_submodules: false,
+    file_count_estimate: 3,
+    size_bytes_estimate: 1024,
+    ...overrides,
+  };
+}
+
 export function buildProviderOverview(overrides = {}) {
   return {
     active_provider: "mock",

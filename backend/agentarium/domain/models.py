@@ -77,6 +77,14 @@ class Project(DomainModel):
     # not built yet) MUST persist every project it creates with
     # `imported=True` -- see the explicit P4.1 criterion in PLANS.md.
     imported: bool = False
+    # P4.1: where an imported project's workspace was copied from, and the
+    # commit that was verified consistent at import time -- display/audit
+    # only, `imported_source_path` is never read again to re-resolve or
+    # re-copy the original. `imported_commit` is what a future P4.2 needs
+    # to export a clean diff back against the real origin. Both `None` for
+    # every greenfield project, and for any project created before P4.1.
+    imported_source_path: str | None = None
+    imported_commit: str | None = None
     created_at: datetime = Field(default_factory=utc_now)
     updated_at: datetime = Field(default_factory=utc_now)
 

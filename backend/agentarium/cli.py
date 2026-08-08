@@ -13,6 +13,7 @@ import httpx
 import typer
 
 from agentarium.config.settings import get_settings, project_root
+from agentarium.isolation import ImportSourceError
 from agentarium.repositories.backup import (
     BackupValidationError,
     MigrationFailedError,
@@ -168,6 +169,31 @@ def create_project(
 ) -> None:
     service = _service()
     project = service.create_project(goal, title)
+    typer.echo(json.dumps(project.model_dump(mode="json"), indent=2, ensure_ascii=False))
+
+
+@project_app.command("import")
+def import_project(
+    source: Annotated[
+        Path,
+        typer.Argument(
+            exists=True,
+            file_okay=False,
+            dir_okay=True,
+            resolve_path=True,
+            help="Carpeta del proyecto existente a importar.",
+        ),
+    ],
+    goal: Annotated[str, typer.Argument(help="Objetivo del proyecto.")],
+    title: Annotated[str | None, typer.Option("--title", "-t", help="Título opcional.")] = None,
+) -> None:
+    """Importa un proyecto existente sin modificar el original."""
+    service = _service()
+    try:
+        project = asyncio.run(service.import_project(str(source), goal, title))
+    except ImportSourceError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(10) from exc
     typer.echo(json.dumps(project.model_dump(mode="json"), indent=2, ensure_ascii=False))
 
 

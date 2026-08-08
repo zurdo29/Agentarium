@@ -1,6 +1,7 @@
 "use client";
 
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
+import { ImportProject } from "./import-project";
 import { ROLE_LABELS, Status, dateLabel, statusLabel } from "./shared";
 import { TaskDrawer } from "./task-drawer";
 
@@ -19,6 +20,23 @@ type Project = {
   tasks_total?: number;
   tasks_completed?: number;
   brief?: Brief | null;
+  imported_source_path?: string | null;
+  imported_commit?: string | null;
+};
+
+export type SourceInspection = {
+  eligible: boolean;
+  reason: string | null;
+  exists: boolean;
+  is_directory: boolean;
+  is_git_repo: boolean;
+  head_commit: string | null;
+  branch: string | null;
+  detached_head: boolean;
+  is_dirty: boolean;
+  has_submodules: boolean;
+  file_count_estimate: number | null;
+  size_bytes_estimate: number | null;
 };
 
 type Brief = {
@@ -462,6 +480,12 @@ export default function Home() {
   const [activeAction, setActiveAction] = useState<ProjectAction | null>(null);
   const [goal, setGoal] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [importPath, setImportPath] = useState("");
+  const [importInspection, setImportInspection] =
+    useState<SourceInspection | null>(null);
+  const [importInspecting, setImportInspecting] = useState(false);
+  const [importGoal, setImportGoal] = useState("");
+  const [importTitle, setImportTitle] = useState("");
 
   const selectedTask = useMemo(
     () =>
@@ -575,6 +599,73 @@ export default function Home() {
         reason instanceof Error
           ? reason.message
           : "No fue posible crear el proyecto.",
+      );
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  function updateImportPath(value: string) {
+    setImportPath(value);
+    // A stale preview for an already-edited path must never be usable to
+    // confirm an import -- clearing it forces a fresh /inspect for
+    // whatever path is now in the field.
+    setImportInspection(null);
+  }
+
+  async function inspectImportSource(event: FormEvent) {
+    event.preventDefault();
+    if (!importPath.trim()) return;
+    setImportInspecting(true);
+    setError(null);
+    try {
+      const result = await request<SourceInspection>(
+        "/projects/import/inspect",
+        {
+          method: "POST",
+          body: JSON.stringify({ source_path: importPath.trim() }),
+        },
+      );
+      setImportInspection(result);
+    } catch (reason) {
+      setError(
+        reason instanceof Error
+          ? reason.message
+          : "No fue posible inspeccionar la ruta.",
+      );
+    } finally {
+      setImportInspecting(false);
+    }
+  }
+
+  async function importProject(event: FormEvent) {
+    event.preventDefault();
+    if (!importInspection?.eligible || !importGoal.trim()) return;
+    setLoading(true);
+    setError(null);
+    try {
+      const created = await request<ProjectDetail>("/projects/import", {
+        method: "POST",
+        body: JSON.stringify({
+          source_path: importPath.trim(),
+          goal: importGoal.trim(),
+          title: importTitle.trim() || undefined,
+        }),
+      });
+      setImportPath("");
+      setImportInspection(null);
+      setImportGoal("");
+      setImportTitle("");
+      setDetail(created);
+      setEvents([]);
+      setConnected(true);
+      setView("project");
+      await refreshDashboard();
+    } catch (reason) {
+      setError(
+        reason instanceof Error
+          ? reason.message
+          : "No fue posible importar el proyecto.",
       );
     } finally {
       setLoading(false);
@@ -878,6 +969,16 @@ export default function Home() {
             providerOverview={providerOverview}
             providerLoading={providerLoading}
             selectProvider={selectProvider}
+            importPath={importPath}
+            onImportPathChange={updateImportPath}
+            importInspection={importInspection}
+            importInspecting={importInspecting}
+            onInspectImportSource={inspectImportSource}
+            importGoal={importGoal}
+            setImportGoal={setImportGoal}
+            importTitle={importTitle}
+            setImportTitle={setImportTitle}
+            onImportProject={importProject}
           />
         )}
 
@@ -983,6 +1084,16 @@ function Dashboard({
   providerOverview,
   providerLoading,
   selectProvider,
+  importPath,
+  onImportPathChange,
+  importInspection,
+  importInspecting,
+  onInspectImportSource,
+  importGoal,
+  setImportGoal,
+  importTitle,
+  setImportTitle,
+  onImportProject,
 }: {
   dashboard: DashboardData;
   totalTasks: number;
@@ -996,6 +1107,16 @@ function Dashboard({
   providerOverview: ProviderOverview;
   providerLoading: boolean;
   selectProvider: (provider: ProviderName, model: string | null) => Promise<void>;
+  importPath: string;
+  onImportPathChange: (value: string) => void;
+  importInspection: SourceInspection | null;
+  importInspecting: boolean;
+  onInspectImportSource: (event: FormEvent) => Promise<void>;
+  importGoal: string;
+  setImportGoal: (value: string) => void;
+  importTitle: string;
+  setImportTitle: (value: string) => void;
+  onImportProject: (event: FormEvent) => Promise<void>;
 }) {
   return (
     <div className="page dashboard-page">
@@ -1080,6 +1201,21 @@ function Dashboard({
               </div>
             </div>
           </form>
+
+          <ImportProject
+            path={importPath}
+            onPathChange={onImportPathChange}
+            inspection={importInspection}
+            inspecting={importInspecting}
+            onInspect={onInspectImportSource}
+            goal={importGoal}
+            onGoalChange={setImportGoal}
+            title={importTitle}
+            onTitleChange={setImportTitle}
+            onImport={onImportProject}
+            loading={loading}
+            connected={connected}
+          />
 
           <div className="section-title">
             <div>
@@ -1350,6 +1486,14 @@ function ProjectView({
             <Status status={project.status} />
           </div>
           <p>{project.goal}</p>
+          {project.imported_source_path && (
+            <p className="project-import-note">
+              Importado desde {project.imported_source_path}
+              {project.imported_commit
+                ? ` · commit ${project.imported_commit.slice(0, 8)}`
+                : ""}
+            </p>
+          )}
         </div>
         <div className="project-controls" aria-label="Controles de ejecución">
           {["paused", "awaiting_approval", "failed"].includes(project.status) ? (
