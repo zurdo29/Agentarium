@@ -814,6 +814,25 @@ class Orchestrator:
             },
             correlation_id=correlation_id,
         )
+        authority_blocked = next(
+            (check for check in validation_checks if check.get("blocked_by_authority")),
+            None,
+        )
+        if authority_blocked is not None:
+            # P3.4 (ADR 0034): checked before import_preflight_failure below
+            # on purpose. The project being imported is a permanent fact,
+            # unlike an unsupported import (which a different attempt might
+            # avoid) -- if a candidate manages to fail both checks at once,
+            # authority must still win, or _reject_unsupported_capability's
+            # retry/split ladder would fire for a block no retry can ever
+            # clear. ValidationProfileExecutor.validate() already guarantees
+            # this check exists whenever it does (see the matching comment
+            # there), so ordering here is what actually decides which
+            # rejection path the candidate takes.
+            await self._reject_imported_project_execution(
+                item, correlation_id, worker_run_id, authority_blocked
+            )
+            return
         import_preflight_failure = next(
             (
                 check
@@ -830,20 +849,6 @@ class Orchestrator:
             # la evalúen para terminar rechazada de todas formas.
             await self._reject_unsupported_capability(
                 item, correlation_id, worker_run_id, import_preflight_failure
-            )
-            return
-        authority_blocked = next(
-            (check for check in validation_checks if check.get("blocked_by_authority")),
-            None,
-        )
-        if authority_blocked is not None:
-            # P3.4 (ADR 0034): el proyecto es importado y esta entrega
-            # necesitaba ejecutar código de verdad -- ningún reintento ni
-            # división puede cambiar ese hecho (depende del proyecto, no de
-            # la propuesta), así que corta acá, antes de TESTER/REVISOR,
-            # igual que el rechazo de IMPORT_PREFLIGHT arriba.
-            await self._reject_imported_project_execution(
-                item, correlation_id, worker_run_id, authority_blocked
             )
             return
         report_passed = self._technical_evidence_passed(

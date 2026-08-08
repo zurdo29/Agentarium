@@ -68,11 +68,14 @@ class Project(DomainModel):
     current_milestone_id: str | None = None
     progress_percent: float = Field(default=0, ge=0, le=100)
     # P3.4 (ADR 0034): whether this project's workspace originated from a
-    # repository outside Agentarium's own control. False for every project
-    # today -- nothing sets this yet, since importing an existing repo is
-    # P4.1, not built. Read by Orchestrator._evaluate_candidate to decide
-    # allow_project_code_execution; defaults closed so a future import path
-    # inherits a denial, not an accidental grant.
+    # repository outside Agentarium's own control. `False` is simply the
+    # default compatible with every project that exists today (greenfield,
+    # never imported) -- it is not a security posture by itself. The actual
+    # fail-closed guarantee lives in ValidationProfileExecutor's
+    # NON_EXECUTING_PROFILES gate, which blocks any execution-requiring
+    # profile whenever this is `True`. P4.1 (importing an existing repo,
+    # not built yet) MUST persist every project it creates with
+    # `imported=True` -- see the explicit P4.1 criterion in PLANS.md.
     imported: bool = False
     created_at: datetime = Field(default_factory=utc_now)
     updated_at: datetime = Field(default_factory=utc_now)

@@ -337,6 +337,7 @@ P4 es el siguiente gran salto de producto. Una vez terminados los guardrails mí
 - Inspección inicial de sólo lectura.
 - Trabajar sobre copia/worktree/área controlada; no mutar el origen por defecto.
 - Mostrar qué commit/estado de origen se importó.
+- **Todo proyecto creado por esta vía debe persistirse con `Project.imported = True`** (P3.4/ADR 0034) -- la frontera de ejecución fail-closed en `ValidationProfileExecutor` depende de que este campo esté correctamente poblado; un proyecto importado que quede con `imported=False` por omisión heredaría autoridad de ejecución que esta fase existe para negar.
 
 ### P4.2 — exportar cambios de forma auditable
 

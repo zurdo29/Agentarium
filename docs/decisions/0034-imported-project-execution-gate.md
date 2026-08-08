@@ -33,7 +33,11 @@ el resultado trae un perfil marcado `blocked_by_authority` (marca
 estructural, nunca detección de texto), la tarea termina directo en
 `FAILED` sin pasar por tester/revisor y sin reintento ni división —un
 proyecto importado nunca puede resolver ese bloqueo generando un
-candidato distinto.
+candidato distinto. Esta marca tiene precedencia fija sobre cualquier
+otro rechazo del mismo candidato (por ejemplo `IMPORT_PREFLIGHT`): la
+autoridad es una propiedad permanente del proyecto, no un defecto que un
+candidato distinto podría evitar, así que nunca debe enrutarse por la
+escalera de reintento/división pensada para defectos corregibles.
 
 No se aceptó como mecanismo principal ninguna heurística de palabras
 clave o AST para decidir si la frontera aplica: la clasificación es por

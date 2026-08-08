@@ -164,6 +164,55 @@ async def test_imported_project_blocks_script_execution_but_keeps_artifact(
 
 
 @pytest.mark.asyncio
+async def test_imported_project_authority_block_wins_over_import_preflight_failure(
+    service: ApplicationService,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Authority is a permanent property of the project; an unsupported
+    import is a candidate defect a different attempt might avoid. If both
+    fail on the same candidate, authority must still win -- otherwise this
+    would be misrouted through _reject_unsupported_capability's retry/split
+    ladder for a block no retry could ever clear."""
+    project = _project(service, imported=True)
+    milestone = _milestone(service, project.id)
+    item = _executable_work_item(project.id, milestone.id)
+    service.repository.add_work_item(item)
+
+    original_generate = MockProvider.generate
+    role_calls: list[str] = []
+
+    async def controlled_generate(self, request, agent):  # type: ignore[no-untyped-def]
+        role_calls.append(request.operation)
+        if request.operation == "work" and request.work_item_id == item.id:
+            return _work_response(
+                artifact_type="code",
+                path="tool.py",
+                # Disallowed third-party import (fails IMPORT_PREFLIGHT)
+                # *and* would produce a side effect if it ever ran.
+                content="import flask\n" + _SENTINEL_TOOL_CONTENT,
+            )
+        return await original_generate(self, request, agent)
+
+    monkeypatch.setattr(MockProvider, "generate", controlled_generate)
+
+    await service.orchestrator._execute_work_item(item, "test-correlation")
+
+    reloaded = service.repository.get_work_item(item.id)
+    assert reloaded.status is WorkItemStatus.FAILED
+    assert reloaded.attempt_count == 1
+    assert role_calls == ["work"]
+
+    events = {event["action"] for event in service.repository.list_events(project.id)}
+    assert "imported_project_execution_blocked" in events
+    assert "unsupported_capability_detected" not in events
+
+    assert (
+        list(service.orchestrator.workspace.workspace_root.rglob("should_not_exist.txt"))
+        == []
+    )
+
+
+@pytest.mark.asyncio
 async def test_imported_project_static_only_task_matches_non_imported_outcome(
     service: ApplicationService,
     monkeypatch: pytest.MonkeyPatch,

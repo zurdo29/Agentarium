@@ -255,21 +255,26 @@ class ValidationProfileExecutor:
             )
             or execution_contract is not None
         )
-        if import_preflight_result is not None and not import_preflight_result.passed:
-            # La capacidad ya se sabe no soportada: correr SCRIPT_EXECUTION
-            # de verdad sólo repetiría el mismo fallo unos milisegundos más
-            # tarde, vía un ModuleNotFoundError real en vez de uno anticipado.
-            pass
-        elif script_execution_requested and not allow_project_code_execution:
-            # P3.4 (ADR 0034): authority is the real, durable reason nothing
-            # runs here -- checked ahead of "no .py files" so an imported
-            # project reports the actual guarantee instead of the incidental
-            # fact that this particular delivery had nothing to execute.
+        if script_execution_requested and not allow_project_code_execution:
+            # P3.4 (ADR 0034): checked before the IMPORT_PREFLIGHT-skip branch
+            # below on purpose. Authority is a permanent property of the
+            # project, not a candidate-fixable defect -- it must produce a
+            # blocked_by_authority result even when this same candidate also
+            # failed IMPORT_PREFLIGHT, so a caller downstream can never treat
+            # this as a retryable import problem instead of a project-level
+            # block (see Orchestrator._evaluate_candidate, which checks
+            # authority_blocked before import_preflight_failure for the same
+            # reason).
             results.append(
                 self._authority_blocked_result(
                     ValidationProfile.SCRIPT_EXECUTION, (), project_root
                 )
             )
+        elif import_preflight_result is not None and not import_preflight_result.passed:
+            # La capacidad ya se sabe no soportada: correr SCRIPT_EXECUTION
+            # de verdad sólo repetiría el mismo fallo unos milisegundos más
+            # tarde, vía un ModuleNotFoundError real en vez de uno anticipado.
+            pass
         elif script_execution_requested and execution_contract is not None:
             results.extend(
                 await self._run_declared_contract(
