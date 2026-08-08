@@ -305,6 +305,55 @@ def test_every_declared_column_exists_after_upgrading_a_legacy_database(
     assert column in columns
 
 
+def test_projects_gains_imported_column_after_upgrading_a_legacy_database(
+    tmp_path: Path,
+) -> None:
+    """P3.4 (ADR 0034): first migration step to ever target `projects`
+    instead of `work_items` -- proves `MigrationStep.table` actually reaches
+    a different table, not just that `work_items` steps still work."""
+    database = _legacy_database(tmp_path)
+    with database.engine.connect() as connection:
+        # A pre-existing project row, in the legacy shape (no `imported`
+        # column) -- `_legacy_database()` only creates the table, it never
+        # inserts into it.
+        connection.execute(
+            text(
+                "INSERT INTO projects "
+                "(id, title, goal, status, progress_percent, created_at, updated_at) "
+                "VALUES ('p1', 'Legacy', 'Legacy goal', 'draft', 0, "
+                "'2026-07-31 00:00:00', '2026-07-31 00:00:00')"
+            )
+        )
+        connection.commit()
+
+    database.create_all()
+
+    with database.engine.connect() as connection:
+        columns = {
+            row[1] for row in connection.execute(text("PRAGMA table_info(projects)"))
+        }
+        assert "imported" in columns
+        (imported,) = connection.execute(
+            text("SELECT imported FROM projects WHERE id = 'p1'")
+        ).fetchone()
+    assert imported == 0
+    database.dispose()
+
+
+def test_a_project_created_with_imported_true_round_trips(tmp_path: Path) -> None:
+    database = Database(f"sqlite:///{(tmp_path / 'agentarium.db').as_posix()}")
+    database.create_all()
+    repository = Repository(database)
+
+    project = repository.create_project(
+        Project(title="Imported project", goal="Repo importado", imported=True)
+    )
+    reloaded = repository.get_project(project.id)
+
+    assert reloaded.imported is True
+    database.dispose()
+
+
 def _project_with_milestone(repository: Repository) -> Milestone:
     project = repository.create_project(
         Project(title="Schema migration test", goal="Round-trip a work item")
@@ -369,9 +418,11 @@ def test_a_work_item_without_a_contract_loads_execution_contract_as_none(
     database.dispose()
 
 
-# The 10 tables besides work_items -- see _LEGACY_OTHER_TABLES above.
+# The 9 tables besides work_items and projects -- see _LEGACY_OTHER_TABLES
+# above. `projects` moved out of this tuple in P3.4/ADR 0034, the first
+# migration step to target it (see
+# test_projects_gains_imported_column_after_upgrading_a_legacy_database).
 _NEVER_CHANGED_TABLES = (
-    "projects",
     "milestones",
     "dependencies",
     "agent_runs",

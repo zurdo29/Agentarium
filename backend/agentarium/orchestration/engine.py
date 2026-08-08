@@ -762,6 +762,7 @@ class Orchestrator:
                 evidence.as_check(verified=False) for evidence in workspace_evidence
             ]
             control_verified = False
+        project = self.repository.get_project(item.project_id)
         try:
             validation_results = await self.validations.validate(
                 item.project_id,
@@ -770,6 +771,7 @@ class Orchestrator:
                 acceptance_criteria=item.acceptance_criteria,
                 expected_outputs=item.expected_outputs,
                 execution_contract=item.execution_contract,
+                allow_project_code_execution=not project.imported,
             )
             validation_checks = [result.as_evidence() for result in validation_results]
         except CommandRejected as exc:
@@ -812,6 +814,25 @@ class Orchestrator:
             },
             correlation_id=correlation_id,
         )
+        authority_blocked = next(
+            (check for check in validation_checks if check.get("blocked_by_authority")),
+            None,
+        )
+        if authority_blocked is not None:
+            # P3.4 (ADR 0034): checked before import_preflight_failure below
+            # on purpose. The project being imported is a permanent fact,
+            # unlike an unsupported import (which a different attempt might
+            # avoid) -- if a candidate manages to fail both checks at once,
+            # authority must still win, or _reject_unsupported_capability's
+            # retry/split ladder would fire for a block no retry can ever
+            # clear. ValidationProfileExecutor.validate() already guarantees
+            # this check exists whenever it does (see the matching comment
+            # there), so ordering here is what actually decides which
+            # rejection path the candidate takes.
+            await self._reject_imported_project_execution(
+                item, correlation_id, worker_run_id, authority_blocked
+            )
+            return
         import_preflight_failure = next(
             (
                 check
@@ -1254,6 +1275,41 @@ class Orchestrator:
             correlation_id=correlation_id,
         )
         await self._request_changes(item, correlation_id, reason)
+
+    async def _reject_imported_project_execution(
+        self,
+        item: WorkItem,
+        correlation_id: str,
+        worker_run_id: str,
+        check: dict[str, object],
+    ) -> None:
+        """P3.4 (ADR 0034): the project is imported and this candidate needed
+        to actually execute delivered code, which `ValidationProfileExecutor`
+        already refused to run (`blocked_by_authority`, checked structurally,
+        never from `check["stderr"]` text). Unlike `_reject_unsupported_capability`,
+        this never routes through `_request_changes`: no retry or split can
+        change that a project is imported, so this goes straight to a
+        terminal `FAILED` — the same shape `_execute_work_item` already uses
+        for a `WorkspaceSecurityRejected` candidate. The `Artifact` this
+        attempt produced stays on record; only tester/reviewer are skipped.
+        """
+        reason = str(check.get("stderr") or "").strip() or (
+            "Ejecución deshabilitada: el proyecto proviene de un "
+            "repositorio importado y todavía no existe una frontera de "
+            "aislamiento real del proceso (P3.4)."
+        )
+        self._event(
+            item.project_id,
+            "imported_project_execution_blocked",
+            reason,
+            work_item_id=item.id,
+            agent_run_id=worker_run_id,
+            attempt=item.attempt_count,
+            error=reason,
+            metadata={"profile": check.get("profile")},
+            correlation_id=correlation_id,
+        )
+        self._transition(item, WorkItemStatus.FAILED, correlation_id, error=reason)
 
     @staticmethod
     def _candidate_failure_policy(exc: Exception) -> tuple[bool, bool]:

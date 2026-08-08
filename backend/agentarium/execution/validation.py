@@ -31,11 +31,38 @@ class ValidationProfile(StrEnum):
     SCRIPT_EXECUTION = "script_execution"
 
 
+# P3.4 (ADR 0034): profiles that never execute the delivered content's own
+# logic -- WORKSPACE_INVENTORY lists files via a fixed snippet,
+# PYTHON_SYNTAX only `compile()`s (never `exec()`s), JSON_SYNTAX only
+# parses, JAVASCRIPT_SYNTAX only runs `node --check`, IMPORT_PREFLIGHT is a
+# static in-process AST walk with no subprocess at all, and WEB_APPLICATION
+# (web_smoke.py) parses HTML and regex-matches the JS source text without
+# ever interpreting it. Declared explicitly and checked fail-closed in
+# `_execute()`: a profile not on this list is treated as code execution and
+# blocked whenever the caller disallows it, including any profile added
+# here later without also being added to this set.
+NON_EXECUTING_PROFILES = frozenset(
+    {
+        ValidationProfile.WORKSPACE_INVENTORY,
+        ValidationProfile.PYTHON_SYNTAX,
+        ValidationProfile.IMPORT_PREFLIGHT,
+        ValidationProfile.JSON_SYNTAX,
+        ValidationProfile.JAVASCRIPT_SYNTAX,
+        ValidationProfile.WEB_APPLICATION,
+    }
+)
+
+
 @dataclass(frozen=True)
 class ValidationProfileResult:
     profile: ValidationProfile
     targets: tuple[str, ...]
     result: CommandResult
+    # P3.4 (ADR 0034): True only for the synthetic result `_execute()`
+    # returns instead of running an execution-requiring profile against an
+    # imported project -- structural marker consumers key off directly
+    # (`check.get("blocked_by_authority")`), never text-matched from stderr.
+    blocked_by_authority: bool = False
 
     @property
     def passed(self) -> bool:
@@ -54,6 +81,7 @@ class ValidationProfileResult:
             "timed_out": self.result.timed_out,
             "passed": self.passed,
             "contract_version": VALIDATION_CONTRACT_VERSION,
+            "blocked_by_authority": self.blocked_by_authority,
         }
 
 
@@ -93,6 +121,7 @@ class ValidationProfileExecutor:
         acceptance_criteria: list[str] | None = None,
         expected_outputs: list[str] | None = None,
         execution_contract: ScriptExecutionContract | None = None,
+        allow_project_code_execution: bool = True,
     ) -> list[ValidationProfileResult]:
         project_scope = await asyncio.to_thread(
             (self.workspace_root / project_id).resolve
@@ -195,7 +224,13 @@ class ValidationProfileExecutor:
             )
 
         results = [
-            await self._execute(profile, command_targets, command, project_root)
+            await self._execute(
+                profile,
+                command_targets,
+                command,
+                project_root,
+                allow_project_code_execution=allow_project_code_execution,
+            )
             for profile, command_targets, command in commands
         ]
 
@@ -220,7 +255,22 @@ class ValidationProfileExecutor:
             )
             or execution_contract is not None
         )
-        if import_preflight_result is not None and not import_preflight_result.passed:
+        if script_execution_requested and not allow_project_code_execution:
+            # P3.4 (ADR 0034): checked before the IMPORT_PREFLIGHT-skip branch
+            # below on purpose. Authority is a permanent property of the
+            # project, not a candidate-fixable defect -- it must produce a
+            # blocked_by_authority result even when this same candidate also
+            # failed IMPORT_PREFLIGHT, so a caller downstream can never treat
+            # this as a retryable import problem instead of a project-level
+            # block (see Orchestrator._evaluate_candidate, which checks
+            # authority_blocked before import_preflight_failure for the same
+            # reason).
+            results.append(
+                self._authority_blocked_result(
+                    ValidationProfile.SCRIPT_EXECUTION, (), project_root
+                )
+            )
+        elif import_preflight_result is not None and not import_preflight_result.passed:
             # La capacidad ya se sabe no soportada: correr SCRIPT_EXECUTION
             # de verdad sólo repetiría el mismo fallo unos milisegundos más
             # tarde, vía un ModuleNotFoundError real en vez de uno anticipado.
@@ -228,7 +278,10 @@ class ValidationProfileExecutor:
         elif script_execution_requested and execution_contract is not None:
             results.extend(
                 await self._run_declared_contract(
-                    execution_contract, script_targets, project_root
+                    execution_contract,
+                    script_targets,
+                    project_root,
+                    allow_project_code_execution=allow_project_code_execution,
                 )
             )
         elif script_execution_requested and not script_targets:
@@ -258,6 +311,7 @@ class ValidationProfileExecutor:
                         (script_target.as_posix(),),
                         [sys.executable, script_target.name],
                         project_root / script_target.parent,
+                        allow_project_code_execution=allow_project_code_execution,
                     )
                 )
 
@@ -268,6 +322,8 @@ class ValidationProfileExecutor:
         contract: ScriptExecutionContract,
         script_targets: list[Path],
         project_root: Path,
+        *,
+        allow_project_code_execution: bool,
     ) -> list[ValidationProfileResult]:
         """Invoke the entrypoint a work item declared, with its real args,
         instead of running every `.py` file blind (ADR 0027). A declared
@@ -325,6 +381,7 @@ class ValidationProfileExecutor:
                 (matched_target.as_posix(),),
                 [sys.executable, matched_target.name, *contract.args],
                 contract_cwd,
+                allow_project_code_execution=allow_project_code_execution,
             )
         ]
         contract_result = results[0]
@@ -632,13 +689,47 @@ class ValidationProfileExecutor:
                 return False
             current = current.parent
 
+    def _authority_blocked_result(
+        self,
+        profile: ValidationProfile,
+        targets: tuple[str, ...],
+        cwd: Path,
+    ) -> ValidationProfileResult:
+        """P3.4 (ADR 0034): the synthetic result `_execute()` returns instead
+        of running an execution-requiring profile when the caller disallows
+        project code execution (an imported project, until real process
+        isolation exists) -- same synthetic-`CommandResult` shape already
+        used for IMPORT_PREFLIGHT/CommandRejected, marked structurally via
+        `blocked_by_authority` rather than through the stderr text."""
+        return ValidationProfileResult(
+            profile=profile,
+            targets=targets,
+            result=CommandResult(
+                command=[],
+                cwd=str(cwd),
+                stdout="",
+                stderr=(
+                    "Ejecucion deshabilitada: el proyecto esta marcado como "
+                    "importado y todavia no existe una frontera de "
+                    "aislamiento real del proceso (P3.4)."
+                ),
+                return_code=1,
+                timed_out=False,
+            ),
+            blocked_by_authority=True,
+        )
+
     async def _execute(
         self,
         profile: ValidationProfile,
         targets: tuple[str, ...],
         command: list[str],
         cwd: Path,
+        *,
+        allow_project_code_execution: bool,
     ) -> ValidationProfileResult:
+        if profile not in NON_EXECUTING_PROFILES and not allow_project_code_execution:
+            return self._authority_blocked_result(profile, targets, cwd)
         try:
             result = await self.executor.execute(
                 command,

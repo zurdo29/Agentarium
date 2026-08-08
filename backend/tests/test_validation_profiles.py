@@ -1812,3 +1812,190 @@ async def test_script_execution_contract_resolves_produces_relative_to_entrypoin
     # script actually wrote.
     assert len(script_results) == 1
     assert script_results[0].passed, script_results[0].result.stderr
+
+
+# P3.4 (ADR 0034): allow_project_code_execution=False -- an imported
+# project's fail-closed gate. These pair with the SCRIPT_EXECUTION tests
+# above: same fixtures, only the new flag differs, so the delta is the gate
+# itself, not a different scenario.
+
+
+@pytest.mark.asyncio
+async def test_authority_gate_does_not_affect_non_executing_profiles(
+    tmp_path: Path,
+) -> None:
+    workspace_root = tmp_path / "workspaces"
+    materializer = WorkspaceMaterializer(workspace_root, _policy_path())
+    validator = ValidationProfileExecutor(workspace_root, _policy_path())
+    files = materializer.materialize(
+        "project",
+        "task",
+        1,
+        [
+            WorkspaceFileProposal(
+                path="tool.py",
+                content="def add(a, b):\n    return a + b\n",
+                purpose="Modulo auxiliar, sin pedir ejecucion",
+            ),
+            WorkspaceFileProposal(
+                path="data/config.json",
+                content='{"valido": true}',
+                purpose="Config",
+            ),
+        ],
+    )
+
+    results = await validator.validate(
+        "project",
+        files,
+        acceptance_criteria=["Sumar dos numeros correctamente"],
+        allow_project_code_execution=False,
+    )
+
+    assert not any(result.blocked_by_authority for result in results)
+    profiles = {result.profile for result in results}
+    assert ValidationProfile.WORKSPACE_INVENTORY in profiles
+    assert ValidationProfile.PYTHON_SYNTAX in profiles
+    assert ValidationProfile.JSON_SYNTAX in profiles
+    assert ValidationProfile.IMPORT_PREFLIGHT in profiles
+    assert all(
+        result.passed
+        for result in results
+        if result.profile
+        in {
+            ValidationProfile.WORKSPACE_INVENTORY,
+            ValidationProfile.PYTHON_SYNTAX,
+            ValidationProfile.JSON_SYNTAX,
+            ValidationProfile.IMPORT_PREFLIGHT,
+        }
+    )
+    # No SCRIPT_EXECUTION at all here -- nothing requested it, so there is
+    # nothing for the gate to block in the first place.
+    assert not any(
+        result.profile is ValidationProfile.SCRIPT_EXECUTION for result in results
+    )
+
+
+@pytest.mark.asyncio
+async def test_authority_gate_blocks_blind_script_execution_without_running_it(
+    tmp_path: Path,
+) -> None:
+    workspace_root = tmp_path / "workspaces"
+    materializer = WorkspaceMaterializer(workspace_root, _policy_path())
+    validator = ValidationProfileExecutor(workspace_root, _policy_path())
+    files = materializer.materialize(
+        "project",
+        "task",
+        1,
+        [
+            WorkspaceFileProposal(
+                path="tool.py",
+                content=(
+                    "with open('output.txt', 'w', encoding='utf-8') as handle:\n"
+                    "    handle.write('done')\n"
+                ),
+                purpose="Herramienta de linea de comandos",
+            ),
+        ],
+    )
+
+    results = await validator.validate(
+        "project",
+        files,
+        acceptance_criteria=["Ejecutar la herramienta de linea de comandos en Python"],
+        allow_project_code_execution=False,
+    )
+    script_result = next(
+        result
+        for result in results
+        if result.profile is ValidationProfile.SCRIPT_EXECUTION
+    )
+
+    assert script_result.blocked_by_authority
+    assert not script_result.passed
+    assert script_result.as_evidence()["blocked_by_authority"] is True
+    # The real proof, not just the structured flag: the script never ran.
+    assert list(workspace_root.rglob("output.txt")) == []
+
+
+@pytest.mark.asyncio
+async def test_authority_gate_blocks_declared_contract_execution_without_running_it(
+    tmp_path: Path,
+) -> None:
+    workspace_root = tmp_path / "workspaces"
+    materializer = WorkspaceMaterializer(workspace_root, _policy_path())
+    validator = ValidationProfileExecutor(workspace_root, _policy_path())
+    files = materializer.materialize(
+        "project",
+        "task",
+        1,
+        [
+            WorkspaceFileProposal(
+                path="tool.py",
+                content=(
+                    "with open('result.json', 'w', encoding='utf-8') as handle:\n"
+                    "    handle.write('{}')\n"
+                ),
+                purpose="Herramienta con contrato declarado",
+            ),
+        ],
+    )
+
+    results = await validator.validate(
+        "project",
+        files,
+        execution_contract=ScriptExecutionContract(
+            entrypoint="tool.py", produces="result.json"
+        ),
+        allow_project_code_execution=False,
+    )
+    script_results = [
+        result
+        for result in results
+        if result.profile is ValidationProfile.SCRIPT_EXECUTION
+    ]
+
+    assert len(script_results) == 1
+    assert script_results[0].blocked_by_authority
+    assert not script_results[0].passed
+    assert list(workspace_root.rglob("result.json")) == []
+
+
+@pytest.mark.asyncio
+async def test_authority_gate_reports_authority_not_missing_file(
+    tmp_path: Path,
+) -> None:
+    """Both reasons apply here (no .py delivered, and execution disabled) --
+    the authority reason must win, since it is the real and durable one:
+    even a delivery that did include a .py file would still be blocked."""
+    workspace_root = tmp_path / "workspaces"
+    materializer = WorkspaceMaterializer(workspace_root, _policy_path())
+    validator = ValidationProfileExecutor(workspace_root, _policy_path())
+    files = materializer.materialize(
+        "project",
+        "task",
+        1,
+        [
+            WorkspaceFileProposal(
+                path="README.md",
+                content="# Herramienta\nEjecuta con `python tool.py`.",
+                purpose="Documentacion",
+            ),
+        ],
+    )
+
+    results = await validator.validate(
+        "project",
+        files,
+        acceptance_criteria=["Herramienta de linea de comandos en Python"],
+        allow_project_code_execution=False,
+    )
+    script_result = next(
+        result
+        for result in results
+        if result.profile is ValidationProfile.SCRIPT_EXECUTION
+    )
+
+    assert script_result.blocked_by_authority
+    assert not script_result.passed
+    assert "no incluye" not in script_result.result.stderr

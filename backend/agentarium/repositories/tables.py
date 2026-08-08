@@ -19,6 +19,7 @@ class ProjectRow(Base):
     brief_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     current_milestone_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     progress_percent: Mapped[float] = mapped_column(Float, default=0)
+    imported: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
