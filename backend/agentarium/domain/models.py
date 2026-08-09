@@ -78,11 +78,15 @@ class Project(DomainModel):
     # `imported=True` -- see the explicit P4.1 criterion in PLANS.md.
     imported: bool = False
     # P4.1: where an imported project's workspace was copied from, and the
-    # commit that was verified consistent at import time -- display/audit
-    # only, `imported_source_path` is never read again to re-resolve or
-    # re-copy the original. `imported_commit` is what a future P4.2 needs
-    # to export a clean diff back against the real origin. Both `None` for
-    # every greenfield project, and for any project created before P4.1.
+    # commit that was verified consistent at import time. `imported_commit`
+    # is what P4.2 uses to export a clean diff/bundle back against the real
+    # origin. `imported_source_path` is never read again to re-resolve or
+    # re-copy the original's *contents* -- P4.2 does use its persisted
+    # string value defensively (isolation/export.py), to reject an export
+    # destination that lands inside the original repo, but that is a path
+    # comparison against an already-persisted value, never a filesystem
+    # read of (or write to) the path it names. Both `None` for every
+    # greenfield project, and for any project created before P4.1.
     imported_source_path: str | None = None
     imported_commit: str | None = None
     created_at: datetime = Field(default_factory=utc_now)

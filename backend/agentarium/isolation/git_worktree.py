@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from uuid import uuid4
@@ -291,3 +291,16 @@ class GitWorktreeIsolation:
                 yield
             finally:
                 file_lock.release()
+
+    def project_lock(self, project_id: str) -> AbstractAsyncContextManager[None]:
+        """Public entry point to the same per-project lock
+        prepare/collect/integrate/discard already share. P4.2's exporter
+        reads/writes the same repo concurrently with those and needs the
+        same serialization -- reusing this (asyncio.Lock + cross-process
+        FileLock, with a real thread-affinity subtlety documented on
+        `_project_lock` above) is deliberate, unlike the trivial
+        two-line path formulas isolation submodules otherwise duplicate
+        on purpose: a bug in a re-implementation could silently fail to
+        provide mutual exclusion. No caller of this today ever already
+        holds the lock itself, so there is no reentrancy/deadlock path."""
+        return self._project_lock(project_id)

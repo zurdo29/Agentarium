@@ -16,7 +16,8 @@ Este documento es la guía operativa del proyecto: qué garantías ya existen, q
 - `P3.3` — **CERRADO (7 de agosto de 2026).** Backend (`orchestration/engine.py`) **sin extracción** — sólo 4 métodos del `Orchestrator` se llaman desde fuera del archivo, y P4.1/P4.2/P4.4 no lo tocan; P4.3 ("recuperar artefacto"/"enviar candidato") ya llega vía `ApplicationService`, una frontera limpia y suficiente sin reorganizar el orchestrator interno -- resultado documentado, no un refactor pospuesto. Frontend: se extrajo `TaskDrawer` (`app/task-drawer.tsx`) con atadura escrita en el propio comentario de cabecera de `tests/home-work-items.test.mjs` (P3.1b), en diseño acíclico (`app/shared.tsx` como hoja pura para `ROLE_LABELS`/`dateLabel`/`Status`, evitando un ciclo runtime `page.tsx` ↔ `task-drawer.tsx`). El mecanismo de test (`tests/support/dom-setup.mjs`) pasó de transpilar un único archivo hardcodeado a un servidor Vite real (`createServer` + `ssrLoadModule`, ya devDependencies) que resuelve cualquier import relativo nuevo sin tocar el harness de nuevo. `contract_registry.py`/`test_type_contract.py` sin tocar (salida de `check-api-contract.mjs` idéntica antes/después); los 16 tests de interacción UI + SSR sin cambiar ninguna aserción salvo la que debía apuntar al archivo nuevo. `.\test.ps1` completo en verde (396 backend + 18 web). ADR 0033.
 - `P3.4` — **CERRADO (7 de agosto de 2026).** `Project.imported: bool` (default `False`, persistido vía una nueva `MigrationStep` sobre `projects`) declara si un proyecto viene de un repositorio importado. La frontera es por perfil de validación, no por proyecto entero: `ValidationProfileExecutor` declara explícitamente qué perfiles no ejecutan el contenido entregado (`NON_EXECUTING_PROFILES`) y bloquea fail-closed cualquier otro cuando `allow_project_code_execution` es falso -- un `Artifact` se materializa y conserva siempre, pero el código nunca corre; una tarea que sólo necesita validación estática no se rechaza por estar en un proyecto importado. `Orchestrator._evaluate_candidate` pasa esa autoridad a `validate()` desde el único punto donde convergen los 3 caminos reales de ejecución (worker autónomo, recuperar artefacto, candidato de operador) y, ante un bloqueo, termina la tarea en `FAILED` directo -- sin tester/revisor, sin retry ni split. `P4.1` (importar un repo) todavía no existe, así que nada hoy puede producir `imported=True` fuera de un test que lo construye directamente. ADR 0034.
 - `P4.1` — **CERRADO (8 de agosto de 2026).** `ApplicationService.import_project` clona/copia un repositorio o carpeta externa a `workspace_root/<project_id>/project` -- el mismo lugar que ya usa un proyecto greenfield, así que `GitWorktreeIsolation`/P3.4 siguen sin cambios de código. El origen se resuelve y se compara contra `workspace_root` para rechazar solapamiento en ambas direcciones; un origen sucio, con submódulos, o con un symlink/reparse point en el caso de carpeta plana se rechaza directo. `git clone --no-local` (nunca hardlinks) captura HEAD+limpio antes de clonar y vuelve a leer el origen justo después para detectar y rechazar un cambio a mitad de importación -- no pretende volver atómica la operación. `Project` gana `imported_source_path`/`imported_commit` (persistidos, sin backfill). Verificación manual con un repositorio real de tres commits en este equipo encontró y corrigió dos bugs reales: ninguna llamada git revisaba su código de salida (un fallo real dejaba el destino a medio construir y el siguiente comando reventaba varios cuadros después con un error de bajo nivel sin relación aparente -- ahora `_run_git_checked` lo convierte en un `ImportSourceError` limpio), y `git clone` por sí solo podía superar el límite de ruta de Windows antes de que la config de rutas largas llegara a aplicarse (ahora se pasa también como `-c` directo en la propia invocación del clone). Confirmado a mano: el origen queda byte a byte idéntico antes/después, y una tarea real contra el proyecto importado termina bloqueada por la compuerta de P3.4. ADR 0035.
-- Próximo paso: **P4.2 — exportar cambios de forma auditable** (P4.1 completo).
+- `P4.2` — **CERRADO (8 de agosto de 2026).** `ProjectExporter` exporta el rango `base..main` (`base` = `imported_commit` si el proyecto fue importado, raíz del repo si es greenfield) como `changes.patch`/`changes.bundle`, con `summary.json`/`summary.md` cruzados contra los eventos `change_set_integrated` reales (`consistency.matches_git_history`). Publicación fail-safe vía carpeta de staging + `publish()`/`discard()` explícitos, y una validación de alineación git/DB bajo el mismo `project_lock()` que ya usan `prepare/collect/integrate` -- ambas correcciones de una revisión de diseño antes de implementar. `imported_source_path` gana un uso nuevo puramente defensivo: comparar (nunca leer/escribir) el destino de exportación contra él. Verificado con 19 tests contra repos git reales y a mano en este equipo: `git am` con árbol idéntico byte a byte, `git fetch` del bundle con SHA idéntico, origen intacto en todo momento, y los dos rechazos limpios (rango vacío, proyecto sin repo todavía) confirmados a mano, no sólo por test. ADR 0036. **No cierra P4** -- P4.3 y P4.4 siguen abiertos.
+- Próximo paso: **P4.3 — centro de reparación** (P4.1 y P4.2 completos).
 
 > Regla de interpretación: una fase puede estar cerrada aunque su medición haya mostrado problemas. “Cerrar P1” significa que el baseline y las remediaciones previstas terminaron; no que el sistema haya alcanzado mágicamente cero errores.
 
@@ -358,6 +359,27 @@ repositorio real (no un fixture), en ADR 0035.
 - Nunca sobrescribir el repo origen silenciosamente.
 - Resumen de archivos, tests y validaciones asociados a la entrega.
 
+**Resultado (8 de agosto de 2026): CERRADO.** `ProjectExporter`
+(`isolation/export.py`) exporta el rango `base..main` del repo propio del
+proyecto (`base` = `imported_commit` si fue importado, raíz del repo si es
+greenfield) como `changes.patch` (`git format-patch --binary --stdout`,
+bytes crudos sin decodificar) y/o `changes.bundle` (`git bundle create`),
+junto a `summary.json`/`summary.md` cruzados contra los eventos
+`change_set_integrated` reales. Publicación fail-safe (carpeta de staging,
+`publish()`/`discard()` explícitos, `project_exported` sólo tras éxito) y
+una validación de alineación git/DB bajo el mismo lock que ya usan
+`prepare/collect/integrate` -- ambas correcciones de una revisión de
+diseño antes de implementar, no encontradas después. `imported_source_path`
+gana un único uso nuevo puramente defensivo: comparar (nunca leer/escribir)
+el destino de exportación contra él. Verificado con 19 tests contra repos
+git reales y a mano en este equipo: `git am` de un clon fresco con árbol
+idéntico byte a byte (no SHA de commit -- `git am` linealiza, nunca
+reproduce un merge `--no-ff`), `git fetch` del bundle en un clon separado
+con SHA idéntico, origen intacto en todo momento, y los dos rechazos
+limpios (rango vacío, proyecto sin repo todavía) confirmados a mano.
+Detalle completo en ADR 0036. **No cierra P4**: P4.3 (centro de
+reparación) y P4.4 (entrega y auditoría) siguen abiertos.
+
 ### P4.3 — centro de reparación
 
 - Ver tareas fallidas y causa estructurada.
@@ -450,7 +472,7 @@ Después: P3.3 modularización selectiva → P3.4 gate de autoridad → P4 repos
 
 Usar este texto literalmente como punto de partida:
 
-> Lee `CLAUDE.md`/las instrucciones del repo y `PLANS.md` completos. Verifica que estás sobre `main` actualizado y limpio. No reabras P0, P1, P2, P3.1 (a+b), P3.2, P3.3, P3.4 ni P4.1 salvo una regresión demostrable o un requisito concreto de P4.2+ que lo justifique (ver el disparador de revisión en ADR 0033 para el caso de backend, la condición futura en ADR 0034 para habilitar ejecución aislada, y el límite de carpetas planas sin snapshot transaccional en ADR 0035). Empieza por **P4.2** — exportar cambios de forma auditable -- ver la sección P4.2 del roadmap para el alcance ya definido; `imported_commit` (P4.1/ADR 0035) ya está disponible para producir el diff contra el origen real.
+> Lee `CLAUDE.md`/las instrucciones del repo y `PLANS.md` completos. Verifica que estás sobre `main` actualizado y limpio. No reabras P0, P1, P2, P3.1 (a+b), P3.2, P3.3, P3.4, P4.1 ni P4.2 salvo una regresión demostrable o un requisito concreto de P4.3+ que lo justifique (ver el disparador de revisión en ADR 0033 para el caso de backend, la condición futura en ADR 0034 para habilitar ejecución aislada, el límite de carpetas planas sin snapshot transaccional en ADR 0035, y la falta de tracking incremental "desde la última exportación" en ADR 0036). Empieza por **P4.3** — centro de reparación -- ver la sección P4.3 del roadmap para el alcance ya definido; P4.1 (importar) y P4.2 (exportar) ya están cerrados, así que un work item fallido en un proyecto real ya tiene dónde aterrizar la reparación.
 
 ---
 
