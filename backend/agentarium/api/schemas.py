@@ -19,14 +19,16 @@ def _validate_absolute_source_path(value: str) -> str:
     # (execution/contracts.py) on purpose -- that one guards paths meant to
     # stay inside the workspace; this one guards a path meant to live
     # outside it. A relative path here is ambiguous (relative to the
-    # backend process's cwd is not an acceptable answer), and this is the
-    # first field in the API that is ever supposed to reference something
-    # outside workspace_root.
+    # backend process's cwd is not an acceptable answer). Reused as-is by
+    # P4.2's ExportProjectRequest.destination -- the same "absolute, lives
+    # outside workspace_root" shape, just on the output side instead of
+    # the input side; messages stay field-name-agnostic on purpose so
+    # they read correctly for either.
     raw = value.strip()
     if not raw:
-        raise ValueError("source_path cannot be blank")
+        raise ValueError("path cannot be blank")
     if not (PureWindowsPath(raw).is_absolute() or PurePosixPath(raw).is_absolute()):
-        raise ValueError("source_path must be an absolute path")
+        raise ValueError("path must be an absolute path")
     return raw
 
 
@@ -48,6 +50,31 @@ class ImportProjectRequest(BaseModel):
     @classmethod
     def validate_source_path(cls, value: str) -> str:
         return _validate_absolute_source_path(value)
+
+
+def _default_export_formats() -> list[Literal["patch", "bundle"]]:
+    return ["patch", "bundle"]
+
+
+class ExportProjectRequest(BaseModel):
+    destination: str = Field(min_length=1, max_length=1000)
+    formats: list[Literal["patch", "bundle"]] = Field(default_factory=_default_export_formats)
+
+    @field_validator("destination")
+    @classmethod
+    def validate_destination(cls, value: str) -> str:
+        # Same guard as ImportProjectRequest.source_path -- reused
+        # directly rather than re-derived: this is the same "absolute,
+        # meant to live outside workspace_root" shape, just on the
+        # output side of P4.2 instead of the input side of P4.1.
+        return _validate_absolute_source_path(value)
+
+    @field_validator("formats")
+    @classmethod
+    def validate_formats(cls, value: list[str]) -> list[str]:
+        if not value:
+            raise ValueError("formats cannot be empty")
+        return value
 
 
 class ResolveApprovalRequest(BaseModel):

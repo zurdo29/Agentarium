@@ -13,7 +13,7 @@ import httpx
 import typer
 
 from agentarium.config.settings import get_settings, project_root
-from agentarium.isolation import ImportSourceError
+from agentarium.isolation import ExportError, ImportSourceError
 from agentarium.repositories.backup import (
     BackupValidationError,
     MigrationFailedError,
@@ -195,6 +195,45 @@ def import_project(
         typer.echo(str(exc), err=True)
         raise typer.Exit(10) from exc
     typer.echo(json.dumps(project.model_dump(mode="json"), indent=2, ensure_ascii=False))
+
+
+@project_app.command("export")
+def export_project(
+    project_id: Annotated[str, typer.Argument(help="ID del proyecto.")],
+    output: Annotated[
+        Path | None,
+        typer.Option(
+            "--output", "-o", resolve_path=True, help="Carpeta donde escribir el patch/bundle."
+        ),
+    ] = None,
+    formats: Annotated[
+        list[str] | None,
+        typer.Option("--format", "-f", help="patch y/o bundle; repetible. Por defecto, ambos."),
+    ] = None,
+    dry_run: Annotated[
+        bool,
+        typer.Option("--dry-run", help="Mostrar qué se exportaría, sin escribir nada."),
+    ] = False,
+) -> None:
+    """Exporta el historial propio del proyecto como patch y/o bundle."""
+    resolved_formats = frozenset(formats) if formats else frozenset({"patch", "bundle"})
+    invalid = resolved_formats - {"patch", "bundle"}
+    if invalid:
+        raise typer.BadParameter(f"Formato desconocido: {sorted(invalid)}")
+    service = _service()
+    try:
+        if dry_run:
+            result = asyncio.run(service.export_preview(project_id))
+        else:
+            if output is None:
+                raise typer.BadParameter("--output es obligatorio salvo con --dry-run")
+            result = asyncio.run(
+                service.export_project(project_id, str(output), formats=resolved_formats)
+            )
+    except ExportError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(11) from exc
+    typer.echo(json.dumps(result, indent=2, ensure_ascii=False))
 
 
 @project_app.command("run")

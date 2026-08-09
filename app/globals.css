@@ -846,6 +846,34 @@ textarea:focus-visible {
   word-break: break-all;
 }
 
+.project-export {
+  background: rgb(255 255 255 / 4%);
+  border: 1px solid rgb(255 255 255 / 8%);
+  border-radius: 18px;
+  color: #f6f3e9;
+  margin-bottom: 28px;
+  padding: 24px 28px;
+}
+
+.export-format-options {
+  display: flex;
+  gap: 18px;
+  margin: 4px 0 14px;
+}
+
+.export-format-option {
+  align-items: center;
+  color: #dce7e1;
+  display: inline-flex;
+  font-size: 12px;
+  gap: 6px;
+}
+
+.export-actions {
+  display: flex;
+  gap: 10px;
+}
+
 .primary-button,
 .control-button {
   align-items: center;

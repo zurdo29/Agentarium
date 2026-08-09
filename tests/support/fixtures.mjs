@@ -231,6 +231,63 @@ export function buildSourceInspection(overrides = {}) {
   };
 }
 
+export function buildExportSummary(overrides = {}) {
+  const { project, range, ...rest } = overrides;
+  return {
+    project: {
+      id: "project-1",
+      title: "Proyecto de prueba",
+      goal: "Meta de prueba para P3.1b.",
+      imported: false,
+      imported_source_path: null,
+      imported_commit: null,
+      ...project,
+    },
+    range: {
+      base_commit: "a".repeat(40),
+      base_is_import_commit: false,
+      head_commit: "b".repeat(40),
+      commit_count: 2,
+      commits: [
+        {
+          commit: "b".repeat(40),
+          author: "Agentarium",
+          authored_at: "2026-08-01T00:10:00Z",
+          subject: "Merge de la tarea de prueba",
+        },
+      ],
+      files_changed: ["result.py"],
+      ...range,
+    },
+    delivered_work_items: [
+      {
+        work_item_id: "task-1",
+        title: "Tarea de prueba",
+        status: "completed",
+        branch: "task/task-1",
+        candidate_commit: "c".repeat(40),
+        integration_commit: "b".repeat(40),
+        files: ["result.py"],
+        in_exported_range: true,
+        tester_passed: true,
+        tester_summary: "Comprobaciones automáticas superadas.",
+        review_verdict: "approved",
+      },
+    ],
+    totals: {
+      tasks_completed: 1,
+      tasks_rejected: 0,
+      retries: 0,
+    },
+    consistency: {
+      integration_events_total: 1,
+      integration_events_matched_in_git_history: 1,
+      matches_git_history: true,
+    },
+    ...rest,
+  };
+}
+
 export function buildProviderOverview(overrides = {}) {
   return {
     active_provider: "mock",

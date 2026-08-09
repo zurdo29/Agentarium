@@ -1,6 +1,7 @@
 "use client";
 
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
+import { ExportProject } from "./export-project";
 import { ImportProject } from "./import-project";
 import { ROLE_LABELS, Status, dateLabel, statusLabel } from "./shared";
 import { TaskDrawer } from "./task-drawer";
@@ -37,6 +38,55 @@ export type SourceInspection = {
   has_submodules: boolean;
   file_count_estimate: number | null;
   size_bytes_estimate: number | null;
+};
+
+export type ExportSummary = {
+  project: {
+    id: string;
+    title: string;
+    goal: string;
+    imported: boolean;
+    imported_source_path: string | null;
+    imported_commit: string | null;
+  };
+  range: {
+    base_commit: string;
+    base_is_import_commit: boolean;
+    head_commit: string;
+    commit_count: number;
+    commits: Array<{
+      commit: string;
+      author: string;
+      authored_at: string;
+      subject: string;
+    }>;
+    files_changed: string[];
+  };
+  delivered_work_items: Array<{
+    work_item_id: string;
+    title: string | null;
+    status: string | null;
+    branch: string | null;
+    candidate_commit: string | null;
+    integration_commit: string | null;
+    files: string[];
+    in_exported_range: boolean;
+    tester_passed: boolean | null;
+    tester_summary: string | null;
+    review_verdict: string | null;
+  }>;
+  totals: Record<string, number>;
+  consistency: {
+    integration_events_total: number;
+    integration_events_matched_in_git_history: number;
+    matches_git_history: boolean;
+  };
+  // Only present on the POST /export response, not on the read-only
+  // /export/preview response -- see ApplicationService.export_project()
+  // vs. export_preview() on the backend.
+  destination?: string;
+  patch_path?: string | null;
+  bundle_path?: string | null;
 };
 
 type Brief = {
@@ -486,6 +536,12 @@ export default function Home() {
   const [importInspecting, setImportInspecting] = useState(false);
   const [importGoal, setImportGoal] = useState("");
   const [importTitle, setImportTitle] = useState("");
+  const [exportDestination, setExportDestination] = useState("");
+  const [exportFormats, setExportFormats] = useState({ patch: true, bundle: true });
+  const [exportPreview, setExportPreview] = useState<ExportSummary | null>(null);
+  const [exportPreviewing, setExportPreviewing] = useState(false);
+  const [exportResult, setExportResult] = useState<ExportSummary | null>(null);
+  const [exporting, setExporting] = useState(false);
 
   const selectedTask = useMemo(
     () =>
@@ -669,6 +725,70 @@ export default function Home() {
       );
     } finally {
       setLoading(false);
+    }
+  }
+
+  function updateExportDestination(value: string) {
+    setExportDestination(value);
+    // Same reasoning as updateImportPath: a preview/result generated for
+    // a since-edited destination must not linger as if it still applied.
+    setExportPreview(null);
+    setExportResult(null);
+  }
+
+  async function previewExport() {
+    if (detail.project.id === DEMO_ID) {
+      setError("Inicia la API para exportar un proyecto real.");
+      return;
+    }
+    setExportPreviewing(true);
+    setError(null);
+    try {
+      const preview = await request<ExportSummary>(
+        `/projects/${detail.project.id}/export/preview`,
+      );
+      setExportPreview(preview);
+      setExportResult(null);
+    } catch (reason) {
+      setError(
+        reason instanceof Error
+          ? reason.message
+          : "No fue posible previsualizar la exportación.",
+      );
+    } finally {
+      setExportPreviewing(false);
+    }
+  }
+
+  async function exportProject() {
+    if (detail.project.id === DEMO_ID) {
+      setError("Inicia la API para exportar un proyecto real.");
+      return;
+    }
+    const formats = [
+      ...(exportFormats.patch ? ["patch"] : []),
+      ...(exportFormats.bundle ? ["bundle"] : []),
+    ];
+    if (!exportDestination.trim() || formats.length === 0) return;
+    setExporting(true);
+    setError(null);
+    try {
+      const result = await request<ExportSummary>(
+        `/projects/${detail.project.id}/export`,
+        {
+          method: "POST",
+          body: JSON.stringify({ destination: exportDestination.trim(), formats }),
+        },
+      );
+      setExportResult(result);
+    } catch (reason) {
+      setError(
+        reason instanceof Error
+          ? reason.message
+          : "No fue posible exportar el proyecto.",
+      );
+    } finally {
+      setExporting(false);
     }
   }
 
@@ -992,6 +1112,17 @@ export default function Home() {
             onControl={controlProject}
             onSelectTask={setSelectedTaskId}
             onOpenApprovals={() => setView("approvals")}
+            exportDestination={exportDestination}
+            onExportDestinationChange={updateExportDestination}
+            exportFormats={exportFormats}
+            onExportFormatsChange={setExportFormats}
+            exportPreview={exportPreview}
+            exportPreviewing={exportPreviewing}
+            onPreviewExport={previewExport}
+            exportResult={exportResult}
+            exporting={exporting}
+            onExportProject={exportProject}
+            connected={connected}
           />
         )}
 
@@ -1439,6 +1570,17 @@ function ProjectView({
   onControl,
   onSelectTask,
   onOpenApprovals,
+  exportDestination,
+  onExportDestinationChange,
+  exportFormats,
+  onExportFormatsChange,
+  exportPreview,
+  exportPreviewing,
+  onPreviewExport,
+  exportResult,
+  exporting,
+  onExportProject,
+  connected,
 }: {
   detail: ProjectDetail;
   events: EventRecord[];
@@ -1448,6 +1590,17 @@ function ProjectView({
   onControl: (action: ProjectAction) => Promise<void>;
   onSelectTask: (id: string) => void;
   onOpenApprovals: () => void;
+  exportDestination: string;
+  onExportDestinationChange: (value: string) => void;
+  exportFormats: { patch: boolean; bundle: boolean };
+  onExportFormatsChange: (formats: { patch: boolean; bundle: boolean }) => void;
+  exportPreview: ExportSummary | null;
+  exportPreviewing: boolean;
+  onPreviewExport: () => Promise<void>;
+  exportResult: ExportSummary | null;
+  exporting: boolean;
+  onExportProject: () => Promise<void>;
+  connected: boolean;
 }) {
   const project = detail.project;
   const pending = detail.approvals.filter(
@@ -1533,6 +1686,20 @@ function ProjectView({
           </button>
         </div>
       </section>
+
+      <ExportProject
+        destination={exportDestination}
+        onDestinationChange={onExportDestinationChange}
+        formats={exportFormats}
+        onFormatsChange={onExportFormatsChange}
+        preview={exportPreview}
+        previewing={exportPreviewing}
+        onPreview={onPreviewExport}
+        result={exportResult}
+        exporting={exporting}
+        onExport={onExportProject}
+        connected={connected}
+      />
 
       <section className="project-progress-bar">
         <div>

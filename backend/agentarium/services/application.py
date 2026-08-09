@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from pathlib import Path
 from typing import Any
 
@@ -25,11 +26,18 @@ from agentarium.execution import (
     build_runtime_capabilities,
 )
 from agentarium.execution.scheduler import ResourceScheduler
-from agentarium.isolation import GitWorktreeIsolation, ImportSource, SourceInspection
+from agentarium.isolation import (
+    ExportManifest,
+    GitWorktreeIsolation,
+    ImportSource,
+    ProjectExporter,
+    SourceInspection,
+)
 from agentarium.llm import ProviderRegistry, ProviderSelection, ProviderSelectionStore
 from agentarium.memory import ContextBuilder
 from agentarium.orchestration import Orchestrator
 from agentarium.repositories import Database, Repository
+from agentarium.services.export_summary import build_export_summary, render_export_summary_markdown
 
 
 class ApplicationService:
@@ -45,6 +53,7 @@ class ApplicationService:
         provider_selection: ProviderSelectionStore,
         preview: WorkspacePreview,
         import_source: ImportSource,
+        exporter: ProjectExporter,
     ) -> None:
         self.settings = settings
         self.database = database
@@ -56,6 +65,7 @@ class ApplicationService:
         self.provider_selection = provider_selection
         self.preview = preview
         self.import_source = import_source
+        self.exporter = exporter
         self.approval_policy = ApprovalPolicy()
 
     def ensure_ready(self) -> None:
@@ -166,6 +176,110 @@ class ApplicationService:
                 )
             )
         return project
+
+    async def export_preview(self, project_id: str) -> dict[str, Any]:
+        """P4.2. Read-only, writes nothing -- `exporter.preview()` never
+        validates git/DB alignment either, since there is nothing to
+        publish from a preview for a momentarily-stale read to
+        endanger."""
+        project = self.repository.get_project(project_id)
+        manifest = await self.exporter.preview(project_id, base_commit=project.imported_commit)
+        integration_events = self._integration_events(project_id)
+        return self._export_summary_payload(project, manifest, integration_events)
+
+    async def export_project(
+        self,
+        project_id: str,
+        destination: str,
+        *,
+        formats: frozenset[str] = frozenset({"patch", "bundle"}),
+    ) -> dict[str, Any]:
+        """P4.2. `exporter.export()` already validates that git and the
+        `change_set_integrated` event stream agree on the current HEAD
+        (under its own lock) before writing anything -- this method's
+        own job is the two steps around that: fetch the DB facts the
+        exporter needs as plain parameters (it never queries the
+        repository itself), then, once a staged export exists, write the
+        summary into the same staging directory and only then publish.
+        Any failure between a successful `export()` and `publish()` --
+        most likely the summary write itself -- discards the whole
+        staged export instead of leaving a half-written directory under
+        its public name; `project_exported` is only ever emitted after
+        `publish()` actually succeeds."""
+        project = self.repository.get_project(project_id)
+        integration_events = self._integration_events(project_id)
+        last_known_integration_commit = (
+            integration_events[-1]["metadata"]["integration_commit"]
+            if integration_events
+            else None
+        )
+        pending = await self.exporter.export(
+            project_id,
+            Path(destination),
+            base_commit=project.imported_commit,
+            imported_source_path=project.imported_source_path,
+            last_known_integration_commit=last_known_integration_commit,
+            has_any_integration_event=bool(integration_events),
+            formats=formats,
+        )
+        try:
+            payload = self._export_summary_payload(project, pending.manifest, integration_events)
+            await asyncio.to_thread(_write_json, pending.staging_dir / "summary.json", payload)
+            await asyncio.to_thread(
+                (pending.staging_dir / "summary.md").write_text,
+                render_export_summary_markdown(payload),
+                encoding="utf-8",
+            )
+            result = await self.exporter.publish(pending)
+        except Exception:
+            await self.exporter.discard(pending)
+            raise
+
+        self.repository.add_event(
+            ExecutionEvent(
+                project_id=project.id,
+                action="project_exported",
+                message=f"Cambios exportados a {result.destination} "
+                f"({', '.join(sorted(formats))}).",
+                correlation_id=new_id(),
+                metadata={
+                    "destination": str(result.destination),
+                    "base_commit": result.manifest.base_commit,
+                    "head_commit": result.manifest.head_commit,
+                    "commit_count": result.manifest.commit_count,
+                    "formats": sorted(formats),
+                },
+            )
+        )
+        return {
+            **payload,
+            "destination": str(result.destination),
+            "patch_path": str(result.patch_path) if result.patch_path else None,
+            "bundle_path": str(result.bundle_path) if result.bundle_path else None,
+        }
+
+    def _integration_events(self, project_id: str) -> list[dict[str, Any]]:
+        return [
+            event
+            for event in self.repository.list_events(project_id, limit=5000)
+            if event["action"] == "change_set_integrated"
+        ]
+
+    def _export_summary_payload(
+        self,
+        project: Project,
+        manifest: ExportManifest,
+        integration_events: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        return build_export_summary(
+            project=project,
+            work_items=self.repository.list_work_items(project.id),
+            reviews=self.repository.list_reviews(project.id),
+            test_reports=self.repository.list_test_reports(project.id),
+            metrics=self.repository.metrics(project.id),
+            integration_events=integration_events,
+            manifest=manifest,
+        )
 
     async def run_project(self, project_id: str) -> Project:
         return await self.orchestrator.run_project(project_id)
@@ -495,6 +609,14 @@ class ApplicationService:
         return title[:80] + ("…" if len(words) > 9 else "")
 
 
+def _write_json(path: Path, payload: dict[str, Any]) -> None:
+    # Deliberately not benchmarks.ledger.dump_json_report: benchmarks
+    # already depends on services (a BenchmarkRunner takes an
+    # ApplicationService), so services importing from benchmarks would
+    # be a new dependency edge in the opposite direction.
+    path.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+
+
 def build_application(
     settings: Settings | None = None,
     database: Database | None = None,
@@ -533,6 +655,7 @@ def build_application(
         Path(resolved_settings.config_root) / "policies" / "security.yaml",
     )
     import_source = ImportSource(resolved_settings.workspace_root)
+    exporter = ProjectExporter(resolved_settings.workspace_root, isolation)
     orchestrator = Orchestrator(
         repository,
         runner,
@@ -553,4 +676,5 @@ def build_application(
         provider_selection,
         preview,
         import_source,
+        exporter,
     )

@@ -14,7 +14,7 @@ from fastapi.responses import FileResponse, RedirectResponse, StreamingResponse
 
 from agentarium.domain.enums import ApprovalStatus
 from agentarium.execution import PreviewUnavailable, WorkspacePreview
-from agentarium.isolation import ImportSourceError
+from agentarium.isolation import ExportError, ImportSourceError
 from agentarium.repositories.repository import NotFoundError
 from agentarium.services import ApplicationService, build_application
 
@@ -22,6 +22,7 @@ from .schemas import (
     CreateApprovalRequest,
     CreateProjectRequest,
     EscalateRequest,
+    ExportProjectRequest,
     ImportProjectRequest,
     InspectImportRequest,
     PriorityRequest,
@@ -79,6 +80,10 @@ def create_app(service: ApplicationService | None = None) -> FastAPI:
 
     @api.exception_handler(ImportSourceError)
     async def import_source_error_handler(_: Request, exc: ImportSourceError) -> Any:
+        return _error_response(409, str(exc))
+
+    @api.exception_handler(ExportError)
+    async def export_error_handler(_: Request, exc: ExportError) -> Any:
         return _error_response(409, str(exc))
 
     @api.get("/api/health")
@@ -154,6 +159,16 @@ def create_app(service: ApplicationService | None = None) -> FastAPI:
     @api.get("/api/projects/{project_id}")
     async def get_project(project_id: str) -> dict[str, Any]:
         return resolved_service.project_detail(project_id)
+
+    @api.get("/api/projects/{project_id}/export/preview")
+    async def export_preview(project_id: str) -> dict[str, Any]:
+        return await resolved_service.export_preview(project_id)
+
+    @api.post("/api/projects/{project_id}/export", status_code=201)
+    async def export_project(project_id: str, body: ExportProjectRequest) -> dict[str, Any]:
+        return await resolved_service.export_project(
+            project_id, body.destination, formats=frozenset(body.formats)
+        )
 
     @api.get("/api/projects/{project_id}/preview", include_in_schema=False)
     async def redirect_project_preview(project_id: str) -> RedirectResponse:
