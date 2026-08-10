@@ -295,10 +295,12 @@ def create_app(service: ApplicationService | None = None) -> FastAPI:
 
     @api.post("/api/approvals/{approval_id}/resolve")
     async def resolve_approval(approval_id: str, body: ResolveApprovalRequest) -> dict[str, Any]:
-        approval = resolved_service.repository.resolve_approval(
-            approval_id, body.status, body.comments
-        )
+        approval = resolved_service.resolve_approval(approval_id, body.status, body.comments)
         return approval.model_dump(mode="json")
+
+    @api.get("/api/repair-center")
+    async def repair_center() -> list[dict[str, Any]]:
+        return resolved_service.repair_center()
 
     @api.get("/api/projects/{project_id}/events")
     async def list_events(

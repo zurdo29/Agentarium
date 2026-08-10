@@ -560,8 +560,126 @@ class ApplicationService:
                 action="task_escalated",
                 message=reason,
                 new_state=ProjectStatus.AWAITING_APPROVAL.value,
+                metadata={"approval_id": approval.id},
             )
         )
+        return approval
+
+    def repair_center(self) -> list[dict[str, Any]]:
+        """P4.3a. Cross-project read-aggregation only -- same loop shape
+        as /api/dashboard's own `blocked` counter, never a query per
+        item. Four causes: FAILED/CHANGES_REQUESTED (what retry/recover/
+        candidate already accept), "exhausted" (a READY item whose
+        attempt_count already reached max_attempts -- reachable after
+        Repository.recover_interrupted() resets a crashed item to READY
+        without checking budget, and invisible everywhere before this),
+        and "blocked" (a BLOCKED item whose dependency is itself FAILED/
+        CANCELLED, so it can never clear on its own -- informational
+        only, no action accepts a BLOCKED item directly; the fix is to
+        repair the blocking dependency instead)."""
+        rows: list[dict[str, Any]] = []
+        for project in self.repository.list_projects():
+            work_items = self.repository.list_work_items(project.id)
+            by_id = {item.id: item for item in work_items}
+            candidates: list[tuple[WorkItem, str, WorkItem | None]] = []
+            for item in work_items:
+                if item.status in {WorkItemStatus.FAILED, WorkItemStatus.CHANGES_REQUESTED}:
+                    candidates.append((item, item.status.value, None))
+                elif (
+                    item.status is WorkItemStatus.READY
+                    and item.attempt_count >= item.max_attempts
+                ):
+                    candidates.append((item, "exhausted", None))
+                elif item.status is WorkItemStatus.BLOCKED:
+                    blocking = next(
+                        (
+                            by_id[dep_id]
+                            for dep_id in item.dependency_ids
+                            if dep_id in by_id
+                            and by_id[dep_id].status
+                            in {WorkItemStatus.FAILED, WorkItemStatus.CANCELLED}
+                        ),
+                        None,
+                    )
+                    if blocking is not None:
+                        candidates.append((item, "blocked", blocking))
+            if not candidates:
+                continue
+            latest_reasons = {
+                review.work_item_id: review.reasons
+                for review in self.repository.list_reviews(project.id)
+            }
+            latest_summary = {
+                report.work_item_id: report.summary
+                for report in self.repository.list_test_reports(project.id)
+            }
+            for item, cause, blocking in candidates:
+                rows.append(
+                    {
+                        "work_item_id": item.id,
+                        "title": item.title,
+                        "status": item.status.value,
+                        "cause": cause,
+                        "project_id": project.id,
+                        "project_title": project.title,
+                        "last_error": item.last_error,
+                        "attempt_count": item.attempt_count,
+                        "max_attempts": item.max_attempts,
+                        "risk": item.risk.value,
+                        "updated_at": item.updated_at.isoformat(),
+                        "blocking_dependency_id": blocking.id if blocking else None,
+                        "blocking_dependency_title": blocking.title if blocking else None,
+                        "blocking_dependency_status": (
+                            blocking.status.value if blocking else None
+                        ),
+                        "latest_review_reasons": latest_reasons.get(item.id, []),
+                        "latest_test_summary": latest_summary.get(item.id),
+                    }
+                )
+        rows.sort(key=lambda row: row["updated_at"], reverse=True)
+        return rows
+
+    def resolve_approval(
+        self, approval_id: str, status: ApprovalStatus, comments: str | None
+    ) -> ApprovalRequest:
+        """P4.3a. `approval.work_item_id` alone is not authorization to
+        retry -- a non-escalation approval could carry one incidentally.
+        Only a `task_escalated` event whose own metadata names this exact
+        approval is a structured enough link to justify preparing a
+        retry; escalate_work_item is the only place that ever writes it.
+        Rejecting never retries or resumes."""
+        approval = self.repository.resolve_approval(approval_id, status, comments)
+        if status is ApprovalStatus.APPROVED:
+            escalation = next(
+                (
+                    event
+                    for event in self.repository.list_events(approval.project_id, limit=5000)
+                    if event["action"] == "task_escalated"
+                    and (event.get("metadata") or {}).get("approval_id") == approval.id
+                ),
+                None,
+            )
+            if escalation is not None:
+                work_item_id = escalation.get("work_item_id")
+                if work_item_id:
+                    item = self.repository.get_work_item(work_item_id)
+                    retryable = item.status in {
+                        WorkItemStatus.FAILED,
+                        WorkItemStatus.CHANGES_REQUESTED,
+                    } or (
+                        item.status is WorkItemStatus.READY
+                        and item.attempt_count >= item.max_attempts
+                    )
+                    if retryable:
+                        self.retry_work_item(item.id)
+                remaining = self.repository.list_approvals(
+                    approval.project_id, ApprovalStatus.PENDING
+                )
+                if not remaining:
+                    try:
+                        self.resume_project(approval.project_id)
+                    except ValueError:
+                        pass
         return approval
 
     def project_detail(self, project_id: str) -> dict[str, Any]:
