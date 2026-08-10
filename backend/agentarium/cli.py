@@ -48,6 +48,8 @@ benchmark_app = typer.Typer(
 app.add_typer(benchmark_app, name="benchmark")
 db_app = typer.Typer(help="Mantenimiento de la base de datos.", no_args_is_help=True)
 app.add_typer(db_app, name="db")
+repair_app = typer.Typer(help="Ver y reparar tareas fallidas.", no_args_is_help=True)
+app.add_typer(repair_app, name="repair")
 
 
 _StartupFailure = MigrationFailedError | SchemaTooNewError | BackupValidationError
@@ -429,6 +431,109 @@ def _project_detail(project_id: str) -> dict[str, Any]:
         return dict(response.json())
     except httpx.HTTPError:
         return _service().project_detail(project_id)
+
+
+def _repair_center() -> list[dict[str, Any]]:
+    """Same API-preferring/SQLite-fallback shape as `_project_detail`."""
+    settings = get_settings()
+    url = f"http://{settings.api_host}:{settings.api_port}/api/repair-center"
+    try:
+        response = httpx.get(url, timeout=1.0)
+        response.raise_for_status()
+        return list(response.json())
+    except httpx.HTTPError:
+        return _service().repair_center()
+
+
+@repair_app.command("list")
+def repair_list() -> None:
+    """Lista tareas que necesitan reparación en todos los proyectos."""
+    typer.echo(json.dumps(_repair_center(), indent=2, ensure_ascii=False))
+
+
+@repair_app.command("retry")
+def repair_retry(
+    work_item_id: Annotated[str, typer.Argument(help="ID del work item.")],
+) -> None:
+    """Reintenta un work item fallido, agotado o con cambios solicitados."""
+    item = _service().retry_work_item(work_item_id)
+    typer.echo(json.dumps(item.model_dump(mode="json"), indent=2, ensure_ascii=False))
+
+
+@repair_app.command("recover")
+def repair_recover(
+    work_item_id: Annotated[str, typer.Argument(help="ID del work item.")],
+    artifact_id: Annotated[str, typer.Argument(help="ID del artefacto a recuperar.")],
+) -> None:
+    """Reevalúa un artefacto ya producido como si fuera un candidato nuevo."""
+    item = asyncio.run(_service().recover_artifact(work_item_id, artifact_id))
+    typer.echo(json.dumps(item.model_dump(mode="json"), indent=2, ensure_ascii=False))
+
+
+@repair_app.command("rework")
+def repair_rework(
+    work_item_id: Annotated[str, typer.Argument(help="ID del work item completado.")],
+    reason: Annotated[str, typer.Argument(help="Motivo de la revisión.")],
+    acceptance_criteria: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--acceptance-criteria", "-a", help="Criterio adicional; repetible."
+        ),
+    ] = None,
+) -> None:
+    """Abre una revisión nueva encadenada a un work item ya completado."""
+    item = _service().rework_work_item(work_item_id, reason, acceptance_criteria)
+    typer.echo(json.dumps(item.model_dump(mode="json"), indent=2, ensure_ascii=False))
+
+
+@repair_app.command("escalate")
+def repair_escalate(
+    work_item_id: Annotated[str, typer.Argument(help="ID del work item.")],
+    reason: Annotated[str, typer.Argument(help="Motivo de la escalación.")],
+) -> None:
+    """Escala un work item a una decisión humana."""
+    approval = _service().escalate_work_item(work_item_id, reason)
+    typer.echo(json.dumps(approval.model_dump(mode="json"), indent=2, ensure_ascii=False))
+
+
+@repair_app.command("candidate")
+def repair_candidate(
+    work_item_id: Annotated[str, typer.Argument(help="ID del work item.")],
+    payload_file: Annotated[
+        Path,
+        typer.Argument(
+            exists=True,
+            file_okay=True,
+            dir_okay=False,
+            resolve_path=True,
+            help="Archivo JSON con la forma de SubmitCandidateRequest.",
+        ),
+    ],
+) -> None:
+    """Envía un candidato armado por un operador humano (título, resumen y
+    archivos) como si fuera un artefacto producido por un agente."""
+    from pydantic import ValidationError
+
+    from agentarium.api.schemas import SubmitCandidateRequest
+
+    try:
+        raw = json.loads(payload_file.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise typer.BadParameter(f"{payload_file} no es JSON válido: {exc}") from exc
+    try:
+        body = SubmitCandidateRequest.model_validate(raw)
+    except ValidationError as exc:
+        raise typer.BadParameter(f"{payload_file} no tiene la forma esperada: {exc}") from exc
+
+    item = asyncio.run(
+        _service().submit_candidate(
+            work_item_id,
+            title=body.title,
+            summary=body.summary,
+            files=[file.model_dump(mode="json") for file in body.files],
+        )
+    )
+    typer.echo(json.dumps(item.model_dump(mode="json"), indent=2, ensure_ascii=False))
 
 
 def _version(command: list[str]) -> str | None:
