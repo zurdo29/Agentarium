@@ -3,10 +3,11 @@
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import { ExportProject } from "./export-project";
 import { ImportProject } from "./import-project";
+import { RepairCenter } from "./repair-center";
 import { ROLE_LABELS, Status, dateLabel, statusLabel } from "./shared";
 import { TaskDrawer } from "./task-drawer";
 
-type View = "dashboard" | "project" | "approvals";
+type View = "dashboard" | "project" | "approvals" | "repair";
 type ProjectAction = "run" | "pause" | "resume" | "cancel";
 
 type Project = {
@@ -87,6 +88,32 @@ export type ExportSummary = {
   destination?: string;
   patch_path?: string | null;
   bundle_path?: string | null;
+};
+
+export type RepairItem = {
+  work_item_id: string;
+  title: string;
+  status: string;
+  cause: "failed" | "changes_requested" | "exhausted" | "blocked";
+  project_id: string;
+  project_title: string;
+  last_error: string | null;
+  attempt_count: number;
+  max_attempts: number;
+  attempt_repair_available: boolean;
+  risk: string;
+  updated_at: string;
+  blocking_dependency_id: string | null;
+  blocking_dependency_title: string | null;
+  blocking_dependency_status: string | null;
+  latest_review_reasons: string[];
+  latest_test_summary: string | null;
+};
+
+export type CandidateFileDraft = {
+  path: string;
+  content: string;
+  purpose: string;
 };
 
 type Brief = {
@@ -543,6 +570,40 @@ export default function Home() {
   const [exportResult, setExportResult] = useState<ExportSummary | null>(null);
   const [exporting, setExporting] = useState(false);
 
+  // -- Repair Center (P4.3b) -------------------------------------------
+  const [repairItems, setRepairItems] = useState<RepairItem[]>([]);
+  const [repairLoading, setRepairLoading] = useState(false);
+  const [repairFilterProject, setRepairFilterProject] = useState("");
+  const [repairFilterCause, setRepairFilterCause] = useState("");
+  const [repairExpandedId, setRepairExpandedId] = useState<string | null>(null);
+  const [repairConfirming, setRepairConfirming] = useState<{
+    workItemId: string;
+    action: "retry" | "recover" | "escalate" | "candidate";
+  } | null>(null);
+  const [repairEscalateReason, setRepairEscalateReason] = useState("");
+  const [repairRecoverArtifacts, setRepairRecoverArtifacts] = useState<
+    ProjectDetail["artifacts"] | null
+  >(null);
+  const [repairRecoverArtifactsLoading, setRepairRecoverArtifactsLoading] =
+    useState(false);
+  const [repairSelectedArtifactId, setRepairSelectedArtifactId] = useState("");
+  const [repairCandidateTitle, setRepairCandidateTitle] = useState("");
+  const [repairCandidateSummary, setRepairCandidateSummary] = useState("");
+  const [repairCandidateFiles, setRepairCandidateFiles] = useState<
+    CandidateFileDraft[]
+  >([]);
+
+  // TaskDrawer's own retry/rework/escalate confirmation -- separate from
+  // the Repair Center's state above: same class of risk (a drafted reason
+  // must never survive a switch to a different task), different flow with
+  // its own state, so a separate reset function (resetTaskActionDrafts,
+  // defined below) rather than sharing resetRepairDrafts.
+  const [taskConfirmingAction, setTaskConfirmingAction] = useState<
+    "retry" | "rework" | "escalate" | null
+  >(null);
+  const [taskReworkReason, setTaskReworkReason] = useState("");
+  const [taskEscalateReason, setTaskEscalateReason] = useState("");
+
   const selectedTask = useMemo(
     () =>
       detail.work_items.find((item) => item.id === selectedTaskId) ?? null,
@@ -844,11 +905,32 @@ export default function Home() {
     }
   }
 
+  // TaskDrawer's own retry/rework/escalate confirmation drafts -- separate
+  // from the Repair Center's resetRepairDrafts (see the state block above
+  // for why). Cleared whenever the confirmed action completes, is
+  // cancelled, or the selected task changes (selectTask, below).
+  function resetTaskActionDrafts() {
+    setTaskConfirmingAction(null);
+    setTaskReworkReason("");
+    setTaskEscalateReason("");
+  }
+
+  function selectTask(taskId: string | null) {
+    resetTaskActionDrafts();
+    setSelectedTaskId(taskId);
+  }
+
+  function startTaskConfirm(action: "retry" | "rework" | "escalate") {
+    resetTaskActionDrafts();
+    setTaskConfirmingAction(action);
+  }
+
   async function retryTask(taskId: string) {
     setLoading(true);
     setError(null);
     try {
       await request(`/work-items/${taskId}/retry`, { method: "POST" });
+      resetTaskActionDrafts();
       await openProject(detail.project.id);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "No se pudo reintentar.");
@@ -858,16 +940,15 @@ export default function Home() {
   }
 
   async function reworkTask(taskId: string) {
+    if (!taskReworkReason.trim()) return;
     setLoading(true);
     setError(null);
     try {
       await request(`/work-items/${taskId}/rework`, {
         method: "POST",
-        body: JSON.stringify({
-          reason:
-            "La verificación independiente encontró comportamiento incompleto; corregirlo contra todos los criterios.",
-        }),
+        body: JSON.stringify({ reason: taskReworkReason.trim() }),
       });
+      resetTaskActionDrafts();
       await openProject(detail.project.id);
       await refreshDashboard();
     } catch (reason) {
@@ -882,17 +963,15 @@ export default function Home() {
   }
 
   async function escalateTask(taskId: string) {
+    if (!taskEscalateReason.trim()) return;
     setLoading(true);
     setError(null);
     try {
       await request(`/work-items/${taskId}/escalate`, {
         method: "POST",
-        body: JSON.stringify({
-          reason:
-            "El CEO debe revisar el bloqueo, el riesgo o la discrepancia de esta tarea.",
-        }),
+        body: JSON.stringify({ reason: taskEscalateReason.trim() }),
       });
-      setSelectedTaskId(null);
+      selectTask(null);
       await refreshDashboard();
       setView("approvals");
     } catch (reason) {
@@ -914,6 +993,159 @@ export default function Home() {
     } catch (reason) {
       setError(
         reason instanceof Error ? reason.message : "No se pudo cambiar la prioridad.",
+      );
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  // -- Repair Center (P4.3b) -------------------------------------------
+
+  function resetRepairDrafts() {
+    setRepairConfirming(null);
+    setRepairEscalateReason("");
+    setRepairRecoverArtifacts(null);
+    setRepairSelectedArtifactId("");
+    setRepairCandidateTitle("");
+    setRepairCandidateSummary("");
+    setRepairCandidateFiles([]);
+  }
+
+  function toggleRepairExpanded(workItemId: string) {
+    resetRepairDrafts();
+    setRepairExpandedId((current) => (current === workItemId ? null : workItemId));
+  }
+
+  function startRepairConfirm(
+    item: RepairItem,
+    action: "retry" | "recover" | "escalate" | "candidate",
+  ) {
+    resetRepairDrafts();
+    setRepairConfirming({ workItemId: item.work_item_id, action });
+    if (action === "recover") {
+      void loadRepairArtifacts(item.project_id);
+    }
+  }
+
+  async function openRepairCenter() {
+    setView("repair");
+    setRepairLoading(true);
+    setError(null);
+    try {
+      const items = await request<RepairItem[]>("/repair-center");
+      setRepairItems(items);
+    } catch (reason) {
+      setError(
+        reason instanceof Error
+          ? reason.message
+          : "No se pudo cargar el centro de reparación.",
+      );
+    } finally {
+      setRepairLoading(false);
+    }
+  }
+
+  function openRepairItem(projectId: string, workItemId: string) {
+    void (async () => {
+      await openProject(projectId);
+      selectTask(workItemId);
+    })();
+  }
+
+  async function retryRepairItem(workItemId: string) {
+    setLoading(true);
+    setError(null);
+    try {
+      await request(`/work-items/${workItemId}/retry`, { method: "POST" });
+      resetRepairDrafts();
+      await openRepairCenter();
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "No se pudo reintentar.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function escalateRepairItem(workItemId: string) {
+    if (!repairEscalateReason.trim()) return;
+    setLoading(true);
+    setError(null);
+    try {
+      await request(`/work-items/${workItemId}/escalate`, {
+        method: "POST",
+        body: JSON.stringify({ reason: repairEscalateReason.trim() }),
+      });
+      resetRepairDrafts();
+      await openRepairCenter();
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "No se pudo escalar.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function loadRepairArtifacts(projectId: string) {
+    setRepairRecoverArtifactsLoading(true);
+    try {
+      const projectDetail = await request<ProjectDetail>(`/projects/${projectId}`);
+      setRepairRecoverArtifacts(projectDetail.artifacts);
+    } catch (reason) {
+      setError(
+        reason instanceof Error
+          ? reason.message
+          : "No se pudieron cargar los artefactos.",
+      );
+    } finally {
+      setRepairRecoverArtifactsLoading(false);
+    }
+  }
+
+  async function recoverRepairArtifact(workItemId: string) {
+    if (!repairSelectedArtifactId) return;
+    setLoading(true);
+    setError(null);
+    try {
+      await request(`/work-items/${workItemId}/recover/${repairSelectedArtifactId}`, {
+        method: "POST",
+      });
+      resetRepairDrafts();
+      await openRepairCenter();
+    } catch (reason) {
+      setError(
+        reason instanceof Error ? reason.message : "No se pudo recuperar el artefacto.",
+      );
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function submitRepairCandidate(workItemId: string) {
+    const files = repairCandidateFiles.filter(
+      (file) => file.path.trim() && file.content.trim() && file.purpose.trim(),
+    );
+    if (
+      !repairCandidateTitle.trim() ||
+      !repairCandidateSummary.trim() ||
+      files.length === 0
+    ) {
+      return;
+    }
+    setLoading(true);
+    setError(null);
+    try {
+      await request(`/work-items/${workItemId}/candidate`, {
+        method: "POST",
+        body: JSON.stringify({
+          title: repairCandidateTitle.trim(),
+          summary: repairCandidateSummary.trim(),
+          files,
+        }),
+      });
+      resetRepairDrafts();
+      await openRepairCenter();
+    } catch (reason) {
+      setError(
+        reason instanceof Error ? reason.message : "No se pudo enviar el candidato.",
       );
     } finally {
       setLoading(false);
@@ -992,6 +1224,13 @@ export default function Home() {
             {pendingApprovals.length > 0 && (
               <span className="nav-count">{pendingApprovals.length}</span>
             )}
+          </button>
+          <button
+            className={view === "repair" ? "nav-item active" : "nav-item"}
+            onClick={() => void openRepairCenter()}
+          >
+            <span className="nav-glyph">⚙</span>
+            Centro de reparación
           </button>
         </nav>
 
@@ -1110,7 +1349,7 @@ export default function Home() {
             activeAction={activeAction}
             loading={loading}
             onControl={controlProject}
-            onSelectTask={setSelectedTaskId}
+            onSelectTask={selectTask}
             onOpenApprovals={() => setView("approvals")}
             exportDestination={exportDestination}
             onExportDestinationChange={updateExportDestination}
@@ -1134,6 +1373,40 @@ export default function Home() {
             connected={connected}
           />
         )}
+
+        {view === "repair" && (
+          <RepairCenter
+            items={repairItems}
+            loading={repairLoading}
+            connected={connected}
+            filterProject={repairFilterProject}
+            onFilterProjectChange={setRepairFilterProject}
+            filterCause={repairFilterCause}
+            onFilterCauseChange={setRepairFilterCause}
+            expandedId={repairExpandedId}
+            onToggleExpand={toggleRepairExpanded}
+            onOpenItem={openRepairItem}
+            confirming={repairConfirming}
+            onStartConfirm={startRepairConfirm}
+            onCancelConfirm={resetRepairDrafts}
+            onRetry={retryRepairItem}
+            escalateReason={repairEscalateReason}
+            onEscalateReasonChange={setRepairEscalateReason}
+            onEscalate={escalateRepairItem}
+            recoverArtifacts={repairRecoverArtifacts}
+            recoverArtifactsLoading={repairRecoverArtifactsLoading}
+            selectedArtifactId={repairSelectedArtifactId}
+            onSelectArtifact={setRepairSelectedArtifactId}
+            onRecover={recoverRepairArtifact}
+            candidateTitle={repairCandidateTitle}
+            onCandidateTitleChange={setRepairCandidateTitle}
+            candidateSummary={repairCandidateSummary}
+            onCandidateSummaryChange={setRepairCandidateSummary}
+            candidateFiles={repairCandidateFiles}
+            onCandidateFilesChange={setRepairCandidateFiles}
+            onSubmitCandidate={submitRepairCandidate}
+          />
+        )}
       </section>
 
       {selectedTask && (
@@ -1141,12 +1414,19 @@ export default function Home() {
           item={selectedTask}
           detail={detail}
           events={events}
-          onClose={() => setSelectedTaskId(null)}
+          onClose={() => selectTask(null)}
           onRetry={retryTask}
           onRework={reworkTask}
           onEscalate={escalateTask}
           onPriority={updateTaskPriority}
           loading={loading}
+          confirmingAction={taskConfirmingAction}
+          onStartConfirm={startTaskConfirm}
+          onCancelConfirm={resetTaskActionDrafts}
+          reworkReason={taskReworkReason}
+          onReworkReasonChange={setTaskReworkReason}
+          escalateReason={taskEscalateReason}
+          onEscalateReasonChange={setTaskEscalateReason}
         />
       )}
     </main>

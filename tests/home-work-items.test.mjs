@@ -73,7 +73,11 @@ test("retrying a failed work item calls /retry and refreshes the project", async
   );
   mock.on("GET", `/api/projects/${PROJECT_ID}/events`, []);
 
+  // P4.3b: retry is no longer a single click -- it opens an inline
+  // confirmation panel first, the real POST only fires once confirmed.
   await userEvent.click(screen.getByRole("button", { name: /Reintentar/i }));
+  await screen.findByText(/¿Reintentar esta tarea\?/i);
+  await userEvent.click(screen.getByRole("button", { name: /^Confirmar$/i }));
 
   // The drawer re-renders against the refreshed item once openProject()
   // resolves; the retry button (only shown for failed/changes_requested)
@@ -105,7 +109,12 @@ test("reworking a completed work item calls /rework with a reason and refreshes"
   mock.on(`GET`, `/api/projects/${PROJECT_ID}/events`, []);
   mockBackgroundRefresh(mock);
 
+  // P4.3b: rework opens a confirm panel with a real reason textarea --
+  // the hardcoded string is gone, a real typed reason is required.
   await userEvent.click(screen.getByRole("button", { name: /Revisar de nuevo/i }));
+  const reworkReasonField = await screen.findByLabelText(/Motivo de la revisión/i);
+  await userEvent.type(reworkReasonField, "Falta manejar el caso límite reportado.");
+  await userEvent.click(screen.getByRole("button", { name: /Confirmar revisión/i }));
 
   await screen.findByRole("button", { name: /Reintentar/i });
   mock.assertAllMatched();
@@ -126,7 +135,12 @@ test("escalating a work item switches to the approvals view", async () => {
   });
   mockBackgroundRefresh(mock);
 
+  // P4.3b: escalate opens a confirm panel with a real reason textarea --
+  // the hardcoded string is gone, a real typed reason is required.
   await userEvent.click(screen.getByRole("button", { name: /Escalar/i }));
+  const escalateReasonField = await screen.findByLabelText(/Motivo de la escalación/i);
+  await userEvent.type(escalateReasonField, "El riesgo de esta tarea excede la autoridad automática.");
+  await userEvent.click(screen.getByRole("button", { name: /Confirmar escalación/i }));
 
   await screen.findByRole("heading", { name: /Decisiones que no deben automatizarse/i });
   mock.assertAllMatched();

@@ -14,12 +14,14 @@ from __future__ import annotations
 
 import json
 import subprocess
+from datetime import UTC, datetime
 from typing import Any
 
 import pytest
 from agentarium.api.app import create_app
 from agentarium.config.settings import project_root
-from agentarium.domain.models import ApprovalRequest, Decision
+from agentarium.domain.enums import WorkItemStatus
+from agentarium.domain.models import ApprovalRequest, Decision, Milestone, Project, WorkItem
 from agentarium.services import ApplicationService
 from contract_registry import ALL_TS_TYPE_NAMES, DIRECT_PAIRS, ENDPOINT_PAIRS
 from contract_types import ShapeTree, diff_shapes, shape_from_model, shape_from_value
@@ -56,6 +58,41 @@ def _drill(value: Any, at: tuple[object, ...]) -> Any:
 
 @pytest.mark.asyncio
 async def test_backend_ts_contract_has_no_drift(service: ApplicationService) -> None:
+    # RepairItem needs a real, non-empty /api/repair-center response to
+    # check against -- the main fixture below never fails, so it alone
+    # would leave that endpoint empty. Built with an explicit, deliberately
+    # earlier created_at (not relying on real-clock ordering between two
+    # back-to-back constructor calls): Repository.list_projects() orders
+    # by created_at descending, so this stays out of index 0, which
+    # "Project"/"DashboardData" already depend on being the completed
+    # fixture project below.
+    repair_project = service.repository.create_project(
+        Project(
+            title="Proyecto con una tarea que necesita reparación",
+            goal="Proyecto con una tarea que necesita reparación",
+            created_at=datetime(2020, 1, 1, tzinfo=UTC),
+        )
+    )
+    repair_milestone = Milestone(
+        project_id=repair_project.id,
+        title="Entrega",
+        description="Entrega local",
+        order=0,
+    )
+    service.repository.add_milestone(repair_milestone)
+    service.repository.add_work_item(
+        WorkItem(
+            project_id=repair_project.id,
+            milestone_id=repair_milestone.id,
+            title="Tarea fallida",
+            description="Descripción de la tarea fallida",
+            expected_outputs=["resultado"],
+            acceptance_criteria=["Existe"],
+            status=WorkItemStatus.FAILED,
+            last_error="Fallo real para el contrato de RepairItem",
+        )
+    )
+
     project = service.create_project(_FIXTURE_GOAL)
     await service.run_project(project.id)
 
