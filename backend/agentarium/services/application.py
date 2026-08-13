@@ -11,6 +11,7 @@ from agentarium.artifacts import ArtifactStore
 from agentarium.config.settings import Settings, get_settings
 from agentarium.domain.enums import ApprovalStatus, ProjectStatus, WorkItemStatus
 from agentarium.domain.models import (
+    MAX_WORK_ITEM_ATTEMPTS,
     ApprovalRequest,
     ExecutionEvent,
     Project,
@@ -614,6 +615,27 @@ class ApplicationService:
                 for report in self.repository.list_test_reports(project.id)
             }
             for item, cause, blocking in candidates:
+                # retry_work_item (and recover_artifact/submit_candidate,
+                # which call it internally whenever the item isn't already
+                # READY) extends the attempt budget unconditionally when
+                # exhausted -- Repository.extend_attempt_budget raises an
+                # uncaught ValueError once max_attempts is already at
+                # MAX_WORK_ITEM_ATTEMPTS. This mirrors that exact guard so
+                # the UI never offers an action that would just raise;
+                # escalate_work_item never touches attempt budget at all,
+                # so it stays available regardless. A "blocked" item is
+                # always false here regardless of its own budget: retry_
+                # work_item already rejects any non-FAILED/CHANGES_REQUESTED/
+                # exhausted-READY status ("Only failed or rejected tasks
+                # can be retried"), so retry/recover/candidate are invalid
+                # for it independent of attempt_count/max_attempts.
+                if cause == "blocked":
+                    attempt_repair_available = False
+                else:
+                    exhausted = item.attempt_count >= item.max_attempts
+                    attempt_repair_available = not (
+                        exhausted and item.max_attempts >= MAX_WORK_ITEM_ATTEMPTS
+                    )
                 rows.append(
                     {
                         "work_item_id": item.id,
@@ -625,6 +647,7 @@ class ApplicationService:
                         "last_error": item.last_error,
                         "attempt_count": item.attempt_count,
                         "max_attempts": item.max_attempts,
+                        "attempt_repair_available": attempt_repair_available,
                         "risk": item.risk.value,
                         "updated_at": item.updated_at.isoformat(),
                         "blocking_dependency_id": blocking.id if blocking else None,

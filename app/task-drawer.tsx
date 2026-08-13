@@ -11,6 +11,13 @@ export function TaskDrawer({
   onEscalate,
   onPriority,
   loading,
+  confirmingAction,
+  onStartConfirm,
+  onCancelConfirm,
+  reworkReason,
+  onReworkReasonChange,
+  escalateReason,
+  onEscalateReasonChange,
 }: {
   item: WorkItem;
   detail: ProjectDetail;
@@ -21,6 +28,13 @@ export function TaskDrawer({
   onEscalate: (id: string) => Promise<void>;
   onPriority: (id: string, priority: number) => Promise<void>;
   loading: boolean;
+  confirmingAction: "retry" | "rework" | "escalate" | null;
+  onStartConfirm: (action: "retry" | "rework" | "escalate") => void;
+  onCancelConfirm: () => void;
+  reworkReason: string;
+  onReworkReasonChange: (value: string) => void;
+  escalateReason: string;
+  onEscalateReasonChange: (value: string) => void;
 }) {
   const dependencies = item.dependency_ids
     .map((id) => detail.work_items.find((candidate) => candidate.id === id))
@@ -211,33 +225,115 @@ export function TaskDrawer({
               ))}
             </select>
           </label>
-          <button
-            className="control-button"
-            onClick={() => void onEscalate(item.id)}
-            disabled={
-              loading || ["completed", "cancelled"].includes(item.status)
-            }
-          >
-            ↑ Escalar
-          </button>
-          {canRetry && (
+          {confirmingAction === "escalate" ? (
+            <div className="drawer-confirm">
+              <label>
+                Motivo de la escalación
+                <textarea
+                  value={escalateReason}
+                  onChange={(event) => onEscalateReasonChange(event.target.value)}
+                  placeholder="¿Por qué necesita esto una decisión humana?"
+                  rows={2}
+                />
+              </label>
+              <div className="drawer-confirm-actions">
+                <button
+                  className="control-button"
+                  onClick={onCancelConfirm}
+                  disabled={loading}
+                >
+                  Cancelar
+                </button>
+                <button
+                  className="primary-button"
+                  onClick={() => void onEscalate(item.id)}
+                  disabled={loading || !escalateReason.trim()}
+                >
+                  Confirmar escalación
+                </button>
+              </div>
+            </div>
+          ) : (
             <button
-              className="primary-button"
-              onClick={() => void onRetry(item.id)}
-              disabled={loading}
+              className="control-button"
+              onClick={() => onStartConfirm("escalate")}
+              disabled={
+                loading || ["completed", "cancelled"].includes(item.status)
+              }
             >
-              ↻ Reintentar
+              ↑ Escalar
             </button>
           )}
-          {item.status === "completed" && (
-            <button
-              className="primary-button"
-              onClick={() => void onRework(item.id)}
-              disabled={loading}
-            >
-              ↻ Revisar de nuevo
-            </button>
-          )}
+
+          {canRetry &&
+            (confirmingAction === "retry" ? (
+              <div className="drawer-confirm">
+                <span>¿Reintentar esta tarea?</span>
+                <div className="drawer-confirm-actions">
+                  <button
+                    className="control-button"
+                    onClick={onCancelConfirm}
+                    disabled={loading}
+                  >
+                    Cancelar
+                  </button>
+                  <button
+                    className="primary-button"
+                    onClick={() => void onRetry(item.id)}
+                    disabled={loading}
+                  >
+                    Confirmar
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <button
+                className="primary-button"
+                onClick={() => onStartConfirm("retry")}
+                disabled={loading}
+              >
+                ↻ Reintentar
+              </button>
+            ))}
+
+          {item.status === "completed" &&
+            (confirmingAction === "rework" ? (
+              <div className="drawer-confirm">
+                <label>
+                  Motivo de la revisión
+                  <textarea
+                    value={reworkReason}
+                    onChange={(event) => onReworkReasonChange(event.target.value)}
+                    placeholder="¿Qué hay que corregir?"
+                    rows={2}
+                  />
+                </label>
+                <div className="drawer-confirm-actions">
+                  <button
+                    className="control-button"
+                    onClick={onCancelConfirm}
+                    disabled={loading}
+                  >
+                    Cancelar
+                  </button>
+                  <button
+                    className="primary-button"
+                    onClick={() => void onRework(item.id)}
+                    disabled={loading || !reworkReason.trim()}
+                  >
+                    Confirmar revisión
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <button
+                className="primary-button"
+                onClick={() => onStartConfirm("rework")}
+                disabled={loading}
+              >
+                ↻ Revisar de nuevo
+              </button>
+            ))}
         </div>
       </aside>
     </div>

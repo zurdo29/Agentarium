@@ -48,6 +48,7 @@ ENDPOINT_PAIRS: dict[str, tuple[str, tuple[object, ...]]] = {
     "DashboardData": ("/api/dashboard", ()),
     "ProviderOverview": ("/api/providers", ()),
     "ExportSummary": ("/api/projects/{project_id}/export/preview", ()),
+    "RepairItem": ("/api/repair-center", (0,)),
 }
 
 ALL_TS_TYPE_NAMES: tuple[str, ...] = tuple(DIRECT_PAIRS) + tuple(ENDPOINT_PAIRS)

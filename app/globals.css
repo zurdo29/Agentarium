@@ -2235,9 +2235,165 @@ textarea:focus-visible {
   align-items: flex-end;
   border-top: 1px solid var(--line);
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
   margin-top: 22px;
   padding-top: 18px;
+}
+
+.drawer-confirm {
+  display: flex;
+  flex: 1 1 100%;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.drawer-confirm label {
+  display: flex;
+  flex-direction: column;
+  font-size: 10px;
+  gap: 4px;
+}
+
+.drawer-confirm textarea {
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  font-size: 11px;
+  padding: 6px 8px;
+  resize: vertical;
+}
+
+.drawer-confirm-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.repair-filters {
+  display: flex;
+  gap: 16px;
+  margin-bottom: 22px;
+}
+
+.repair-filters select {
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  display: block;
+  font-size: 11px;
+  margin-top: 6px;
+  min-height: 34px;
+  padding: 0 10px;
+}
+
+.repair-list {
+  display: grid;
+  gap: 14px;
+}
+
+.repair-card {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  box-shadow: var(--shadow);
+  overflow: hidden;
+}
+
+.repair-card-summary {
+  align-items: center;
+  background: none;
+  border: none;
+  cursor: pointer;
+  display: grid;
+  gap: 14px;
+  grid-template-columns: auto 1fr auto auto;
+  padding: 18px 22px;
+  text-align: left;
+  width: 100%;
+}
+
+.repair-card-summary strong {
+  display: block;
+  font-size: 15px;
+}
+
+.repair-card-summary small {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.repair-cause-pill {
+  background: rgb(216 138 122 / 15%);
+  border-radius: 999px;
+  color: var(--ink-soft);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  padding: 4px 10px;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.repair-attempts {
+  color: var(--muted);
+  font-family: ui-monospace, "Cascadia Code", monospace;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.repair-card-detail {
+  border-top: 1px solid var(--line);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 18px 22px 22px;
+}
+
+.repair-blocked-note {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.repair-budget-note {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.repair-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.candidate-form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.candidate-form input,
+.candidate-form textarea {
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  font-size: 11px;
+  padding: 6px 8px;
+}
+
+.candidate-files {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.candidate-file-row {
+  border: 1px dashed var(--line);
+  border-radius: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px;
 }
 
 .drawer-controls > label {

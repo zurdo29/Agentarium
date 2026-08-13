@@ -113,6 +113,60 @@ def test_repair_center_includes_ready_with_exhausted_budget(service: Application
     assert rows[0]["cause"] == "exhausted"
     assert rows[0]["attempt_count"] == 1
     assert rows[0]["max_attempts"] == 1
+    # Nowhere near the MAX_WORK_ITEM_ATTEMPTS ceiling -- retry_work_item's
+    # own extend_attempt_budget call would still succeed.
+    assert rows[0]["attempt_repair_available"] is True
+
+
+def test_repair_center_marks_attempt_repair_unavailable_at_the_25_attempt_ceiling(
+    service: ApplicationService,
+) -> None:
+    """The literal boundary retry_work_item/extend_attempt_budget enforce:
+    max_attempts already at MAX_WORK_ITEM_ATTEMPTS (25) and exhausted means
+    the next retry/recover/candidate call would raise an uncaught
+    ValueError ("Task attempt budget cannot exceed 25") -- the UI must
+    never offer those three actions in that state."""
+    project = service.create_project("Proyecto en el tope real de intentos")
+    milestone = _milestone(project.id)
+    service.repository.add_milestone(milestone)
+    item = _work_item(
+        project.id,
+        milestone.id,
+        status=WorkItemStatus.FAILED,
+        max_attempts=25,
+        attempt_count=25,
+    )
+    service.repository.add_work_item(item)
+
+    rows = service.repair_center()
+
+    assert len(rows) == 1
+    assert rows[0]["attempt_repair_available"] is False
+    with pytest.raises(ValueError, match="cannot exceed"):
+        service.retry_work_item(item.id)
+
+
+def test_repair_center_marks_attempt_repair_available_one_below_the_ceiling(
+    service: ApplicationService,
+) -> None:
+    project = service.create_project("Proyecto a un intento del tope")
+    milestone = _milestone(project.id)
+    service.repository.add_milestone(milestone)
+    item = _work_item(
+        project.id,
+        milestone.id,
+        status=WorkItemStatus.FAILED,
+        max_attempts=24,
+        attempt_count=24,
+    )
+    service.repository.add_work_item(item)
+
+    rows = service.repair_center()
+
+    assert len(rows) == 1
+    assert rows[0]["attempt_repair_available"] is True
+    retried = service.retry_work_item(item.id)
+    assert retried.max_attempts == 25
 
 
 def test_repair_center_excludes_ready_with_remaining_budget(service: ApplicationService) -> None:
@@ -156,6 +210,12 @@ def test_repair_center_includes_blocked_on_a_failed_dependency(service: Applicat
     assert blocked_rows[0]["blocking_dependency_id"] == dependency.id
     assert blocked_rows[0]["blocking_dependency_title"] == "Dependencia"
     assert blocked_rows[0]["blocking_dependency_status"] == "failed"
+    # Blocked is never actionable regardless of its own attempt budget --
+    # attempt_count=0/max_attempts=3 here (nowhere near exhausted), so a
+    # naive "only check exhaustion" computation would wrongly say True.
+    # retry_work_item rejects any non-FAILED/CHANGES_REQUESTED/exhausted-
+    # READY status outright, independent of budget.
+    assert blocked_rows[0]["attempt_repair_available"] is False
     # The FAILED dependency itself is also its own row, on its own cause.
     dependency_rows = [row for row in rows if row["work_item_id"] == dependency.id]
     assert len(dependency_rows) == 1

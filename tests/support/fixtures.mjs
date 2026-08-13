@@ -288,6 +288,29 @@ export function buildExportSummary(overrides = {}) {
   };
 }
 
+export function buildRepairItem(overrides = {}) {
+  return {
+    work_item_id: nextId("repair-item"),
+    title: "Tarea que necesita reparación",
+    status: "failed",
+    cause: "failed",
+    project_id: "project-1",
+    project_title: "Proyecto de prueba",
+    last_error: "El validador de sintaxis rechazó el archivo.",
+    attempt_count: 1,
+    max_attempts: 3,
+    attempt_repair_available: true,
+    risk: "low",
+    updated_at: "2026-08-01T00:10:00Z",
+    blocking_dependency_id: null,
+    blocking_dependency_title: null,
+    blocking_dependency_status: null,
+    latest_review_reasons: [],
+    latest_test_summary: null,
+    ...overrides,
+  };
+}
+
 export function buildProviderOverview(overrides = {}) {
   return {
     active_provider: "mock",
