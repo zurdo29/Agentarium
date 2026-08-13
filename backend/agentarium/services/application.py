@@ -38,7 +38,43 @@ from agentarium.llm import ProviderRegistry, ProviderSelection, ProviderSelectio
 from agentarium.memory import ContextBuilder
 from agentarium.orchestration import Orchestrator
 from agentarium.repositories import Database, Repository
+from agentarium.services.delivery_report import build_delivery_report
 from agentarium.services.export_summary import build_export_summary, render_export_summary_markdown
+
+
+def _classify_stuck_work_items(
+    work_items: list[WorkItem],
+) -> list[tuple[WorkItem, str, WorkItem | None]]:
+    """Shared by `repair_center()` and `delivery_report()` so the two
+    readers can never drift on what counts as stuck. Pulled out of
+    `repair_center()`'s own loop body unchanged (P4.3a) -- pure,
+    module-level, no `self` needed. Four causes: FAILED/CHANGES_REQUESTED
+    (what retry/recover/candidate already accept), "exhausted" (a READY
+    item whose attempt_count already reached max_attempts -- reachable
+    after Repository.recover_interrupted() resets a crashed item to
+    READY without checking budget), and "blocked" (a BLOCKED item whose
+    dependency is itself FAILED/CANCELLED, so it can never clear on its
+    own)."""
+    by_id = {item.id: item for item in work_items}
+    candidates: list[tuple[WorkItem, str, WorkItem | None]] = []
+    for item in work_items:
+        if item.status in {WorkItemStatus.FAILED, WorkItemStatus.CHANGES_REQUESTED}:
+            candidates.append((item, item.status.value, None))
+        elif item.status is WorkItemStatus.READY and item.attempt_count >= item.max_attempts:
+            candidates.append((item, "exhausted", None))
+        elif item.status is WorkItemStatus.BLOCKED:
+            blocking = next(
+                (
+                    by_id[dep_id]
+                    for dep_id in item.dependency_ids
+                    if dep_id in by_id
+                    and by_id[dep_id].status in {WorkItemStatus.FAILED, WorkItemStatus.CANCELLED}
+                ),
+                None,
+            )
+            if blocking is not None:
+                candidates.append((item, "blocked", blocking))
+    return candidates
 
 
 class ApplicationService:
@@ -581,29 +617,7 @@ class ApplicationService:
         rows: list[dict[str, Any]] = []
         for project in self.repository.list_projects():
             work_items = self.repository.list_work_items(project.id)
-            by_id = {item.id: item for item in work_items}
-            candidates: list[tuple[WorkItem, str, WorkItem | None]] = []
-            for item in work_items:
-                if item.status in {WorkItemStatus.FAILED, WorkItemStatus.CHANGES_REQUESTED}:
-                    candidates.append((item, item.status.value, None))
-                elif (
-                    item.status is WorkItemStatus.READY
-                    and item.attempt_count >= item.max_attempts
-                ):
-                    candidates.append((item, "exhausted", None))
-                elif item.status is WorkItemStatus.BLOCKED:
-                    blocking = next(
-                        (
-                            by_id[dep_id]
-                            for dep_id in item.dependency_ids
-                            if dep_id in by_id
-                            and by_id[dep_id].status
-                            in {WorkItemStatus.FAILED, WorkItemStatus.CANCELLED}
-                        ),
-                        None,
-                    )
-                    if blocking is not None:
-                        candidates.append((item, "blocked", blocking))
+            candidates = _classify_stuck_work_items(work_items)
             if not candidates:
                 continue
             latest_reasons = {
@@ -661,6 +675,44 @@ class ApplicationService:
                 )
         rows.sort(key=lambda row: row["updated_at"], reverse=True)
         return rows
+
+    def delivery_report(self, project_id: str) -> dict[str, Any]:
+        """P4.4a. Cumulative project state, not a chosen export range --
+        deliberately does not import `isolation`/git, only real event/DB
+        reads (see delivery_report.py's own docstring). `awaiting_approval`
+        is derived only from a real pending `ApprovalRequest.work_item_id`
+        -- `WorkItemStatus.AWAITING_APPROVAL` is declared in the state
+        machine but no code path ever assigns it to a work item today
+        (escalate_work_item only ever changes the *project*'s status), so
+        checking `item.status` there would silently match nothing, ever.
+        `superseded_by_split` is derived the same structural way, from a
+        real `task_split_created` event naming this item as the parent."""
+        project = self.repository.get_project(project_id)
+        work_items = self.repository.list_work_items(project_id)
+        stuck_by_work_item = {
+            item.id: (cause, blocking)
+            for item, cause, blocking in _classify_stuck_work_items(work_items)
+        }
+        pending_approval_work_item_ids = {
+            approval.work_item_id
+            for approval in self.repository.list_approvals(project_id, ApprovalStatus.PENDING)
+            if approval.work_item_id
+        }
+        split_parent_work_item_ids = {
+            str(event.get("work_item_id") or "")
+            for event in self.repository.list_events(project_id, limit=5000)
+            if event["action"] == "task_split_created"
+        }
+        return build_delivery_report(
+            project=project,
+            work_items=work_items,
+            reviews=self.repository.list_reviews(project_id),
+            test_reports=self.repository.list_test_reports(project_id),
+            stuck_by_work_item=stuck_by_work_item,
+            pending_approval_work_item_ids=pending_approval_work_item_ids,
+            integration_events=self._integration_events(project_id),
+            split_parent_work_item_ids=split_parent_work_item_ids,
+        )
 
     def resolve_approval(
         self, approval_id: str, status: ApprovalStatus, comments: str | None
