@@ -312,6 +312,44 @@ test("repair center: switching from item A to item B clears the candidate draft 
   mock.assertAllMatched();
 });
 
+test("repair center: navigating away to the dashboard and back clears the candidate draft", async () => {
+  const mock = createFetchMock();
+  globalThis.fetch = mock.fetch;
+  const item = buildRepairItem({ work_item_id: "item-nav", title: "Tarea con candidato pendiente" });
+  await openRepairCenterWith(mock, [item]);
+
+  await userEvent.click(screen.getByRole("button", { name: /Tarea con candidato pendiente/i }));
+  await userEvent.click(screen.getByRole("button", { name: /^Enviar candidato$/i }));
+  await userEvent.type(screen.getByLabelText(/^Título$/i), "Borrador que nunca debe sobrevivir a la navegación");
+  await userEvent.type(screen.getByLabelText(/^Resumen$/i), "Resumen que tampoco debe sobrevivir");
+  await userEvent.click(screen.getByRole("button", { name: /Agregar archivo/i }));
+  await userEvent.type(screen.getByLabelText(/Ruta del archivo 1/i), "draft.py");
+
+  // Leaving via the nav (not a Repair Center control) is the path the
+  // fix targets -- resetRepairDrafts() previously only ran on in-page
+  // transitions (row switch, cancel, action success), never on nav-away.
+  // Scoped to <nav>: the brand button's aria-label ("Ir al dashboard")
+  // also matches an unanchored /Dashboard/i outside that scope.
+  const mainNav = screen.getByRole("navigation", { name: /Navegación principal/i });
+  await userEvent.click(within(mainNav).getByRole("button", { name: /Dashboard/i }));
+  await screen.findByRole("heading", { name: "La empresa, en una mirada." });
+
+  mock.on("GET", "/api/repair-center", [item]);
+  await userEvent.click(screen.getByRole("button", { name: /Centro de reparación/i }));
+  await screen.findByRole("heading", { name: /Centro de reparación/i });
+
+  // The confirm panel itself must be closed -- confirming reset to null,
+  // so the plain trigger button renders instead of the candidate form.
+  assert.equal(screen.queryByLabelText(/^Título$/i), null);
+
+  await userEvent.click(screen.getByRole("button", { name: /^Enviar candidato$/i }));
+  assert.equal(screen.getByLabelText(/^Título$/i).value, "");
+  assert.equal(screen.getByLabelText(/^Resumen$/i).value, "");
+  assert.equal(screen.queryByLabelText(/Ruta del archivo 1/i), null);
+
+  mock.assertAllMatched();
+});
+
 test("repair center: attempt_repair_available=false hides retry/recover/candidate but keeps escalate", async () => {
   const mock = createFetchMock();
   globalThis.fetch = mock.fetch;

@@ -1028,6 +1028,7 @@ export default function Home() {
   }
 
   async function openRepairCenter() {
+    resetRepairDrafts();
     setView("repair");
     setRepairLoading(true);
     setError(null);
@@ -1046,6 +1047,7 @@ export default function Home() {
   }
 
   function openRepairItem(projectId: string, workItemId: string) {
+    resetRepairDrafts();
     void (async () => {
       await openProject(projectId);
       selectTask(workItemId);
@@ -1190,7 +1192,10 @@ export default function Home() {
       <aside className="sidebar">
         <button
           className="brand"
-          onClick={() => setView("dashboard")}
+          onClick={() => {
+            resetRepairDrafts();
+            setView("dashboard");
+          }}
           aria-label="Ir al dashboard"
         >
           <span className="brand-mark">A</span>
@@ -1203,21 +1208,30 @@ export default function Home() {
         <nav aria-label="Navegación principal">
           <button
             className={view === "dashboard" ? "nav-item active" : "nav-item"}
-            onClick={() => setView("dashboard")}
+            onClick={() => {
+              resetRepairDrafts();
+              setView("dashboard");
+            }}
           >
             <span className="nav-glyph">⌂</span>
             Dashboard
           </button>
           <button
             className={view === "project" ? "nav-item active" : "nav-item"}
-            onClick={() => setView("project")}
+            onClick={() => {
+              resetRepairDrafts();
+              setView("project");
+            }}
           >
             <span className="nav-glyph">◇</span>
             Proyecto activo
           </button>
           <button
             className={view === "approvals" ? "nav-item active" : "nav-item"}
-            onClick={() => setView("approvals")}
+            onClick={() => {
+              resetRepairDrafts();
+              setView("approvals");
+            }}
           >
             <span className="nav-glyph">✓</span>
             Aprobaciones
