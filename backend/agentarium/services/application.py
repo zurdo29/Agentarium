@@ -680,11 +680,16 @@ class ApplicationService:
         """P4.4a. Cumulative project state, not a chosen export range --
         deliberately does not import `isolation`/git, only real event/DB
         reads (see delivery_report.py's own docstring). `awaiting_approval`
-        is derived only from a real pending `ApprovalRequest.work_item_id`
-        -- `WorkItemStatus.AWAITING_APPROVAL` is declared in the state
-        machine but no code path ever assigns it to a work item today
+        uses the same structural-link discipline as `resolve_approval`
+        (P4.3a): `approval.work_item_id` alone is not enough -- a generic,
+        non-escalation approval could carry one incidentally, and
+        `WorkItemStatus.AWAITING_APPROVAL` is declared in the state
+        machine but no code path ever assigns it to a work item
         (escalate_work_item only ever changes the *project*'s status), so
         checking `item.status` there would silently match nothing, ever.
+        Only a `task_escalated` event whose own `metadata.approval_id`
+        names a real pending approval -- with that approval's own
+        `work_item_id` confirmed equal to the event's -- counts.
         `superseded_by_split` is derived the same structural way, from a
         real `task_split_created` event naming this item as the parent."""
         project = self.repository.get_project(project_id)
@@ -693,23 +698,34 @@ class ApplicationService:
             item.id: (cause, blocking)
             for item, cause, blocking in _classify_stuck_work_items(work_items)
         }
-        pending_approval_work_item_ids = {
-            approval.work_item_id
+        pending_approvals_by_id = {
+            approval.id: approval
             for approval in self.repository.list_approvals(project_id, ApprovalStatus.PENDING)
-            if approval.work_item_id
         }
-        split_parent_work_item_ids = {
-            str(event.get("work_item_id") or "")
-            for event in self.repository.list_events(project_id, limit=5000)
-            if event["action"] == "task_split_created"
-        }
+        split_parent_work_item_ids: set[str] = set()
+        awaiting_approval_work_item_ids: set[str] = set()
+        for event in self.repository.list_events(project_id, limit=5000):
+            if event["action"] == "task_split_created":
+                split_parent_work_item_ids.add(str(event.get("work_item_id") or ""))
+            elif event["action"] == "task_escalated":
+                approval_id = (event.get("metadata") or {}).get("approval_id")
+                if not isinstance(approval_id, str):
+                    continue
+                approval = pending_approvals_by_id.get(approval_id)
+                event_work_item_id = event.get("work_item_id")
+                if (
+                    approval is not None
+                    and event_work_item_id
+                    and event_work_item_id == approval.work_item_id
+                ):
+                    awaiting_approval_work_item_ids.add(event_work_item_id)
         return build_delivery_report(
             project=project,
             work_items=work_items,
             reviews=self.repository.list_reviews(project_id),
             test_reports=self.repository.list_test_reports(project_id),
             stuck_by_work_item=stuck_by_work_item,
-            pending_approval_work_item_ids=pending_approval_work_item_ids,
+            awaiting_approval_work_item_ids=awaiting_approval_work_item_ids,
             integration_events=self._integration_events(project_id),
             split_parent_work_item_ids=split_parent_work_item_ids,
         )

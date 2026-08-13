@@ -24,7 +24,7 @@ def build_delivery_report(
     reviews: list[Review],
     test_reports: list[TestReport],
     stuck_by_work_item: dict[str, tuple[str, WorkItem | None]],
-    pending_approval_work_item_ids: set[str],
+    awaiting_approval_work_item_ids: set[str],
     integration_events: list[dict[str, Any]],
     split_parent_work_item_ids: set[str],
 ) -> dict[str, Any]:
@@ -56,11 +56,12 @@ def build_delivery_report(
         # Priority: terminal facts first (a stray pending approval or
         # stuck-classification must never override a hard COMPLETED/
         # CANCELLED outcome), then an active pending approval (derived
-        # only from a real ApprovalRequest.work_item_id -- item.status
-        # is never AWAITING_APPROVAL in any code path today, escalation
-        # included: escalate_work_item only ever changes the project's
-        # status, never the work item's own), then stuck, else still
-        # moving.
+        # only from a real task_escalated event whose metadata names a
+        # real pending approval for this exact item -- item.status is
+        # never AWAITING_APPROVAL in any code path today, and a generic
+        # approval's own work_item_id alone is not enough, same
+        # structural-link discipline as resolve_approval), then stuck,
+        # else still moving.
         if item.status is WorkItemStatus.COMPLETED:
             outcome = "completed"
         elif item.status is WorkItemStatus.CANCELLED:
@@ -69,7 +70,7 @@ def build_delivery_report(
                 if item.id in split_parent_work_item_ids
                 else "cancelled"
             )
-        elif item.id in pending_approval_work_item_ids:
+        elif item.id in awaiting_approval_work_item_ids:
             outcome = "awaiting_approval"
         elif stuck is not None:
             outcome = stuck[0]

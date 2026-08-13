@@ -325,6 +325,37 @@ def test_delivery_report_ignores_a_pending_approval_with_no_real_work_item_link(
     assert report["work_items"][0]["outcome"] == "failed"
 
 
+def test_delivery_report_ignores_a_pending_approval_with_a_coincidental_work_item_id(
+    service: ApplicationService,
+) -> None:
+    """Stronger than the test above: this approval's own work_item_id
+    DOES point at a real item -- but with no task_escalated event to
+    back it, that alone must not be enough. approval.work_item_id could
+    carry one incidentally on a generic, non-escalation approval; only a
+    real task_escalated event naming this exact approval counts (same
+    structural-link discipline as resolve_approval, ADR 0037)."""
+    project = service.create_project("Proyecto con una aprobacion coincidente")
+    milestone = _milestone(project.id)
+    service.repository.add_milestone(milestone)
+    item = _work_item(project.id, milestone.id, status=WorkItemStatus.FAILED)
+    service.repository.add_work_item(item)
+    service.repository.add_approval(
+        ApprovalRequest(
+            project_id=project.id,
+            work_item_id=item.id,
+            action="Decision generica que menciona el mismo work item",
+            reason="No nacio de una escalacion real.",
+            risk="high",
+            alternatives=[],
+            affected_resources=[],
+        )
+    )
+
+    report = service.delivery_report(project.id)
+
+    assert report["work_items"][0]["outcome"] == "failed"
+
+
 def test_delivery_report_marks_a_running_item_in_progress(service: ApplicationService) -> None:
     project = service.create_project("Proyecto con una tarea en curso")
     milestone = _milestone(project.id)
