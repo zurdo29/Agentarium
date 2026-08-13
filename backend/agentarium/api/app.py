@@ -302,6 +302,18 @@ def create_app(service: ApplicationService | None = None) -> FastAPI:
     async def repair_center() -> list[dict[str, Any]]:
         return resolved_service.repair_center()
 
+    @api.get("/api/projects/{project_id}/report")
+    async def project_report(project_id: str) -> dict[str, Any]:
+        return resolved_service.delivery_report(project_id)
+
+    @api.get("/api/projects/{project_id}/agent-runs")
+    async def project_agent_runs(project_id: str) -> list[dict[str, Any]]:
+        resolved_service.repository.get_project(project_id)
+        return [
+            run.model_dump(mode="json")
+            for run in resolved_service.repository.list_agent_runs(project_id)
+        ]
+
     @api.get("/api/projects/{project_id}/events")
     async def list_events(
         project_id: str,

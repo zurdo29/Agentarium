@@ -15,6 +15,7 @@ from agentarium.domain.enums import (
     ProjectStatus,
     ReviewVerdict,
     RiskLevel,
+    RunOutcome,
     WorkItemStatus,
 )
 from agentarium.domain.models import (
@@ -401,6 +402,45 @@ class Repository:
                     finished_at=run.finished_at,
                 )
             )
+
+    def list_agent_runs(self, project_id: str) -> list[AgentRun]:
+        """Project-scoped, like `list_reviews`/`list_test_reports` --
+        `list_events_for_work_item` is the one real exception to that
+        convention and its own docstring names the reason (a hot path
+        called on every attempt of every work item); nothing here is
+        called anywhere near that often, a human opens this occasionally.
+        Ordered by `started_at` with `id` as an explicit tie-breaker: the
+        mock provider can produce several runs with an identical
+        millisecond timestamp, and `list_reviews`/`list_test_reports`'s
+        own single-column `order_by` would leave those in whatever order
+        SQLite happens to return them in -- P4.4's attempt history needs
+        to be reproducible, not just usually-stable."""
+        with self.database.session() as session:
+            rows = session.scalars(
+                select(AgentRunRow)
+                .where(AgentRunRow.project_id == project_id)
+                .order_by(AgentRunRow.started_at, AgentRunRow.id)
+            ).all()
+            return [
+                AgentRun(
+                    id=row.id,
+                    project_id=row.project_id,
+                    work_item_id=row.work_item_id,
+                    agent_role=AgentRole(row.agent_role),
+                    model=row.model,
+                    provider=row.provider,
+                    attempt=row.attempt,
+                    outcome=RunOutcome(row.outcome),
+                    input_summary=row.input_summary,
+                    output_summary=row.output_summary,
+                    resource_usage=ResourceUsage(**row.resource_usage_json),
+                    correlation_id=row.correlation_id,
+                    error=row.error,
+                    started_at=row.started_at,
+                    finished_at=row.finished_at,
+                )
+                for row in rows
+            ]
 
     def add_artifact(self, artifact: Artifact) -> None:
         with self.database.session() as session:

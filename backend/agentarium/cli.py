@@ -264,6 +264,12 @@ def project_status(project_id: str) -> None:
     typer.echo(json.dumps(_project_detail(project_id), indent=2, ensure_ascii=False))
 
 
+@project_app.command("report")
+def project_report(project_id: str) -> None:
+    """Informe de entrega: qué se pidió, qué cambió, qué se verificó, qué quedó sin verificar."""
+    typer.echo(json.dumps(_delivery_report(project_id), indent=2, ensure_ascii=False))
+
+
 @benchmark_app.command("run")
 def benchmark_run(
     cases: Annotated[
@@ -443,6 +449,18 @@ def _repair_center() -> list[dict[str, Any]]:
         return list(response.json())
     except httpx.HTTPError:
         return _service().repair_center()
+
+
+def _delivery_report(project_id: str) -> dict[str, Any]:
+    """Same API-preferring/SQLite-fallback shape as `_project_detail`."""
+    settings = get_settings()
+    url = f"http://{settings.api_host}:{settings.api_port}/api/projects/{project_id}/report"
+    try:
+        response = httpx.get(url, timeout=1.0)
+        response.raise_for_status()
+        return dict(response.json())
+    except httpx.HTTPError:
+        return _service().delivery_report(project_id)
 
 
 @repair_app.command("list")
