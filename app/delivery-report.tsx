@@ -126,6 +126,16 @@ function DeliveryReportRow({
   onToggle: () => void;
 }) {
   const acceptanceEntries = Object.entries(item.review_acceptance_results);
+  // Same computed summary TaskDrawer already derives from the identical
+  // command_evidence shape (app/task-drawer.tsx's "Controles independientes"
+  // section) -- kept as a local computation here rather than a shared
+  // helper, matching this file's own zero-shared-logic precedent.
+  const validationProfileCount = item.test_command_evidence.filter(
+    (evidence) => evidence.check === "validation_profile",
+  ).length;
+  const worktreeVerified = item.test_command_evidence.some(
+    (evidence) => evidence.check === "isolated_change_set" && evidence.verified,
+  );
 
   return (
     <article className="delivery-report-card">
@@ -185,7 +195,25 @@ function DeliveryReportRow({
               <div>
                 <strong>Tester</strong>
                 <p>{item.test_summary}</p>
-                <small>{item.test_checks.length} comprobación(es) registradas</small>
+                {item.test_checks.length > 0 && (
+                  <ul className="delivery-report-check-list">
+                    {item.test_checks.map((check, index) => (
+                      <li key={`${check.name}-${index}`}>
+                        <span className={check.passed ? "result-pass" : "result-fail"}>
+                          {check.passed ? "PASS" : "FAIL"}
+                        </span>
+                        <strong>{check.name}</strong>
+                        <span>{check.evidence}</span>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+                {item.test_command_evidence.length > 0 && (
+                  <small>
+                    {validationProfileCount} perfiles registrados ·{" "}
+                    {worktreeVerified ? "worktree verificado" : "sin aislamiento registrado"}
+                  </small>
+                )}
               </div>
             </div>
           )}
@@ -195,9 +223,11 @@ function DeliveryReportRow({
               <span className="micro-label">Integrado</span>
               <p>
                 {item.integration_branch ?? "sin rama"} ·{" "}
-                {item.integration_commit.slice(0, 8)} · {item.integration_files.length}{" "}
-                archivo(s)
+                {item.integration_commit.slice(0, 8)}
               </p>
+              {item.integration_files.map((path) => (
+                <p key={path}>{path}</p>
+              ))}
             </div>
           )}
 

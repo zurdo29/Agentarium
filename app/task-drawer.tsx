@@ -14,6 +14,18 @@ const AGENT_RUN_OUTCOME_LABELS: Record<string, string> = {
   rejected: "Rechazado",
 };
 
+// queue_wait_ms/generation_ms are a real ResourceUsage | null pair (P1.3a
+// split queue time from generation time; not every provider path fills
+// both) -- "sin dato" is a real, distinct value from "0ms", never
+// collapsed into it.
+function formatMs(ms: number): string {
+  return `${ms}ms`;
+}
+
+function formatMsOrNull(ms: number | null): string {
+  return ms === null ? "sin dato" : formatMs(ms);
+}
+
 export function TaskDrawer({
   item,
   detail,
@@ -232,11 +244,14 @@ export function TaskDrawer({
                     <small>
                       {run.model} ({run.provider}) · {dateLabel(run.started_at)}
                     </small>
+                    <small className="agent-run-usage">
+                      {formatMs(run.resource_usage.duration_ms)} totales · cola{" "}
+                      {formatMsOrNull(run.resource_usage.queue_wait_ms)} · generación{" "}
+                      {formatMsOrNull(run.resource_usage.generation_ms)} ·{" "}
+                      {run.resource_usage.errors} error(es)
+                    </small>
                     {run.error && <small className="agent-run-error">{run.error}</small>}
                   </div>
-                  <span className="agent-run-duration">
-                    {Math.round(run.resource_usage.duration_ms / 1000)}s
-                  </span>
                 </div>
               ))}
               {itemRuns.length === 0 && (

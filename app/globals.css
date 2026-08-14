@@ -2185,11 +2185,9 @@ textarea:focus-visible {
   white-space: nowrap;
 }
 
-.agent-run-duration {
+.agent-run-usage {
   color: var(--muted);
   font-family: ui-monospace, "Cascadia Code", monospace;
-  font-size: 10px;
-  white-space: nowrap;
 }
 
 .drawer-evidence strong,
@@ -2566,6 +2564,29 @@ textarea:focus-visible {
   color: var(--ink-soft);
   font-size: 11px;
   margin: 0;
+}
+
+.delivery-report-check-list {
+  display: grid;
+  gap: 6px;
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+}
+
+.delivery-report-check-list li {
+  align-items: baseline;
+  display: flex;
+  gap: 8px;
+}
+
+.delivery-report-check-list strong {
+  font-size: 10px;
+}
+
+.delivery-report-check-list li > span:last-child {
+  color: var(--muted);
+  font-size: 9px;
 }
 
 .delivery-report-integration {

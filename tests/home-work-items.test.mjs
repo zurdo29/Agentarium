@@ -279,6 +279,43 @@ test("the attempt history button loads and filters agent runs to the open task",
   mock.assertAllMatched();
 });
 
+test("the attempt history shows full resource usage diagnostics, including null queue/generation", async () => {
+  const mock = createFetchMock();
+  globalThis.fetch = mock.fetch;
+  const item = buildWorkItem({ id: "item-diagnostics", title: "Tarea con diagnóstico" });
+  await openProjectWith(mock, { work_items: [item] });
+
+  await userEvent.click(screen.getByRole("button", { name: /Tarea con diagnóstico/i }));
+  await screen.findByRole("heading", { name: "Tarea con diagnóstico" });
+
+  // queue_wait_ms/generation_ms are a real ResourceUsage | null pair (not
+  // every provider path fills both) -- null here on purpose, must render
+  // as a real "sin dato", never "nullms" or a silent blank.
+  const run = buildAgentRun({
+    work_item_id: "item-diagnostics",
+    resource_usage: {
+      duration_ms: 3400,
+      queue_wait_ms: null,
+      generation_ms: null,
+      prompt_characters: 500,
+      response_characters: 800,
+      prompt_tokens_approx: 120,
+      response_tokens_approx: 200,
+      model: "qwen2.5-coder:7b",
+      provider: "mock",
+      errors: 2,
+    },
+  });
+  mock.on("GET", `/api/projects/${PROJECT_ID}/agent-runs`, [run]);
+
+  await userEvent.click(screen.getByRole("button", { name: /Ver historial de intentos/i }));
+
+  await screen.findByText(
+    /3400ms totales · cola sin dato · generación sin dato · 2 error\(es\)/,
+  );
+  mock.assertAllMatched();
+});
+
 test("a slow attempt-history response for a project the user has left never overwrites the one now on screen", async () => {
   const mock = createFetchMock();
   globalThis.fetch = mock.fetch;

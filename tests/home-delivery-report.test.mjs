@@ -12,6 +12,7 @@ import { afterEach, test } from "node:test";
 import { cleanup, screen, userEvent, within } from "./support/dom-setup.mjs";
 import { createFetchMock } from "./support/fetch-mock.mjs";
 import {
+  buildCommandEvidence,
   buildDashboard,
   buildDeliveryReport,
   buildDeliveryReportWorkItem,
@@ -96,6 +97,67 @@ test("a completed item's review/test evidence stays visible, not just the proble
   await userEvent.click(screen.getByRole("button", { name: /Tarea completada con evidencia/i }));
   await screen.findByText("La evidencia es explícita.");
   await screen.findByText("Todas las validaciones automáticas pasaron.");
+  mock.assertAllMatched();
+});
+
+test("a completed item's expanded detail lists each test check, a command-evidence summary, and the real integration file paths", async () => {
+  const mock = createFetchMock();
+  globalThis.fetch = mock.fetch;
+  const project = buildProject({ id: "files-project", title: "Proyecto con archivos" });
+  mockBackgroundRefresh(mock, buildDashboard({ projects: [project] }));
+  await renderHome();
+
+  mock.on("GET", "/api/projects/files-project", buildProjectDetail({ project }));
+  mock.on("GET", "/api/projects/files-project/events", []);
+  await userEvent.click(screen.getByRole("button", { name: /Proyecto con archivos/i }));
+  await screen.findByRole("heading", { name: "Proyecto con archivos" });
+
+  const completedItem = buildDeliveryReportWorkItem({
+    work_item_id: "item-files",
+    title: "Tarea con archivos integrados",
+    outcome: "completed",
+    test_passed: true,
+    test_summary: "Todas las validaciones automáticas pasaron.",
+    test_checks: [
+      { name: "file_exists", passed: true, evidence: "Checksum verificado." },
+      { name: "lint_clean", passed: false, evidence: "2 advertencias de ruff." },
+    ],
+    test_command_evidence: [
+      buildCommandEvidence({ check: "validation_profile", profile: "workspace_inventory" }),
+      buildCommandEvidence({ check: "validation_profile", profile: "python_syntax" }),
+      buildCommandEvidence({ check: "isolated_change_set", backend: "git_worktree", verified: true }),
+    ],
+    integration_files: ["backend/agentarium/api/app.py", "backend/tests/test_delivery_report.py"],
+  });
+  mock.on(
+    "GET",
+    "/api/projects/files-project/report",
+    buildDeliveryReport({
+      project: { id: "files-project", title: "Proyecto con archivos", goal: project.goal },
+      work_items: [completedItem],
+      totals: { completed: 1 },
+    }),
+  );
+
+  await userEvent.click(screen.getByRole("button", { name: /Generar informe/i }));
+  await screen.findByText("Tarea con archivos integrados");
+  await userEvent.click(screen.getByRole("button", { name: /Tarea con archivos integrados/i }));
+
+  // Each test_check individually (name + PASS/FAIL + evidence), not just
+  // a count -- both the passing and the failing check must render.
+  await screen.findByText("file_exists");
+  await screen.findByText("Checksum verificado.");
+  await screen.findByText("lint_clean");
+  await screen.findByText("2 advertencias de ruff.");
+
+  // Compact command-evidence summary -- same computed text TaskDrawer
+  // already derives from the identical command_evidence shape.
+  await screen.findByText(/2 perfiles registrados/);
+  await screen.findByText(/worktree verificado/);
+
+  // Real integration file paths, not just a count.
+  await screen.findByText("backend/agentarium/api/app.py");
+  await screen.findByText("backend/tests/test_delivery_report.py");
   mock.assertAllMatched();
 });
 
