@@ -1,5 +1,30 @@
-import type { EventRecord, ProjectDetail, WorkItem } from "./page";
+import type { AgentRun, EventRecord, ProjectDetail, WorkItem } from "./page";
 import { ROLE_LABELS, Status, dateLabel } from "./shared";
+
+// P4.4b: RunOutcome vocabulary (backend/agentarium/domain/enums.py) --
+// distinct from WorkItemStatus/DeliveryReportWorkItem's outcome, so this
+// stays a small local map rather than growing shared.tsx's STATUS_LABELS
+// with terms that don't belong to that vocabulary.
+const AGENT_RUN_OUTCOME_LABELS: Record<string, string> = {
+  artifact_delivered: "Artefacto entregado",
+  needs_information: "Necesita información",
+  blocked: "Bloqueado",
+  approval_requested: "Pidió aprobación",
+  escalated: "Escalado",
+  rejected: "Rechazado",
+};
+
+// queue_wait_ms/generation_ms are a real ResourceUsage | null pair (P1.3a
+// split queue time from generation time; not every provider path fills
+// both) -- "sin dato" is a real, distinct value from "0ms", never
+// collapsed into it.
+function formatMs(ms: number): string {
+  return `${ms}ms`;
+}
+
+function formatMsOrNull(ms: number | null): string {
+  return ms === null ? "sin dato" : formatMs(ms);
+}
 
 export function TaskDrawer({
   item,
@@ -18,6 +43,9 @@ export function TaskDrawer({
   onReworkReasonChange,
   escalateReason,
   onEscalateReasonChange,
+  agentRuns,
+  agentRunsLoading,
+  onLoadAgentRuns,
 }: {
   item: WorkItem;
   detail: ProjectDetail;
@@ -35,6 +63,9 @@ export function TaskDrawer({
   onReworkReasonChange: (value: string) => void;
   escalateReason: string;
   onEscalateReasonChange: (value: string) => void;
+  agentRuns: AgentRun[] | null;
+  agentRunsLoading: boolean;
+  onLoadAgentRuns: () => void;
 }) {
   const dependencies = item.dependency_ids
     .map((id) => detail.work_items.find((candidate) => candidate.id === id))
@@ -50,6 +81,7 @@ export function TaskDrawer({
   );
   const canRetry = ["failed", "changes_requested"].includes(item.status);
   const taskEvents = events.filter((event) => event.work_item_id === item.id);
+  const itemRuns = agentRuns?.filter((run) => run.work_item_id === item.id) ?? [];
   const priorities = Array.from(new Set([item.priority, 25, 50, 75, 100])).sort(
     (a, b) => a - b,
   );
@@ -184,6 +216,49 @@ export function TaskDrawer({
               )}
             </div>
           ))}
+        </section>
+
+        <section className="drawer-section">
+          <span className="micro-label">Historial de intentos</span>
+          {agentRuns === null ? (
+            <button
+              type="button"
+              className="control-button"
+              onClick={onLoadAgentRuns}
+              disabled={agentRunsLoading}
+            >
+              {agentRunsLoading ? "Cargando…" : "Ver historial de intentos"}
+            </button>
+          ) : (
+            <div className="agent-run-list">
+              {itemRuns.map((run) => (
+                <div className="agent-run-item" key={run.id}>
+                  <span className="agent-run-outcome">
+                    {AGENT_RUN_OUTCOME_LABELS[run.outcome] ?? run.outcome}
+                  </span>
+                  <div>
+                    <strong>
+                      {ROLE_LABELS[run.agent_role] ?? run.agent_role} · intento{" "}
+                      {run.attempt}
+                    </strong>
+                    <small>
+                      {run.model} ({run.provider}) · {dateLabel(run.started_at)}
+                    </small>
+                    <small className="agent-run-usage">
+                      {formatMs(run.resource_usage.duration_ms)} totales · cola{" "}
+                      {formatMsOrNull(run.resource_usage.queue_wait_ms)} · generación{" "}
+                      {formatMsOrNull(run.resource_usage.generation_ms)} ·{" "}
+                      {run.resource_usage.errors} error(es)
+                    </small>
+                    {run.error && <small className="agent-run-error">{run.error}</small>}
+                  </div>
+                </div>
+              ))}
+              {itemRuns.length === 0 && (
+                <p className="empty-copy">Sin intentos registrados para esta tarea.</p>
+              )}
+            </div>
+          )}
         </section>
 
         <section className="drawer-section">

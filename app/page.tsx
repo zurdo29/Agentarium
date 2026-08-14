@@ -1,10 +1,11 @@
 "use client";
 
-import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
+import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { DeliveryReportView } from "./delivery-report";
 import { ExportProject } from "./export-project";
 import { ImportProject } from "./import-project";
 import { RepairCenter } from "./repair-center";
-import { ROLE_LABELS, Status, dateLabel, statusLabel } from "./shared";
+import { PanelHeading, ROLE_LABELS, Status, dateLabel, statusLabel } from "./shared";
 import { TaskDrawer } from "./task-drawer";
 
 type View = "dashboard" | "project" | "approvals" | "repair";
@@ -116,7 +117,92 @@ export type CandidateFileDraft = {
   purpose: string;
 };
 
-type Brief = {
+export type ResourceUsage = {
+  duration_ms: number;
+  queue_wait_ms: number | null;
+  generation_ms: number | null;
+  prompt_characters: number;
+  response_characters: number;
+  prompt_tokens_approx: number;
+  response_tokens_approx: number;
+  model: string;
+  provider: string;
+  errors: number;
+};
+
+export type AgentRun = {
+  id: string;
+  project_id: string;
+  work_item_id: string | null;
+  agent_role: string;
+  model: string;
+  provider: string;
+  attempt: number;
+  outcome: string;
+  input_summary: string;
+  output_summary: string;
+  resource_usage: ResourceUsage;
+  correlation_id: string;
+  error: string | null;
+  started_at: string;
+  finished_at: string;
+};
+
+export type DeliveryReportOutcome =
+  | "completed"
+  | "changes_requested"
+  | "failed"
+  | "exhausted"
+  | "blocked"
+  | "cancelled"
+  | "superseded_by_split"
+  | "awaiting_approval"
+  | "in_progress";
+
+export type DeliveryReportWorkItem = {
+  work_item_id: string;
+  title: string;
+  status: string;
+  outcome: DeliveryReportOutcome;
+  attempt_count: number;
+  max_attempts: number;
+  review_verdict: string | null;
+  review_reasons: string[];
+  review_acceptance_results: Record<string, boolean>;
+  test_passed: boolean | null;
+  test_summary: string | null;
+  test_checks: Array<{ name: string; passed: boolean; evidence: string }>;
+  test_command_evidence: Array<{
+    check: string;
+    profile?: string;
+    backend?: string;
+    branch?: string;
+    commit?: string;
+    return_code?: number;
+    timed_out?: boolean;
+    passed?: boolean;
+    verified?: boolean;
+  }>;
+  integration_commit: string | null;
+  integration_branch: string | null;
+  integration_files: string[];
+  blocking_dependency_id: string | null;
+  blocking_dependency_title: string | null;
+};
+
+export type DeliveryReport = {
+  project: {
+    id: string;
+    title: string;
+    goal: string;
+    brief: Brief | null;
+  };
+  work_items: DeliveryReportWorkItem[];
+  unverified_completed_items: Array<{ work_item_id: string; title: string }>;
+  totals: Record<string, number>;
+};
+
+export type Brief = {
   summary: string;
   scope: string[];
   deliverables: string[];
@@ -604,6 +690,23 @@ export default function Home() {
   const [taskReworkReason, setTaskReworkReason] = useState("");
   const [taskEscalateReason, setTaskEscalateReason] = useState("");
 
+  // P4.4b -- delivery report + agent-run history, both fetched on demand
+  // (a click, not a decorative panel, per PLANS.md P4.4) and both scoped
+  // to whichever project is currently open, never auto-refreshed by
+  // unrelated actions elsewhere. Each has its own monotonic request id:
+  // openProject() bumps both on every project switch, and a resolved
+  // fetch only applies its result while its id is still the latest one
+  // issued -- a slow response for a project the user has since left must
+  // never clobber what's now on screen for a different one.
+  const [deliveryReport, setDeliveryReport] = useState<DeliveryReport | null>(null);
+  const [deliveryReportLoading, setDeliveryReportLoading] = useState(false);
+  const [deliveryReportExpandedId, setDeliveryReportExpandedId] = useState<string | null>(null);
+  const deliveryReportRequestRef = useRef(0);
+
+  const [agentRuns, setAgentRuns] = useState<AgentRun[] | null>(null);
+  const [agentRunsLoading, setAgentRunsLoading] = useState(false);
+  const agentRunsRequestRef = useRef(0);
+
   const selectedTask = useMemo(
     () =>
       detail.work_items.find((item) => item.id === selectedTaskId) ?? null,
@@ -650,6 +753,22 @@ export default function Home() {
     async (projectId: string) => {
       setView("project");
       setError(null);
+      // A report/attempt history fetched for whichever project was open
+      // before must never linger while a different project loads -- see
+      // the state block above for why these are guarded by request id.
+      // The loading flags must be reset here too, not just the data: a
+      // stale request's own `finally` deliberately skips clearing them
+      // (same requestId guard, so it can't stomp a newer request's
+      // in-flight state), so without this a fetch abandoned mid-flight
+      // would leave the new project's button stuck on "Generando…"/
+      // "Cargando…" forever.
+      deliveryReportRequestRef.current += 1;
+      agentRunsRequestRef.current += 1;
+      setDeliveryReport(null);
+      setDeliveryReportExpandedId(null);
+      setDeliveryReportLoading(false);
+      setAgentRuns(null);
+      setAgentRunsLoading(false);
       if (projectId === DEMO_ID) {
         setDetail(SAMPLE_DETAIL);
         setEvents(SAMPLE_EVENTS);
@@ -996,6 +1115,61 @@ export default function Home() {
       );
     } finally {
       setLoading(false);
+    }
+  }
+
+  // -- Delivery report + agent-run history (P4.4b) ----------------------
+  // Both on-demand, both project-scoped, neither auto-fetched by
+  // openProject() or any action above -- PLANS.md P4.4 asks for a real
+  // audit trail, not a decorative panel refetched on every click.
+
+  async function loadDeliveryReport(projectId: string) {
+    if (projectId === DEMO_ID) {
+      setError("Inicia la API para generar el informe de un proyecto real.");
+      return;
+    }
+    const requestId = ++deliveryReportRequestRef.current;
+    setDeliveryReportLoading(true);
+    setError(null);
+    try {
+      const report = await request<DeliveryReport>(`/projects/${projectId}/report`);
+      if (deliveryReportRequestRef.current !== requestId) return;
+      setDeliveryReport(report);
+    } catch (reason) {
+      if (deliveryReportRequestRef.current !== requestId) return;
+      setError(
+        reason instanceof Error ? reason.message : "No se pudo cargar el informe.",
+      );
+    } finally {
+      if (deliveryReportRequestRef.current === requestId) setDeliveryReportLoading(false);
+    }
+  }
+
+  function toggleDeliveryReportExpanded(workItemId: string) {
+    setDeliveryReportExpandedId((current) => (current === workItemId ? null : workItemId));
+  }
+
+  async function loadAgentRuns(projectId: string) {
+    if (projectId === DEMO_ID) {
+      setError("Inicia la API para ver el historial de intentos de un proyecto real.");
+      return;
+    }
+    const requestId = ++agentRunsRequestRef.current;
+    setAgentRunsLoading(true);
+    setError(null);
+    try {
+      const runs = await request<AgentRun[]>(`/projects/${projectId}/agent-runs`);
+      if (agentRunsRequestRef.current !== requestId) return;
+      setAgentRuns(runs);
+    } catch (reason) {
+      if (agentRunsRequestRef.current !== requestId) return;
+      setError(
+        reason instanceof Error
+          ? reason.message
+          : "No se pudo cargar el historial de intentos.",
+      );
+    } finally {
+      if (agentRunsRequestRef.current === requestId) setAgentRunsLoading(false);
     }
   }
 
@@ -1376,6 +1550,11 @@ export default function Home() {
             exporting={exporting}
             onExportProject={exportProject}
             connected={connected}
+            deliveryReport={deliveryReport}
+            deliveryReportLoading={deliveryReportLoading}
+            onLoadDeliveryReport={() => loadDeliveryReport(detail.project.id)}
+            deliveryReportExpandedId={deliveryReportExpandedId}
+            onToggleDeliveryReportExpand={toggleDeliveryReportExpanded}
           />
         )}
 
@@ -1441,6 +1620,9 @@ export default function Home() {
           onReworkReasonChange={setTaskReworkReason}
           escalateReason={taskEscalateReason}
           onEscalateReasonChange={setTaskEscalateReason}
+          agentRuns={agentRuns}
+          agentRunsLoading={agentRunsLoading}
+          onLoadAgentRuns={() => loadAgentRuns(detail.project.id)}
         />
       )}
     </main>
@@ -1875,6 +2057,11 @@ function ProjectView({
   exporting,
   onExportProject,
   connected,
+  deliveryReport,
+  deliveryReportLoading,
+  onLoadDeliveryReport,
+  deliveryReportExpandedId,
+  onToggleDeliveryReportExpand,
 }: {
   detail: ProjectDetail;
   events: EventRecord[];
@@ -1895,6 +2082,11 @@ function ProjectView({
   exporting: boolean;
   onExportProject: () => Promise<void>;
   connected: boolean;
+  deliveryReport: DeliveryReport | null;
+  deliveryReportLoading: boolean;
+  onLoadDeliveryReport: () => Promise<void>;
+  deliveryReportExpandedId: string | null;
+  onToggleDeliveryReportExpand: (workItemId: string) => void;
 }) {
   const project = detail.project;
   const pending = detail.approvals.filter(
@@ -1993,6 +2185,15 @@ function ProjectView({
         exporting={exporting}
         onExport={onExportProject}
         connected={connected}
+      />
+
+      <DeliveryReportView
+        report={deliveryReport}
+        loading={deliveryReportLoading}
+        onLoad={onLoadDeliveryReport}
+        connected={connected}
+        expandedId={deliveryReportExpandedId}
+        onToggleExpand={onToggleDeliveryReportExpand}
       />
 
       <section className="project-progress-bar">
@@ -2268,6 +2469,7 @@ function ProjectView({
                   <span>{decision.reversible ? "REVERSIBLE" : "PROTEGIDA"}</span>
                   <strong>{decision.title}</strong>
                   <p>{decision.decision}</p>
+                  <small>{decision.rationale}</small>
                 </div>
               ))}
             </div>
@@ -2311,6 +2513,14 @@ function ProjectView({
             <PanelHeading index="06" eyebrow="Calidad" title="Métricas" />
             <div className="mini-metrics">
               <div>
+                <strong>{detail.metrics.tasks_completed ?? 0}</strong>
+                <span>completadas</span>
+              </div>
+              <div>
+                <strong>{detail.metrics.tasks_rejected ?? 0}</strong>
+                <span>rechazadas</span>
+              </div>
+              <div>
                 <strong>
                   {percent(detail.metrics.tester_approval_rate)}
                 </strong>
@@ -2339,29 +2549,6 @@ function ProjectView({
           </article>
         </aside>
       </section>
-    </div>
-  );
-}
-
-function PanelHeading({
-  index,
-  eyebrow,
-  title,
-  trailing,
-}: {
-  index: string;
-  eyebrow: string;
-  title: string;
-  trailing?: string;
-}) {
-  return (
-    <div className="panel-heading">
-      <span className="panel-index">{index}</span>
-      <div>
-        <span className="eyebrow">{eyebrow}</span>
-        <h2>{title}</h2>
-      </div>
-      {trailing && <span className="panel-trailing">{trailing}</span>}
     </div>
   );
 }

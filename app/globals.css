@@ -1145,7 +1145,8 @@ textarea:focus-visible {
 
 .status-pill.running,
 .status-pill.assigned,
-.status-pill.awaiting_review {
+.status-pill.awaiting_review,
+.status-pill.in_progress {
   background: #dbe9f3;
   color: var(--blue);
 }
@@ -1160,14 +1161,16 @@ textarea:focus-visible {
 .status-pill.blocked,
 .status-pill.changes_requested,
 .status-pill.awaiting_approval,
-.status-pill.pending {
+.status-pill.pending,
+.status-pill.exhausted {
   background: #f1dfcd;
   color: #98572f;
 }
 
 .status-pill.failed,
 .status-pill.cancelled,
-.status-pill.rejected {
+.status-pill.rejected,
+.status-pill.superseded_by_split {
   background: #efdad7;
   color: var(--red);
 }
@@ -1804,6 +1807,16 @@ textarea:focus-visible {
   margin: 5px 0 0;
 }
 
+.decision-item small {
+  color: var(--muted);
+  display: block;
+  font-size: 9px;
+  font-style: italic;
+  line-height: 1.4;
+  margin: 4px 0 0;
+  opacity: 0.8;
+}
+
 .artifact-item {
   align-items: center;
   border-bottom: 1px solid var(--line);
@@ -2133,7 +2146,8 @@ textarea:focus-visible {
 }
 
 .drawer-evidence,
-.review-result {
+.review-result,
+.agent-run-item {
   align-items: center;
   background: var(--paper);
   border-radius: 10px;
@@ -2141,6 +2155,39 @@ textarea:focus-visible {
   gap: 12px;
   margin-top: 10px;
   padding: 12px;
+}
+
+.agent-run-item strong {
+  display: block;
+  font-size: 10px;
+}
+
+.agent-run-item small {
+  color: var(--muted);
+  display: block;
+  font-size: 9px;
+  margin-top: 3px;
+}
+
+.agent-run-error {
+  color: var(--red);
+}
+
+.agent-run-outcome {
+  background: rgb(216 138 122 / 15%);
+  border-radius: 999px;
+  color: var(--ink-soft);
+  font-size: 8px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  padding: 4px 8px;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.agent-run-usage {
+  color: var(--muted);
+  font-family: ui-monospace, "Cascadia Code", monospace;
 }
 
 .drawer-evidence strong,
@@ -2409,6 +2456,166 @@ textarea:focus-visible {
   margin-top: 6px;
   min-height: 38px;
   padding: 0 26px 0 10px;
+}
+
+/* Delivery report (P4.4b) -- light .panel theme, not the dark composer
+   card ExportProject/ImportProject use: the review/test evidence chips
+   it reuses (.review-result, .result-pass/.result-fail) are styled for
+   a light background. */
+
+.project-delivery-report {
+  margin-bottom: 28px;
+}
+
+.delivery-report-goal {
+  color: var(--ink-soft);
+  font-size: 12px;
+  line-height: 1.5;
+  margin: -8px 0 16px;
+}
+
+.delivery-report-warning {
+  align-items: center;
+  background: var(--paper-deep);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  display: flex;
+  gap: 15px;
+  margin-bottom: 18px;
+  padding: 16px 18px;
+}
+
+.delivery-report-warning strong {
+  display: block;
+  font-family: Georgia, serif;
+  font-size: 12px;
+}
+
+.delivery-report-warning p {
+  color: var(--muted);
+  font-size: 10px;
+  margin: 5px 0 0;
+}
+
+.delivery-report-totals {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 22px;
+  margin-bottom: 20px;
+}
+
+.delivery-report-totals strong {
+  display: block;
+  font-family: Georgia, serif;
+  font-size: 20px;
+}
+
+.delivery-report-totals span {
+  color: var(--muted);
+  font-size: 8px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.delivery-report-list {
+  display: grid;
+  gap: 12px;
+}
+
+.delivery-report-card {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  overflow: hidden;
+}
+
+.delivery-report-card-summary {
+  align-items: center;
+  background: none;
+  border: none;
+  cursor: pointer;
+  display: grid;
+  gap: 14px;
+  grid-template-columns: auto 1fr auto;
+  padding: 14px 18px;
+  text-align: left;
+  width: 100%;
+}
+
+.delivery-report-card-summary strong {
+  display: block;
+  font-size: 13px;
+}
+
+.delivery-report-card-summary small {
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.delivery-report-card-detail {
+  border-top: 1px solid var(--line);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px 18px 18px;
+}
+
+.delivery-report-card-detail > p {
+  color: var(--ink-soft);
+  font-size: 11px;
+  margin: 0;
+}
+
+.delivery-report-check-list {
+  display: grid;
+  gap: 6px;
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+}
+
+.delivery-report-check-list li {
+  align-items: baseline;
+  display: flex;
+  gap: 8px;
+}
+
+.delivery-report-check-list strong {
+  font-size: 10px;
+}
+
+.delivery-report-check-list li > span:last-child {
+  color: var(--muted);
+  font-size: 9px;
+}
+
+.delivery-report-integration {
+  background: var(--paper);
+  border-radius: 8px;
+  padding: 10px 12px;
+}
+
+.delivery-report-integration p {
+  color: var(--ink-soft);
+  font-family: ui-monospace, "Cascadia Code", monospace;
+  font-size: 10px;
+  margin: 4px 0 0;
+  word-break: break-all;
+}
+
+.delivery-report-footer {
+  align-items: center;
+  border-top: 1px solid var(--line);
+  display: flex;
+  gap: 20px;
+  justify-content: space-between;
+  margin-top: 18px;
+  padding-top: 16px;
+}
+
+.delivery-report-footer > span {
+  color: var(--muted);
+  font-size: 11px;
 }
 
 @media (max-width: 1120px) {

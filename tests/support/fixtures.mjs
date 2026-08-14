@@ -311,6 +311,79 @@ export function buildRepairItem(overrides = {}) {
   };
 }
 
+export function buildAgentRun(overrides = {}) {
+  return {
+    id: nextId("agent-run"),
+    project_id: "project-1",
+    work_item_id: "task-1",
+    agent_role: "implementation_worker",
+    model: "qwen2.5-coder:7b",
+    provider: "mock",
+    attempt: 1,
+    outcome: "artifact_delivered",
+    input_summary: "Resumen de entrada de prueba.",
+    output_summary: "Resumen de salida de prueba.",
+    resource_usage: {
+      duration_ms: 2400,
+      queue_wait_ms: 100,
+      generation_ms: 2200,
+      prompt_characters: 500,
+      response_characters: 800,
+      prompt_tokens_approx: 120,
+      response_tokens_approx: 200,
+      model: "qwen2.5-coder:7b",
+      provider: "mock",
+      errors: 0,
+    },
+    correlation_id: nextId("correlation"),
+    error: null,
+    started_at: "2026-08-01T00:00:00Z",
+    finished_at: "2026-08-01T00:02:00Z",
+    ...overrides,
+  };
+}
+
+export function buildDeliveryReportWorkItem(overrides = {}) {
+  return {
+    work_item_id: "task-1",
+    title: "Tarea de prueba",
+    status: "completed",
+    outcome: "completed",
+    attempt_count: 1,
+    max_attempts: 3,
+    review_verdict: "approved",
+    review_reasons: [],
+    review_acceptance_results: { "Cumple el criterio": true },
+    test_passed: true,
+    test_summary: "Comprobaciones automáticas superadas.",
+    test_checks: [{ name: "file_exists", passed: true, evidence: "Checksum verificado." }],
+    test_command_evidence: [],
+    integration_commit: "b".repeat(40),
+    integration_branch: "task/task-1",
+    integration_files: ["result.py"],
+    blocking_dependency_id: null,
+    blocking_dependency_title: null,
+    ...overrides,
+  };
+}
+
+export function buildDeliveryReport(overrides = {}) {
+  const { project, work_items, ...rest } = overrides;
+  return {
+    project: {
+      id: "project-1",
+      title: "Proyecto de prueba",
+      goal: "Meta de prueba para P3.1b.",
+      brief: null,
+      ...project,
+    },
+    work_items: work_items ?? [buildDeliveryReportWorkItem()],
+    unverified_completed_items: [],
+    totals: { completed: 1 },
+    ...rest,
+  };
+}
+
 export function buildProviderOverview(overrides = {}) {
   return {
     active_provider: "mock",
