@@ -13,8 +13,10 @@ import { afterEach, test } from "node:test";
 import { cleanup, screen, userEvent, within } from "./support/dom-setup.mjs";
 import { createFetchMock } from "./support/fetch-mock.mjs";
 import {
+  buildAgentRun,
   buildArtifact,
   buildCommandEvidence,
+  buildDashboard,
   buildDecision,
   buildProject,
   buildProjectDetail,
@@ -240,4 +242,94 @@ test("project view surfaces decisions and metrics P4.4's audit trail will read",
   await screen.findByText("3", { selector: ".mini-metrics strong" });
   // average_agent_duration_ms 4500 -> Math.round(4500/1000) -> "5s".
   await screen.findByText("5s");
+});
+
+// P4.4b -- attempt history in TaskDrawer, on demand (GET .../agent-runs
+// is project-scoped, so it's fetched once per project and filtered
+// client-side by work_item_id, same idiom as reviews/test_reports).
+
+test("the attempt history button loads and filters agent runs to the open task", async () => {
+  const mock = createFetchMock();
+  globalThis.fetch = mock.fetch;
+  const item = buildWorkItem({ id: "item-with-runs", title: "Tarea con intentos" });
+  const otherItem = buildWorkItem({ id: "item-other", title: "Otra tarea" });
+  await openProjectWith(mock, { work_items: [item, otherItem] });
+
+  await userEvent.click(screen.getByRole("button", { name: /Tarea con intentos/i }));
+  await screen.findByRole("heading", { name: "Tarea con intentos" });
+
+  const ownRun = buildAgentRun({
+    work_item_id: "item-with-runs",
+    agent_role: "implementation_worker",
+    model: "qwen2.5-coder:7b",
+    attempt: 1,
+  });
+  const foreignRun = buildAgentRun({ work_item_id: "item-other", attempt: 1 });
+  mock.on("GET", `/api/projects/${PROJECT_ID}/agent-runs`, [ownRun, foreignRun]);
+
+  await userEvent.click(screen.getByRole("button", { name: /Ver historial de intentos/i }));
+
+  await screen.findByText(/qwen2\.5-coder:7b/);
+  // Only one run belongs to this item -- the other work item's run must
+  // not leak in just because both share the same project-scoped fetch.
+  const drawer = within(
+    screen.getByRole("complementary", { name: /Detalle de Tarea con intentos/i }),
+  );
+  assert.equal(drawer.getAllByText(/qwen2\.5-coder:7b/i).length, 1);
+  mock.assertAllMatched();
+});
+
+test("a slow attempt-history response for a project the user has left never overwrites the one now on screen", async () => {
+  const mock = createFetchMock();
+  globalThis.fetch = mock.fetch;
+  const projectA = buildProject({ id: "runs-project-a", title: "Runs Alfa" });
+  const projectB = buildProject({ id: "runs-project-b", title: "Runs Beta" });
+  mockBackgroundRefresh(mock, buildDashboard({ projects: [projectA, projectB] }));
+  await renderHome();
+
+  const itemA = buildWorkItem({ id: "task-a", title: "Tarea de Alfa" });
+  const itemB = buildWorkItem({ id: "task-b", title: "Tarea de Beta" });
+  mock.on(
+    "GET",
+    "/api/projects/runs-project-a",
+    buildProjectDetail({ project: projectA, work_items: [itemA] }),
+  );
+  mock.on("GET", "/api/projects/runs-project-a/events", []);
+  mock.on(
+    "GET",
+    "/api/projects/runs-project-b",
+    buildProjectDetail({ project: projectB, work_items: [itemB] }),
+  );
+  mock.on("GET", "/api/projects/runs-project-b/events", []);
+
+  await userEvent.click(screen.getByRole("button", { name: /Runs Alfa/i }));
+  await screen.findByRole("heading", { name: "Runs Alfa" });
+  await userEvent.click(screen.getByRole("button", { name: /Tarea de Alfa/i }));
+  await screen.findByRole("heading", { name: "Tarea de Alfa" });
+
+  let resolveRunsA;
+  const pendingRunsA = new Promise((resolve) => {
+    resolveRunsA = resolve;
+  });
+  mock.on("GET", "/api/projects/runs-project-a/agent-runs", () => pendingRunsA);
+  await userEvent.click(screen.getByRole("button", { name: /Ver historial de intentos/i }));
+  await screen.findByText(/Cargando…/i);
+
+  // Leave for a different project before Alfa's history resolves.
+  const mainNav = screen.getByRole("navigation", { name: /Navegación principal/i });
+  await userEvent.click(within(mainNav).getByRole("button", { name: /Dashboard/i }));
+  await userEvent.click(screen.getByRole("button", { name: /Runs Beta/i }));
+  await screen.findByRole("heading", { name: "Runs Beta" });
+  await userEvent.click(screen.getByRole("button", { name: /Tarea de Beta/i }));
+  await screen.findByRole("heading", { name: "Tarea de Beta" });
+
+  resolveRunsA([buildAgentRun({ work_item_id: "task-a", model: "modelo-exclusivo-de-alfa" })]);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  assert.equal(screen.queryByText(/modelo-exclusivo-de-alfa/i), null);
+  // Beta's drawer never had its own history requested, so it still shows
+  // the initial button -- proof agentRuns is still null for Beta, not
+  // silently filled by Alfa's late response.
+  await screen.findByRole("button", { name: /Ver historial de intentos/i });
+  mock.assertAllMatched();
 });

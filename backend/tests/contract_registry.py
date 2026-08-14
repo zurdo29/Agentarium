@@ -25,7 +25,7 @@ piece this particular TS type describes -- `()` means the whole response
 from __future__ import annotations
 
 from agentarium.api.schemas import RuntimeStatus
-from agentarium.domain.models import ApprovalRequest, ProjectBrief, WorkItem
+from agentarium.domain.models import AgentRun, ApprovalRequest, ProjectBrief, WorkItem
 from pydantic import BaseModel
 
 DIRECT_PAIRS: dict[str, type[BaseModel]] = {
@@ -33,6 +33,7 @@ DIRECT_PAIRS: dict[str, type[BaseModel]] = {
     "Brief": ProjectBrief,
     "Approval": ApprovalRequest,
     "RuntimeStatus": RuntimeStatus,
+    "AgentRun": AgentRun,
 }
 
 # `EventRecord` is registered here even though `ExecutionEvent` is a real
@@ -49,6 +50,7 @@ ENDPOINT_PAIRS: dict[str, tuple[str, tuple[object, ...]]] = {
     "ProviderOverview": ("/api/providers", ()),
     "ExportSummary": ("/api/projects/{project_id}/export/preview", ()),
     "RepairItem": ("/api/repair-center", (0,)),
+    "DeliveryReport": ("/api/projects/{project_id}/report", ()),
 }
 
 ALL_TS_TYPE_NAMES: tuple[str, ...] = tuple(DIRECT_PAIRS) + tuple(ENDPOINT_PAIRS)

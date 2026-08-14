@@ -29,6 +29,11 @@ const STATUS_LABELS: Record<string, string> = {
   pending: "Pendiente",
   approved: "Aprobada",
   rejected: "Rechazada",
+  // P4.4b: DeliveryReportWorkItem.outcome extends the status vocabulary
+  // with three terms no WorkItemStatus ever carries.
+  exhausted: "Presupuesto agotado",
+  superseded_by_split: "Reemplazada por división",
+  in_progress: "En curso",
 };
 
 export function statusLabel(status: string): string {
@@ -70,5 +75,30 @@ export function Status({ status }: { status: string }) {
       <span />
       {statusLabel(status)}
     </span>
+  );
+}
+
+// Moved here from page.tsx (P4.4b) once delivery-report.tsx became a
+// second consumer -- same acyclic reasoning as the rest of this file.
+export function PanelHeading({
+  index,
+  eyebrow,
+  title,
+  trailing,
+}: {
+  index: string;
+  eyebrow: string;
+  title: string;
+  trailing?: string;
+}) {
+  return (
+    <div className="panel-heading">
+      <span className="panel-index">{index}</span>
+      <div>
+        <span className="eyebrow">{eyebrow}</span>
+        <h2>{title}</h2>
+      </div>
+      {trailing && <span className="panel-trailing">{trailing}</span>}
+    </div>
   );
 }
