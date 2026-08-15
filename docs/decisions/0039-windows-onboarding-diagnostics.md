@@ -43,7 +43,12 @@ guía concreta cuando corresponde, y el comando sale con código
 - **`git`/`node`/`npm` son obligatorios** (`fail` si faltan -- son los
   requisitos comprobados del propio README). **`ollama_client` sólo es
   obligatorio cuando Ollama es el proveedor activo** -- ausente cuando no
-  se usa no es ni siquiera una advertencia.
+  se usa no es ni siquiera una advertencia. **Node además se valida por
+  versión, no sólo por presencia** (`_node_check`, corrección de
+  revisión): el README exige 22.13+, y una versión presente pero vieja
+  falla en formas que no se parecen en nada a "Node no está instalado" --
+  `setup.ps1` gana el mismo gate antes de `npm ci`, en el mismo lugar
+  donde ya rechazaba un Python viejo.
 - **Proveedor y modelo activos** (`provider_config`) replican
   exactamente la precedencia que ya usa `build_application()`
   (`ProviderSelectionStore` guardada, si no `settings.provider`/`model`)
@@ -55,15 +60,31 @@ guía concreta cuando corresponde, y el comando sale con código
 - **Alcanzabilidad y modelos reales** vía `ProviderRegistry.diagnostics()`
   (la misma fuente que ya usa la web) -- si el proveedor no es el activo,
   no alcanzable es sólo `warn`, nunca `fail`: no tiene sentido bloquear el
-  diagnóstico por un proveedor que el usuario no eligió.
+  diagnóstico por un proveedor que el usuario no eligió. **Cuando el
+  proveedor activo está listo pero el modelo configurado no aparece en
+  `diagnostic.models`, tanto el `detail` como el `hint` nombran ese
+  modelo** (corrección de revisión -- antes el `detail` era el mensaje
+  genérico del registro, que no dice cuál modelo falta): el hint sugiere
+  `ollama pull <modelo>` (o elegir uno ya instalado) para Ollama, y elegir
+  uno de los IDs publicados para el servidor compatible con OpenAI --
+  nunca la sugerencia de `ollama pull` cruzada al proveedor equivocado.
+  `mock` queda explícitamente afuera de esta comprobación: no tiene
+  semántica de modelos "descargados", así que un `AGENTARIUM_MODEL`
+  residual en el entorno no puede disparar un falso `fail` ahí.
 - **Longitud de `workspace_root`**: `warn` por encima de 100 caracteres.
   El umbral no es arbitrario -- ADR 0022 midió 194 caracteres funcionando
   y 230 fallando para la contabilidad interna de worktrees de git; 100 en
   la raíz deja el total real en ~169, con margen bajo 194.
-- **Escritura real** sobre `workspace_root` y la carpeta temporal del
-  sistema (`crear archivo marcador → borrar`, nunca sólo mirar
-  permisos) -- cubre "permisos"/"temp" con una comprobación determinista,
-  no sólo el heurístico de longitud de path.
+- **Escritura real** sobre `workspace_root` y la *raíz* temporal del
+  sistema (`crear archivo marcador → borrar`, nunca sólo mirar permisos)
+  -- comprobación determinista, no sólo el heurístico de longitud de
+  path. **Límite real, no cosmético**: `temp_write` prueba la raíz
+  (`tempfile.gettempdir()`), no la subcarpeta específica
+  `pytest-of-<usuario>` que es la que realmente queda con ACL rota en el
+  síntoma documentado en `docs/guides/windows-setup.md` -- esa subcarpeta
+  puede estar bloqueada aunque la raíz sea perfectamente escribible, así
+  que un `[OK]` en `temp_write` **no** descarta ese síntoma específico.
+  Ver "Limitaciones".
 
 **`doctor` construye `Settings()` directo, nunca `get_settings()`.**
 `get_settings()` es `@lru_cache` y llama `ensure_directories()` (mkdir de
@@ -139,14 +160,18 @@ panel de la interfaz o a `AGENTARIUM_PROVIDER`/`AGENTARIUM_MODEL`.
 
 ## Garantía real
 
-`.\test.ps1` completo en verde: **539 passed + 1 skipped** (backend, +18
-sobre la base de P4.4b) + **46/46** (web, sin cambio -- P4.5 no toca
-ningún archivo de `app/`). Ruff/MyPy limpios. `test_cli_doctor.py` (nuevo)
-cubre funciones puras sin red más dos pruebas `CliRunner` de punta a
-punta con URLs de proveedor apuntando a un puerto cerrado local (sin
-depender de un Ollama real ni de timeouts); una regresión nueva en
-`test_git_worktree_isolation.py` fuerza el stderr exacto de git y
-confirma que el mensaje resultante nombra `AGENTARIUM_WORKSPACE_ROOT`.
+`.\test.ps1` completo en verde: **545 passed + 1 skipped** (backend, +24
+sobre la base de P4.4b, incluida la ronda de corrección de revisión) +
+**46/46** (web, sin cambio -- P4.5 no toca ningún archivo de `app/`).
+Ruff/MyPy limpios. `test_cli_doctor.py` cubre funciones puras sin red
+(incluidas las 5 nuevas de `_node_check` que fijan el límite exacto
+22.12.0=`fail`/22.13.0=`pass`, y las dos que fortalecen el mensaje de
+modelo faltante para Ollama/OpenAI-compatible) más dos pruebas
+`CliRunner` de punta a punta con URLs de proveedor apuntando a un puerto
+cerrado local (sin depender de un Ollama real ni de timeouts); una
+regresión nueva en `test_git_worktree_isolation.py` fuerza el stderr
+exacto de git y confirma que el mensaje resultante nombra
+`AGENTARIUM_WORKSPACE_ROOT`.
 
 Verificación manual en esta máquina, contra el `provider-selection.json`
 real (no un fixture): `doctor` leyó correctamente la selección guardada
@@ -158,13 +183,34 @@ asimetría que el diseño pide. `provider_config` en `FAIL` confirmado con
 un proveedor no-mock sin modelo, con el mensaje nombrando
 `AGENTARIUM_MODEL`. Advertencia de ruta larga confirmada con una raíz de
 110 caracteres. La comprobación de escritura confirmada creando de verdad
-un workspace que no existía. El fallo real de `git worktree add` con
+un workspace que no existía. `doctor` real (no un test) mostró `[OK]
+node: v24.18.0` con el nuevo gate de versión activo.
+
+El gate de Node en `setup.ps1` se verificó sin instalar una versión
+vieja real: la misma expresión de comparación que usa el script
+(`major -lt 22 -or (major -eq 22 -and minor -lt 13)`) se corrió aparte
+contra strings literales (`21.9.0`, `22.12.0`, `22.13.0`, `22.14.0`,
+`24.18.0`) y dio el resultado esperado en los 5 casos; el formato real de
+`node --version` en esta máquina (`v24.18.0`) se confirmó aparte para
+asegurar que `.TrimStart("v")` lo maneja bien.
+
+El fallo real de `git worktree add` con
 `'$GIT_DIR' too big` no se reprodujo de nuevo end-to-end esta sesión
 (ya está cubierto por la regresión dedicada con el stderr real, y el
 camino de despacho está confirmado sin cambios vía `isinstance`) -- ver
 "Limitaciones".
 
 ## Limitaciones
+
+`doctor`'s `temp_write` prueba la raíz temporal del sistema
+(`tempfile.gettempdir()`), no la subcarpeta `pytest-of-<usuario>`
+específica que queda con ACL rota en el síntoma que
+`docs/guides/windows-setup.md` documenta -- esa subcarpeta puede estar
+bloqueada de forma completamente independiente de que la raíz sea
+escribible. Un `[OK]` en `temp_write` no descarta ese síntoma; la guía
+sigue documentando únicamente el fix reactivo (redirigir `TMP`/`TEMP`
+antes de correr `test.ps1`), no una detección proactiva confiable para
+este caso puntual.
 
 El fallo real de `git worktree add` con `'$GIT_DIR' too big` no se
 reprodujo end-to-end contra un proyecto real en esta sesión (requeriría

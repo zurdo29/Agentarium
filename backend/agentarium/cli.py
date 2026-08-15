@@ -128,6 +128,57 @@ def _tool_check(name: str, command: list[str], *, required: bool) -> _DoctorChec
     )
 
 
+# README's own comprobado requirement, mirrored by setup.ps1's Python gate
+# (the pattern this follows) -- unlike git/npm, a *present but too old* Node
+# is a real, silent failure mode: vinext/the web tooling can misbehave in
+# ways that don't look like "Node is missing" at all.
+_NODE_MIN_VERSION = (22, 13, 0)
+
+
+def _parse_node_version(raw: str) -> tuple[int, int, int] | None:
+    match = re.match(r"v?(\d+)\.(\d+)\.(\d+)", raw.strip())
+    if not match:
+        return None
+    return (int(match.group(1)), int(match.group(2)), int(match.group(3)))
+
+
+def _node_check(raw_version: str | None) -> _DoctorCheck:
+    """Takes an already-fetched `_version(["node", "--version"])` result
+    (never fetches it itself) -- same shape as `_provider_checks` taking
+    pre-fetched diagnostics, so this stays a pure function testable with a
+    literal version string, no subprocess/monkeypatching required."""
+    min_text = ".".join(str(part) for part in _NODE_MIN_VERSION)
+    if raw_version is None:
+        return _DoctorCheck(
+            "node",
+            "fail",
+            "no encontrado",
+            f"Instalá Node.js {min_text}+ desde nodejs.org.",
+        )
+    parsed = _parse_node_version(raw_version)
+    if parsed is None or parsed < _NODE_MIN_VERSION:
+        return _DoctorCheck(
+            "node",
+            "fail",
+            raw_version,
+            f"Agentarium requiere Node.js {min_text}+ (ver README) -- "
+            "instalá una versión más reciente desde nodejs.org.",
+        )
+    return _DoctorCheck("node", "pass", raw_version)
+
+
+def _model_missing_hint(diagnostic: ProviderDiagnostic, model: str) -> str:
+    if diagnostic.name == "ollama":
+        return (
+            f"Ejecutá 'ollama pull {model}', o elegí uno de los modelos ya "
+            "instalados desde la interfaz web."
+        )
+    return (
+        f"'{model}' no está entre los IDs que publica el servidor -- elegí "
+        "o configurá uno de los modelos disponibles ahí."
+    )
+
+
 def _provider_checks(
     diagnostics: list[ProviderDiagnostic],
     active_provider: str,
@@ -150,18 +201,40 @@ def _provider_checks(
     ]
     for diagnostic in diagnostics:
         is_active = diagnostic.name == active_provider
-        if not diagnostic.ready:
-            status = "fail" if is_active else "warn"
-        elif is_active and active_model and active_model not in diagnostic.models:
+        # "mock" has no pull/publish semantics -- never treat a stray
+        # active_model value as a missing-model condition for it.
+        missing_model = (
+            active_model
+            if (
+                is_active
+                and diagnostic.name != "mock"
+                and diagnostic.ready
+                and active_model
+                and active_model not in diagnostic.models
+            )
+            else None
+        )
+        if missing_model:
             status = "fail"
+            available = ", ".join(diagnostic.models) or "ninguno instalado"
+            detail = (
+                f"El modelo configurado '{missing_model}' no está entre los "
+                f"disponibles de {diagnostic.label} ({available})."
+            )
+            hint = _model_missing_hint(diagnostic, missing_model)
+        elif not diagnostic.ready:
+            status = "fail" if is_active else "warn"
+            detail = diagnostic.message
+            hint = (
+                diagnostic.message
+                if is_active
+                else f"No es el proveedor activo ({active_provider}); no bloquea nada."
+            )
         else:
             status = "pass"
-        hint: str | None = None
-        if status == "fail" and is_active:
-            hint = diagnostic.message
-        elif status == "warn":
-            hint = f"No es el proveedor activo ({active_provider}); no bloquea nada."
-        checks.append(_DoctorCheck(diagnostic.name, status, diagnostic.message, hint))
+            detail = diagnostic.message
+            hint = None
+        checks.append(_DoctorCheck(diagnostic.name, status, detail, hint))
     return checks
 
 
@@ -204,7 +277,7 @@ def doctor() -> None:
     checks = [
         _DoctorCheck("python", "pass", sys.version.split()[0]),
         _tool_check("git", ["git", "--version"], required=True),
-        _tool_check("node", ["node", "--version"], required=True),
+        _node_check(_version(["node", "--version"])),
         _tool_check("npm", ["npm.cmd", "--version"], required=True),
         _tool_check(
             "ollama_client",

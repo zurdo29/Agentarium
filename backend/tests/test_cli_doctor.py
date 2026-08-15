@@ -6,7 +6,9 @@ from pathlib import Path
 import pytest
 from agentarium.cli import (
     _EXIT_DOCTOR_FAILED,
+    _NODE_MIN_VERSION,
     _active_selection,
+    _node_check,
     _provider_checks,
     _tool_check,
     _workspace_path_check,
@@ -82,6 +84,42 @@ def test_tool_check_missing_and_required_is_fail() -> None:
     assert check.hint is not None
 
 
+# -- _node_check ------------------------------------------------------------
+# Pure function taking an already-fetched version string -- no subprocess,
+# no real alternate Node install needed to exercise the version gate.
+
+
+def test_node_check_missing_is_fail() -> None:
+    check = _node_check(None)
+    assert check.status == "fail"
+
+
+def test_node_check_just_below_minimum_is_fail() -> None:
+    # _NODE_MIN_VERSION is (22, 13, 0) today; this stays correct even if
+    # that constant changes later.
+    major, minor, _patch = _NODE_MIN_VERSION
+    below = f"v{major}.{minor - 1}.0"
+    check = _node_check(below)
+    assert check.status == "fail"
+    assert check.hint is not None
+
+
+def test_node_check_at_minimum_is_pass() -> None:
+    major, minor, patch = _NODE_MIN_VERSION
+    check = _node_check(f"v{major}.{minor}.{patch}")
+    assert check.status == "pass"
+
+
+def test_node_check_22_12_0_is_fail_and_22_13_0_is_pass() -> None:
+    # The exact boundary the user asked to pin down explicitly.
+    assert _node_check("v22.12.0").status == "fail"
+    assert _node_check("v22.13.0").status == "pass"
+
+
+def test_node_check_well_above_minimum_is_pass() -> None:
+    assert _node_check("v24.18.0").status == "pass"
+
+
 # -- _provider_checks -------------------------------------------------------
 
 
@@ -105,10 +143,38 @@ def test_provider_checks_active_ready_model_pulled_is_pass() -> None:
     assert ollama_check.status == "pass"
 
 
-def test_provider_checks_active_model_not_pulled_is_fail() -> None:
+def test_provider_checks_active_model_not_pulled_names_the_model_for_ollama() -> None:
     checks = _provider_checks([_diagnostic()], "ollama", "llama3:not-pulled")
     ollama_check = next(check for check in checks if check.name == "ollama")
+
     assert ollama_check.status == "fail"
+    # The detail line itself must name the missing model, not just a
+    # generic "not ready" message that doesn't say which model is wrong.
+    assert "llama3:not-pulled" in ollama_check.detail
+    # And the already-pulled model the diagnostic *does* have should show
+    # up too, so the user can see what's actually available.
+    assert "qwen2.5-coder:7b" in ollama_check.detail
+    assert ollama_check.hint is not None
+    assert "ollama pull llama3:not-pulled" in ollama_check.hint
+
+
+def test_provider_checks_active_model_not_pulled_names_the_model_for_openai_compatible() -> None:
+    diagnostic = _diagnostic(
+        name="openai_compatible",
+        label="Servidor compatible con OpenAI",
+        endpoint="http://127.0.0.1:1234/v1",
+        models=["local-model-a"],
+    )
+    checks = _provider_checks([diagnostic], "openai_compatible", "not-on-server")
+    check = next(c for c in checks if c.name == "openai_compatible")
+
+    assert check.status == "fail"
+    assert "not-on-server" in check.detail
+    assert check.hint is not None
+    # Ollama-specific "pull" advice must never leak into the
+    # openai_compatible hint -- there's no local pull step for it.
+    assert "ollama pull" not in check.hint
+    assert "not-on-server" in check.hint
 
 
 def test_provider_checks_active_unreachable_is_fail() -> None:

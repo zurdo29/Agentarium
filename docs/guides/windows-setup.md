@@ -83,9 +83,18 @@ $env:TEMP = "C:\Users\<usuario>\pytmp"
 .\test.ps1
 ```
 
-(creá esa carpeta primero si no existe). `agentarium doctor` también
-detecta este mismo síntoma de forma proactiva vía su comprobación
-`temp_write`.
+(creá esa carpeta primero si no existe).
+
+`agentarium doctor` comprueba escritura real sobre la raíz temporal del
+sistema (`temp_write`), pero **eso no garantiza detectar este síntoma
+específico**: el problema está en la subcarpeta `pytest-of-<usuario>`,
+que puede tener un ACL rota o heredada aunque la raíz temporal en sí siga
+siendo perfectamente escribible -- `temp_write` crea y borra un archivo
+directo en la raíz, nunca dentro de esa subcarpeta en particular. Si
+`doctor` da `[OK]` en `temp_write` pero igual ves este error al correr
+`test.ps1`, el fix reactivo de arriba (redirigir `TMP`/`TEMP`) sigue
+siendo el camino -- no hay comprobación proactiva confiable para este
+caso puntual todavía.
 
 ## Si `npm test` se cuelga sin avisar
 
