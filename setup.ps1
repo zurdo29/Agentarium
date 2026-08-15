@@ -52,4 +52,27 @@ if (Get-Command ollama -ErrorAction SilentlyContinue) {
     Write-Warning "Ollama no está instalado; el proveedor mock funciona sin él."
 }
 
+# doctor nunca debe abortar la instalación: pip/npm ya terminaron bien
+# acá, y un FAIL de doctor (ej. proveedor mal configurado, Ollama sin
+# modelos) es diagnóstico, no un fallo de setup.ps1 en sí. Se captura el
+# exit code explícito en vez de confiar en $ErrorActionPreference con un
+# ejecutable nativo, que se comporta distinto entre versiones/hosts de
+# PowerShell.
+$PreviousErrorActionPreference = $ErrorActionPreference
+$ErrorActionPreference = "Continue"
+& .\.venv\Scripts\agentarium.exe doctor
+$DoctorExitCode = $LASTEXITCODE
+$ErrorActionPreference = $PreviousErrorActionPreference
+# $LASTEXITCODE now holds doctor's own code (already captured above) --
+# reset it explicitly. Nothing after this point runs another native exe,
+# but leaving it non-zero would otherwise leak out as this whole script's
+# own exit code once it falls off the end, exactly the "doctor FAIL must
+# never look like setup.ps1 failed" guarantee this block exists for.
+$global:LASTEXITCODE = 0
+
+if ($DoctorExitCode -ne 0) {
+    Write-Warning "agentarium doctor encontró problemas (código $DoctorExitCode). Ver docs\guides\windows-setup.md."
+}
+
 Write-Host "Agentarium está listo. Ejecuta .\dev.ps1"
+exit 0

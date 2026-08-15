@@ -2,8 +2,8 @@ from pathlib import Path
 
 import pytest
 from agentarium.config.settings import project_root
-from agentarium.execution import WorkspaceFileProposal, WorkspaceMaterializer
-from agentarium.isolation import GitWorktreeIsolation
+from agentarium.execution import CommandResult, WorkspaceFileProposal, WorkspaceMaterializer
+from agentarium.isolation import GitWorktreeIsolation, IsolationError
 
 
 def _policy_path() -> Path:
@@ -62,3 +62,40 @@ async def test_rejected_worktree_never_reaches_main(tmp_path: Path) -> None:
     assert not (
         workspace_root / "project" / "project" / "src" / "rejected.py"
     ).exists()
+
+
+@pytest.mark.asyncio
+async def test_git_dir_too_big_failure_gets_an_actionable_message(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # P4.5: core.longpaths (already configured elsewhere) does not cover
+    # git's own internal .git/worktrees/<name>/gitdir bookkeeping (ADR
+    # 0022) -- this forces that exact real-world git stderr and confirms
+    # the resulting IsolationError names the actual fix instead of leaving
+    # a bare, cryptic git error for whoever reads the resulting
+    # workspace_action_rejected event.
+    isolation = GitWorktreeIsolation(tmp_path / "workspaces", _policy_path())
+
+    async def _fake_execute(
+        command: list[str], *, cwd: Path, timeout_seconds: int | None = None
+    ) -> CommandResult:
+        return CommandResult(
+            command=command,
+            cwd=str(cwd),
+            stdout="",
+            stderr="fatal: '$GIT_DIR' too big\n",
+            return_code=128,
+            timed_out=False,
+        )
+
+    monkeypatch.setattr(isolation.executor, "execute", _fake_execute)
+
+    with pytest.raises(IsolationError) as exc_info:
+        await isolation._run(
+            ["git", "worktree", "add", "-b", "x", str(tmp_path / "wt"), "main"],
+            cwd=tmp_path,
+        )
+
+    message = str(exc_info.value)
+    assert "'$GIT_DIR' too big" in message
+    assert "AGENTARIUM_WORKSPACE_ROOT" in message
