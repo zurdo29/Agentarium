@@ -12,6 +12,9 @@ from filelock import FileLock, Timeout
 from agentarium.execution import CommandResult, SafeCommandExecutor
 
 _FILE_LOCK_POLL_SECONDS = 0.05
+# Literal substring from git's own stderr (ADR 0022) -- deliberately not a
+# regex, this exact wording is what git has produced every time so far.
+_GIT_DIR_TOO_BIG_MARKER = "'$GIT_DIR' too big"
 
 
 class IsolationError(RuntimeError):
@@ -242,7 +245,22 @@ class GitWorktreeIsolation:
         result = await self.executor.execute(command, cwd=cwd, timeout_seconds=30)
         if result.return_code != 0 and not allow_failure:
             detail = result.stderr.strip() or result.stdout.strip() or "Unknown Git error"
-            raise IsolationError(f"{' '.join(command[:3])} failed: {detail}")
+            message = f"{' '.join(command[:3])} failed: {detail}"
+            if _GIT_DIR_TOO_BIG_MARKER in detail:
+                # core.longpaths (already configured) only covers the
+                # working-tree checkout, not git's own internal
+                # .git/worktrees/<name>/gitdir bookkeeping (ADR 0022). The
+                # per-attempt leaf is already shortened as much as
+                # reasonable; the remaining variable is workspace_root
+                # itself. Append, never replace -- the real git stderr
+                # above stays intact for anyone grepping raw events.
+                message += (
+                    "\nEsto suele pasar cuando AGENTARIUM_WORKSPACE_ROOT "
+                    "apunta a una ruta profunda en Windows -- ver "
+                    "docs/guides/windows-setup.md. Probá una ruta corta, "
+                    "por ejemplo C:\\agentarium-ws."
+                )
+            raise IsolationError(message)
         return result
 
     def _project_root(self, project_id: str) -> Path:

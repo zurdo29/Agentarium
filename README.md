@@ -29,7 +29,11 @@ Set-ExecutionPolicy -Scope Process Bypass
 ```
 
 `setup.ps1` crea `.venv`, instala las dependencias Python dentro del proyecto y
-ejecuta `npm.cmd ci`. No requiere permisos administrativos.
+ejecuta `npm.cmd ci`. No requiere permisos administrativos. Al final corre
+`agentarium doctor` automáticamente y muestra cualquier advertencia -- ver
+[docs/guides/windows-setup.md](docs/guides/windows-setup.md) para fallos
+frecuentes de Windows (rutas de workspace, permisos temporales, `npm test`
+colgado).
 
 ## Inicio
 

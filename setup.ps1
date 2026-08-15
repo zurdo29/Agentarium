@@ -25,7 +25,7 @@ function Invoke-Checked {
 }
 
 Require-Command "python" "Instala Python 3.11+ desde python.org."
-Require-Command "node" "Instala Node.js 22+ desde nodejs.org."
+Require-Command "node" "Instala Node.js 22.13+ desde nodejs.org."
 Require-Command "npm.cmd" "Repara la instalación de Node.js/npm."
 Require-Command "git" "Instala Git for Windows."
 
@@ -33,6 +33,15 @@ $VersionText = & python -c "import sys; print(f'{sys.version_info.major}.{sys.ve
 $Parts = $VersionText.Split(".")
 if ([int]$Parts[0] -lt 3 -or ([int]$Parts[0] -eq 3 -and [int]$Parts[1] -lt 11)) {
     throw "Agentarium requiere Python 3.11 o posterior; se detectó $VersionText."
+}
+
+# Presence alone (Require-Command above) isn't enough -- an old-but-present
+# Node fails in ways that don't look like "Node is missing" at all. Same
+# gate shape as the Python check above, before any install work happens.
+$NodeVersionText = (& node --version).TrimStart("v")
+$NodeParts = $NodeVersionText.Split(".")
+if ([int]$NodeParts[0] -lt 22 -or ([int]$NodeParts[0] -eq 22 -and [int]$NodeParts[1] -lt 13)) {
+    throw "Agentarium requiere Node.js 22.13 o posterior; se detectó $NodeVersionText."
 }
 
 if (-not (Test-Path -LiteralPath ".venv\Scripts\python.exe")) {
@@ -52,4 +61,27 @@ if (Get-Command ollama -ErrorAction SilentlyContinue) {
     Write-Warning "Ollama no está instalado; el proveedor mock funciona sin él."
 }
 
+# doctor nunca debe abortar la instalación: pip/npm ya terminaron bien
+# acá, y un FAIL de doctor (ej. proveedor mal configurado, Ollama sin
+# modelos) es diagnóstico, no un fallo de setup.ps1 en sí. Se captura el
+# exit code explícito en vez de confiar en $ErrorActionPreference con un
+# ejecutable nativo, que se comporta distinto entre versiones/hosts de
+# PowerShell.
+$PreviousErrorActionPreference = $ErrorActionPreference
+$ErrorActionPreference = "Continue"
+& .\.venv\Scripts\agentarium.exe doctor
+$DoctorExitCode = $LASTEXITCODE
+$ErrorActionPreference = $PreviousErrorActionPreference
+# $LASTEXITCODE now holds doctor's own code (already captured above) --
+# reset it explicitly. Nothing after this point runs another native exe,
+# but leaving it non-zero would otherwise leak out as this whole script's
+# own exit code once it falls off the end, exactly the "doctor FAIL must
+# never look like setup.ps1 failed" guarantee this block exists for.
+$global:LASTEXITCODE = 0
+
+if ($DoctorExitCode -ne 0) {
+    Write-Warning "agentarium doctor encontró problemas (código $DoctorExitCode). Ver docs\guides\windows-setup.md."
+}
+
 Write-Host "Agentarium está listo. Ejecuta .\dev.ps1"
+exit 0

@@ -2,18 +2,22 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import re
 import shutil
 import subprocess
 import sys
+import tempfile
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Annotated, Any, NoReturn
 
 import httpx
 import typer
 
-from agentarium.config.settings import get_settings, project_root
+from agentarium.config.settings import Settings, get_settings, project_root
 from agentarium.isolation import ExportError, ImportSourceError
+from agentarium.llm import ProviderDiagnostic, ProviderRegistry, ProviderSelectionStore
 from agentarium.repositories.backup import (
     BackupValidationError,
     MigrationFailedError,
@@ -33,6 +37,9 @@ _EXIT_MIGRATION_FAILED = 6
 _EXIT_SCHEMA_TOO_NEW = 7
 _EXIT_BACKUP_INVALID = 9
 _EXIT_RESTORE_FAILED = 8
+# `doctor` exits non-zero only when at least one check is a hard `fail` --
+# see docs/guides/windows-setup.md for what each check means.
+_EXIT_DOCTOR_FAILED = 12
 
 app = typer.Typer(
     name="agentarium",
@@ -78,22 +85,236 @@ def _service() -> ApplicationService:
     return service
 
 
+@dataclass(frozen=True)
+class _DoctorCheck:
+    name: str
+    status: str  # "pass" | "warn" | "fail"
+    detail: str
+    hint: str | None = None
+
+
+# GitWorktreeIsolation.prepare()'s worst-case suffix under workspace_root is
+# project_id(36) + "\worktrees\"(11) + leaf(~22) ~= 69 chars. ADR 0022
+# measured 194 total chars working and 230 failing for git's own internal
+# worktree bookkeeping on Windows ("fatal: '$GIT_DIR' too big") -- a limit
+# core.longpaths does not cover, since that only affects the working-tree
+# checkout. A 100-char cap on workspace_root alone leaves real paths at
+# roughly 169, comfortably under the known-good 194.
+_WORKSPACE_PATH_WARN_THRESHOLD = 100
+
+
+def _active_selection(settings: Settings) -> tuple[str, str | None]:
+    """Same precedence `build_application()` uses (services/application.py),
+    without going through it: `RoleCatalog.select_provider()` raises an
+    uncaught `ValueError` for a non-mock provider with no model, and doctor
+    has to stay usable to diagnose exactly that misconfiguration."""
+    saved = ProviderSelectionStore(settings.provider_state_path).load()
+    if saved is not None:
+        return saved.provider, saved.model
+    return settings.provider, (settings.model or None)
+
+
+def _tool_check(name: str, command: list[str], *, required: bool) -> _DoctorCheck:
+    version = _version(command)
+    if version is not None:
+        return _DoctorCheck(name, "pass", version)
+    if not required:
+        return _DoctorCheck(name, "pass", "no encontrado (no requerido)")
+    return _DoctorCheck(
+        name,
+        "fail",
+        "no encontrado",
+        f"Instalá '{command[0]}' y asegurate de que esté en PATH.",
+    )
+
+
+# README's own comprobado requirement, mirrored by setup.ps1's Python gate
+# (the pattern this follows) -- unlike git/npm, a *present but too old* Node
+# is a real, silent failure mode: vinext/the web tooling can misbehave in
+# ways that don't look like "Node is missing" at all.
+_NODE_MIN_VERSION = (22, 13, 0)
+
+
+def _parse_node_version(raw: str) -> tuple[int, int, int] | None:
+    match = re.match(r"v?(\d+)\.(\d+)\.(\d+)", raw.strip())
+    if not match:
+        return None
+    return (int(match.group(1)), int(match.group(2)), int(match.group(3)))
+
+
+def _node_check(raw_version: str | None) -> _DoctorCheck:
+    """Takes an already-fetched `_version(["node", "--version"])` result
+    (never fetches it itself) -- same shape as `_provider_checks` taking
+    pre-fetched diagnostics, so this stays a pure function testable with a
+    literal version string, no subprocess/monkeypatching required."""
+    min_text = ".".join(str(part) for part in _NODE_MIN_VERSION)
+    if raw_version is None:
+        return _DoctorCheck(
+            "node",
+            "fail",
+            "no encontrado",
+            f"Instalá Node.js {min_text}+ desde nodejs.org.",
+        )
+    parsed = _parse_node_version(raw_version)
+    if parsed is None or parsed < _NODE_MIN_VERSION:
+        return _DoctorCheck(
+            "node",
+            "fail",
+            raw_version,
+            f"Agentarium requiere Node.js {min_text}+ (ver README) -- "
+            "instalá una versión más reciente desde nodejs.org.",
+        )
+    return _DoctorCheck("node", "pass", raw_version)
+
+
+def _model_missing_hint(diagnostic: ProviderDiagnostic, model: str) -> str:
+    if diagnostic.name == "ollama":
+        return (
+            f"Ejecutá 'ollama pull {model}', o elegí uno de los modelos ya "
+            "instalados desde la interfaz web."
+        )
+    return (
+        f"'{model}' no está entre los IDs que publica el servidor -- elegí "
+        "o configurá uno de los modelos disponibles ahí."
+    )
+
+
+def _provider_checks(
+    diagnostics: list[ProviderDiagnostic],
+    active_provider: str,
+    active_model: str | None,
+) -> list[_DoctorCheck]:
+    model_ok = active_provider == "mock" or bool(active_model)
+    checks = [
+        _DoctorCheck(
+            "provider_config",
+            "pass" if model_ok else "fail",
+            f"{active_provider} / {active_model or '(sin modelo)'}",
+            None
+            if model_ok
+            else (
+                "Un proveedor distinto de mock necesita AGENTARIUM_MODEL "
+                "(o un modelo elegido desde la interfaz web) -- sin esto, "
+                "cualquier comando falla con un error sin capturar."
+            ),
+        )
+    ]
+    for diagnostic in diagnostics:
+        is_active = diagnostic.name == active_provider
+        # "mock" has no pull/publish semantics -- never treat a stray
+        # active_model value as a missing-model condition for it.
+        missing_model = (
+            active_model
+            if (
+                is_active
+                and diagnostic.name != "mock"
+                and diagnostic.ready
+                and active_model
+                and active_model not in diagnostic.models
+            )
+            else None
+        )
+        if missing_model:
+            status = "fail"
+            available = ", ".join(diagnostic.models) or "ninguno instalado"
+            detail = (
+                f"El modelo configurado '{missing_model}' no está entre los "
+                f"disponibles de {diagnostic.label} ({available})."
+            )
+            hint = _model_missing_hint(diagnostic, missing_model)
+        elif not diagnostic.ready:
+            status = "fail" if is_active else "warn"
+            detail = diagnostic.message
+            hint = (
+                diagnostic.message
+                if is_active
+                else f"No es el proveedor activo ({active_provider}); no bloquea nada."
+            )
+        else:
+            status = "pass"
+            detail = diagnostic.message
+            hint = None
+        checks.append(_DoctorCheck(diagnostic.name, status, detail, hint))
+    return checks
+
+
+def _workspace_path_check(workspace_root: Path) -> _DoctorCheck:
+    resolved = str(workspace_root.resolve())
+    if len(resolved) <= _WORKSPACE_PATH_WARN_THRESHOLD:
+        return _DoctorCheck("workspace_path", "pass", resolved)
+    return _DoctorCheck(
+        "workspace_path",
+        "warn",
+        resolved,
+        "Ruta larga: 'git worktree add' puede fallar en Windows con "
+        "\"fatal: '$GIT_DIR' too big\". Configurá AGENTARIUM_WORKSPACE_ROOT "
+        "a una ruta más corta -- ver docs/guides/windows-setup.md.",
+    )
+
+
+def _writability_check(name: str, directory: Path, hint: str) -> _DoctorCheck:
+    try:
+        directory.mkdir(parents=True, exist_ok=True)
+        handle, marker_path = tempfile.mkstemp(dir=directory, prefix=".agentarium-doctor-")
+        os.close(handle)
+        os.unlink(marker_path)
+    except OSError as exc:
+        return _DoctorCheck(name, "fail", str(exc), hint)
+    return _DoctorCheck(name, "pass", str(directory))
+
+
 @app.command()
 def doctor() -> None:
     """Comprueba herramientas, almacenamiento y proveedor local."""
-    settings = get_settings()
-    results = {
-        "python": sys.version.split()[0],
-        "node": _version(["node", "--version"]),
-        "npm": _version(["npm.cmd", "--version"]),
-        "git": _version(["git", "--version"]),
-        "ollama_client": _version(["ollama", "--version"]),
-        "ollama_server": _ollama_status(settings.ollama_url),
-        "workspace": str(project_root()),
-        "database": settings.resolved_database_url(),
-        "model_concurrency": settings.model_concurrency,
-    }
-    typer.echo(json.dumps(results, indent=2, ensure_ascii=False))
+    # Settings() directo, nunca get_settings(): get_settings() llama
+    # ensure_directories() (mkdir de workspace/DB/provider-state) -- si eso
+    # falla, doctor explotaría antes de poder diagnosticar nada, exactamente
+    # lo opuesto de su propósito. _writability_check hace su propio mkdir,
+    # envuelto en try/except, en vez de depender de uno que ya haya corrido.
+    settings = Settings()
+    active_provider, active_model = _active_selection(settings)
+    diagnostics = asyncio.run(ProviderRegistry(settings).diagnostics())
+    checks = [
+        _DoctorCheck("python", "pass", sys.version.split()[0]),
+        _tool_check("git", ["git", "--version"], required=True),
+        _node_check(_version(["node", "--version"])),
+        _tool_check("npm", ["npm.cmd", "--version"], required=True),
+        _tool_check(
+            "ollama_client",
+            ["ollama", "--version"],
+            required=active_provider == "ollama",
+        ),
+        *_provider_checks(diagnostics, active_provider, active_model),
+        _workspace_path_check(settings.workspace_root),
+        _writability_check(
+            "workspace_write",
+            settings.workspace_root,
+            "Agentarium necesita crear/escribir en AGENTARIUM_WORKSPACE_ROOT.",
+        ),
+        _writability_check(
+            "temp_write",
+            Path(tempfile.gettempdir()),
+            "Sin permiso de escritura en la carpeta temporal del sistema -- "
+            "ver docs/guides/windows-setup.md si esto corta test.ps1 con "
+            "errores de permiso en pytest.",
+        ),
+        _DoctorCheck("database", "pass", settings.resolved_database_url()),
+        _DoctorCheck("model_concurrency", "pass", str(settings.model_concurrency)),
+        _DoctorCheck("repo_root", "pass", str(project_root())),
+    ]
+    markers = {"pass": "OK", "warn": "WARN", "fail": "FAIL"}
+    for check in checks:
+        line = f"[{markers[check.status]}] {check.name}: {check.detail}"
+        if check.hint:
+            line += f"\n       -> {check.hint}"
+        typer.echo(line)
+    failed = sum(1 for check in checks if check.status == "fail")
+    warned = sum(1 for check in checks if check.status == "warn")
+    typer.echo(
+        f"\n{len(checks) - failed - warned} ok, {warned} advertencia(s), {failed} error(es)."
+    )
+    if failed:
+        raise typer.Exit(_EXIT_DOCTOR_FAILED)
 
 
 @app.command("init")
@@ -569,14 +790,6 @@ def _version(command: list[str]) -> str | None:
     except OSError:
         return None
     return (result.stdout or result.stderr).strip() or None
-
-
-def _ollama_status(base_url: str) -> str:
-    try:
-        response = httpx.get(f"{base_url.rstrip('/')}/api/tags", timeout=2)
-        return "available" if response.is_success else f"http_{response.status_code}"
-    except httpx.HTTPError:
-        return "unavailable"
 
 
 if __name__ == "__main__":
