@@ -500,21 +500,21 @@ Sólo promover uno de estos puntos cuando una limitación observada del MVP lo j
 
 ---
 
-## Próximas tres entregas
+## Qué sigue
 
-### 1. P3.0 — CERRADO (5 de agosto de 2026)
+No hay una secuencia de entregas automática pendiente: P0, P1, P2, P3
+(P3.0-P3.4) y P4 (P4.1-P4.5) están cerrados. Lo que queda no es una fase
+que se dispare sola, sino una decisión explícita, en este orden:
 
-Corrida dirigida `library_api_sqlite × qwen2.5-coder:7b × 1` ejecutada y documentada en `benchmarks/results/p3.0-confirmation-2026-08/`. Sin feature PR, como estaba previsto.
+1. **Elegir un flujo candidato a MVP.** Recién ahí tiene sentido correr
+   el "Gate pre-MVP — segunda matriz completa" -- no es automático ni se
+   ejecuta sólo porque P4 haya cerrado.
+2. **P5 (extensibilidad) no empieza todavía.** Sólo entra por una
+   limitación real observada del MVP, nunca por curiosidad técnica
+   (regla 10 de "Reglas para no volver a iterar de más").
 
-### 2. P3.1 — CERRADO (a+b, 6 de agosto de 2026)
-
-Contrato backend↔TypeScript (ADR 0030) + tests de interacción UI/API mock (ADR 0031) entregados. Cinturón de seguridad para el refactor y P4 completo.
-
-### 3. P3.2 — CERRADO (6 de agosto de 2026)
-
-Migraciones versionadas (`PRAGMA user_version` + lista de pasos) + backup validado/restore real de SQLite, aislados por base. ADR 0032; runbook en `docs/guides/database-migrations-windows.md`.
-
-Después: P3.3 modularización selectiva → P3.4 gate de autoridad → P4 repositorios reales → matriz completa pre-MVP.
+Sin una instrucción explícita del usuario sobre cuál de los dos caminos
+tomar, no avanzar por cuenta propia en ninguno.
 
 ---
 
