@@ -20,7 +20,8 @@ Este documento es la guía operativa del proyecto: qué garantías ya existen, q
 - `P4.3` — **CERRADO (12 de agosto de 2026), a+b.** `repair_center()` agrega work items de todos los proyectos en 4 causas (`failed`/`changes_requested`/`exhausted`/`blocked`, esta última sólo con una dependencia real en falla) con la evidencia suficiente por fila; `resolve_approval()` cierra el callejón escalar→aprobar con un vínculo estructural (`task_escalated` guarda `approval_id` en su propia metadata; sólo ese vínculo autoriza preparar un retry, nunca `approval.work_item_id` solo) y deja el proyecto en `READY` vía `resume_project()` cuando no quedan aprobaciones pendientes. `attempt_repair_available` por fila respeta `MAX_WORK_ITEM_ATTEMPTS` (=25) con una regla exacta por causa (siempre falso para `blocked`). Frontend: `app/repair-center.tsx` nuevo (filtros, fila expandible, sin acciones para `blocked`) con un único patrón de confirmación explícita por panel inline (sin `window.confirm`) para las 4 acciones, `resetRepairDrafts()` con regresión A→B dedicada, y la misma confirmación real aplicada a retry/rework/escalate en `TaskDrawer`, que P4.3a había dejado sin tocar. Verificado con 499 passed + 1 skipped (backend) + 38/38 (web) y, a mano, las 4 acciones ejecutadas con llamadas HTTP reales contra un proyecto real forzado a fallar -- incluido el vínculo estructural `task_escalated.metadata.approval_id` confirmado en producción, no sólo en test. ADR 0037. **No cierra P4** -- P4.4 y P4.5 siguen abiertos.
 - `P4.4` — **CERRADO (14 de agosto de 2026), a+b.** `ApplicationService.delivery_report()` deriva, por work item, un `outcome` de 9 valores (`completed`/`changes_requested`/`failed`/`exhausted`/`blocked`/`cancelled`/`superseded_by_split`/`awaiting_approval`/`in_progress`) con evidencia estructurada de review/test/integración; `awaiting_approval` usa el mismo vínculo estructural que `resolve_approval()` (ADR 0037), corregido dos veces sobre el mismo PR. `Repository.list_agent_runs(project_id)` cerró el único hueco real de `AgentRun` (existía `add_agent_run`, ningún `list_`). Frontend: `app/delivery-report.tsx` nuevo y una sección "Historial de intentos" en `TaskDrawer`, ambos on-demand (un clic, nunca auto-fetched por `openProject()`) porque PLANS.md pide explícitamente que el historial no sea "un panel decorativo" y porque auto-fetchearlos ahí habría obligado a registrar las dos rutas nuevas en cada test existente que abre un proyecto. Dos correcciones explícitas de esta fase: una guarda de id de solicitud monótono contra respuestas tardías A→B en ambos fetches (un proyecto abandonado que resuelve tarde no puede repoblar el estado de uno distinto ya abierto), y evidencia de review/test visible también en ítems `completed`, no sólo en las causas problemáticas. De paso, dos paneles ya tipados pero nunca renderizados: `decision.rationale` y `metrics.tasks_completed`/`tasks_rejected`. Verificado con 521 passed + 1 skipped (backend -- sin cambio numérico sobre P4.4a: el registro de contrato de `AgentRun`/`DeliveryReport` se ejercita dentro del test de drift ya existente, no agrega funciones nuevas) y 46/46 (web, incluye el nuevo `home-delivery-report.test.mjs`, dos regresiones A→B de historial de intentos, y la ronda de corrección de diagnóstico de `AgentRun`/detalle del informe) y a mano contra un proyecto corrido con el proveedor mock. ADR 0038. **Cierra P4** -- sólo P4.5 sigue abierto.
 - `P4.5` — **CERRADO (14 de agosto de 2026).** `agentarium doctor` deja de ser un volcado de JSON que nunca falla: reusa `ProviderRegistry` (la misma fuente que ya usa la web) en vez de su propia comprobación divergente de Ollama, revisa si el modelo configurado está realmente descargado, advierte proactivamente rutas de `workspace_root` demasiado largas para `git worktree` en Windows (ADR 0022), comprueba escritura real (no sólo permisos) sobre workspace y carpeta temporal, y sale con código 12 si algo queda en `FAIL` -- construye `Settings()` directo, nunca `get_settings()`, para poder diagnosticar un entorno donde `ensure_directories()` fallaría. `git worktree add` fallando con `fatal: '$GIT_DIR' too big` ahora agrega un mensaje que nombra `AGENTARIUM_WORKSPACE_ROOT` como fix, sin cambiar el tipo de `IsolationError` (verificado que `_candidate_failure_policy` despacha por `isinstance`, no por mensaje). `setup.ps1` corre `doctor` al final sin abortar la instalación -- la primera versión de esto tenía un bug real, encontrado en verificación manual (no por `test.ps1`, que no ejecuta ningún `.ps1`): no reseteaba `$LASTEXITCODE` después de leer el código de `doctor`, así que `setup.ps1` terminaba heredando el código 12 de `doctor` como propio; corregido con reset explícito + `exit 0` final, reverificado en vivo forzando un `doctor` en `FAIL` real. `docs/guides/windows-setup.md` nuevo documenta, por primera vez en el repo, el fix de TMP/TEMP para el permiso roto de pytest y el procedimiento seguro (no matar todos los `node.exe`) para el cuelgue de `npm test`; `docs/guides/ollama.md` corregido -- su paso 3 no tenía ningún efecto real. Verificado con 545 passed + 1 skipped (backend, +24 sobre P4.4b) + 46/46 (web, sin cambio) y a mano contra el `provider-selection.json` real de esta máquina (no un fixture): la selección guardada real ganó sobre el default de variables de entorno, `ollama` marcó `FAIL` por no responder de verdad, `openai_compatible` marcó `WARN` por no ser el proveedor activo. ADR 0039. **Cierra P4.**
-- Próximo paso: **P4 completo.** Sólo queda el "Gate pre-MVP — segunda matriz completa" cuando exista un flujo candidato a MVP (no automático); P5 sólo entra por una limitación real observada del MVP, no por curiosidad técnica.
+- **Candidato MVP medido (15 de agosto de 2026): `measurement_valid=true` / `candidate_passed=false`.** Flujo candidato `textkit-slugify` (import → run → export → verificar en clon limpio) corrido una sola vez contra `ollama:qwen2.5-coder:7b`, sin repetir la corrida ni realizar reintentos manuales ni ajustar el goal (los reintentos automáticos normales del orquestador sí ocurrieron). 5/9 del checklist de aprobación; el proyecto terminó `failed`. Evidencia completa, incluida la adjudicación read-only de la causa real (releyendo `Orchestrator._colliding_dependency_paths` contra la tabla `artifacts`, no inferida del mensaje de evento), en `benchmarks/results/mvp-candidate-textkit-slugify-2026-08/`. Detalle en "Gate pre-MVP — medición realizada, candidato no aprobado" más abajo. No se corrigió nada del código como parte de esta medición.
+- Próximo paso: **Gate-MVP.1 y Gate-MVP.2, registrados y sin implementar.** La "segunda matriz completa" sigue sin correr -- no es automática y ahora además depende de que 1 y 2 cierren primero. Los hallazgos observados pertenecen al Gate pre-MVP y no justifican promover ningún elemento de extensibilidad de P5; P5 sigue bloqueado.
 
 > Regla de interpretación: una fase puede estar cerrada aunque su medición haya mostrado problemas. “Cerrar P1” significa que el baseline y las remediaciones previstas terminaron; no que el sistema haya alcanzado mágicamente cero errores.
 
@@ -451,9 +452,81 @@ los cinco sub-hitos (P4.1-P4.5) están completos.
 
 ---
 
+## Gate pre-MVP — medición realizada, candidato no aprobado
+
+**Resultado (15 de agosto de 2026): `measurement_valid = true` / `candidate_passed = false`.**
+Candidato elegido: repo sintético `textkit-slugify` (bug acotado de guiones
+al borde en una función `slugify` + pedido de test de regresión) importado
+y corrido una sola vez contra `ollama:qwen2.5-coder:7b`, `model_concurrency=1`,
+sin repetir la corrida ni realizar reintentos manuales ni ajustar el goal
+(los reintentos automáticos normales del orquestador sí ocurrieron), sin
+repair-center. El proyecto terminó
+`failed`; 5/9 del checklist de aprobación. Evidencia completa en
+`benchmarks/results/mvp-candidate-textkit-slugify-2026-08/` (`findings.md`,
+`environment.md`, `verification.md`, `relevant-trace.json`, `changes.patch`,
+`export-summary.json`/`summary.md`, `project-report.json`, `source-hashes.txt`).
+
+Dos causas reales, ninguna corregida todavía:
+
+1. Un work item entregó un candidato fuera de su `expected_outputs`
+   declarado (tocó un archivo que era el trabajo de una tarea hermana); ese
+   candidato se integró igual, y el `Artifact` resultante bloqueó
+   permanentemente a la hermana -- no hay mecanismo que libere o reconcilie
+   un reclamo de ruta una vez conocido el scope real de cada tarea.
+   Adjudicación read-only completa (releyendo `_colliding_dependency_paths`
+   contra la tabla `artifacts` real, no inferida del mensaje de evento) en
+   `findings.md` -- una lectura previa había atribuido esto a un
+   interbloqueo contra la tarea de cierre auto-generada por P0, y esa
+   atribución era incorrecta.
+2. El único work item que sí llegó a `completed` integró código que ni
+   siquiera ejecuta (`NameError` por un `import` faltante) y borró tests
+   preexistentes en vez de extenderlos -- el revisor (LLM) lo aprobó
+   afirmando que "procesa correctamente". Ningún perfil de validación
+   estático disponible para proyectos importados puede detectar un error
+   de runtime.
+
+**No se corrige tocando código ahora.** Se registran dos incrementos
+concretos, sin implementar todavía -- necesitan diseño explícito antes de
+tocar código:
+
+### Gate-MVP.1 — Frontera efectiva de escritura
+
+**Objetivo:** un candidato no puede escribir paths fuera de los reclamos
+efectivos de su propio work item (su `expected_outputs`/scope real), no
+sólo fuera de lo que ya reclamó otro work item. Diseñar a partir de la
+adjudicación de `findings.md` -- la causa real fue una tarea entregando
+fuera de su propio scope, no un interbloqueo contra la tarea de cierre; no
+atribuir el problema a esa tarea de cierre sin evidencia equivalente la
+próxima vez que se retome esto.
+
+### Gate-MVP.2 — Verificación honesta de proyectos importados
+
+**Objetivo:** mantener deshabilitada la ejecución por defecto (P3.4/ADR
+0034 sigue vigente, no se afloja), pero distinguir estructuralmente
+validación estática de validación ejecutada -- un `Review` y un
+`TestReport` producidos sin ejecutar el candidato no deben poder
+presentarse (a la UI, al `delivery_report`, a un revisor humano) como
+prueba de que el código funciona. El diseño posterior debe incluir análisis
+estático seguro capaz de atrapar errores como `F821` (nombre no definido --
+exactamente la clase de bug que apareció en esta corrida) y contexto
+base-vs-candidato explícito para que el reviewer pueda detectar
+eliminaciones de código/tests existentes, no sólo adiciones. No resolver
+esto sólo cambiando prompts -- hace falta una señal estructural nueva.
+
+### Gate-MVP.3 — repetición única (recién después de cerrar 1 y 2)
+
+Una sola repetición del mismo caso (`textkit-slugify`), mismo modelo,
+mismas condiciones -- para confirmar que las dos correcciones de arriba
+resolvieron lo que esta corrida encontró. No es la matriz 3×3×3 ("segunda
+matriz completa", más abajo) y no es una excusa para relanzar buscando un
+resultado distinto si algo más sale mal.
+
+---
+
 ## Gate pre-MVP — segunda matriz completa
 
-Sólo cuando P4 tenga un flujo candidato a MVP se ejecuta otra matriz 3 casos × 3 modelos × 3 repeticiones.
+Sólo cuando el candidato a MVP pase Gate-MVP.1, Gate-MVP.2 y la repetición
+única de Gate-MVP.3 se ejecuta otra matriz 3 casos × 3 modelos × 3 repeticiones.
 
 Reglas:
 
@@ -469,6 +542,15 @@ Objetivo de calidad para candidato MVP: **cero falsos `completed` confirmados en
 ---
 
 ## P5 — extensibilidad, sólo después del MVP
+
+**Bloqueado explícitamente (15 de agosto de 2026):** el candidato MVP
+corrido no fue aprobado (`candidate_passed=false`, ver "Gate pre-MVP —
+medición realizada, candidato no aprobado" arriba). Sí se observaron dos
+limitaciones reales (colisión de ownership por escritura fuera de scope;
+verificación que no distingue estático de ejecutado), pero ambas
+pertenecen al núcleo/Gate-MVP. Los hallazgos observados pertenecen al Gate
+pre-MVP y no justifican promover ningún elemento de extensibilidad de la
+lista de abajo -- primero cierran Gate-MVP.1 y Gate-MVP.2.
 
 Fuera del camino crítico actual:
 
@@ -502,19 +584,27 @@ Sólo promover uno de estos puntos cuando una limitación observada del MVP lo j
 
 ## Qué sigue
 
-No hay una secuencia de entregas automática pendiente: P0, P1, P2, P3
-(P3.0-P3.4) y P4 (P4.1-P4.5) están cerrados. Lo que queda no es una fase
-que se dispare sola, sino una decisión explícita, en este orden:
+P0, P1, P2, P3 (P3.0-P3.4) y P4 (P4.1-P4.5) están cerrados. El flujo
+candidato a MVP ya se eligió y se midió una vez (15 de agosto de 2026, ver
+"Gate pre-MVP — medición realizada, candidato no aprobado" arriba): no fue
+aprobado. Lo que sigue es una decisión explícita, en este orden -- ninguno
+de estos pasos se dispara solo:
 
-1. **Elegir un flujo candidato a MVP.** Recién ahí tiene sentido correr
-   el "Gate pre-MVP — segunda matriz completa" -- no es automático ni se
-   ejecuta sólo porque P4 haya cerrado.
-2. **P5 (extensibilidad) no empieza todavía.** Sólo entra por una
-   limitación real observada del MVP, nunca por curiosidad técnica
-   (regla 10 de "Reglas para no volver a iterar de más").
+1. **Diseñar e implementar Gate-MVP.1** (frontera efectiva de escritura)
+   -- registrado arriba, no implementado todavía.
+2. **Diseñar e implementar Gate-MVP.2** (verificación honesta de proyectos
+   importados) -- registrado arriba, no implementado todavía.
+3. **Gate-MVP.3**: una sola repetición del mismo caso, recién después de
+   cerrar 1 y 2. La "segunda matriz completa" (3×3×3) sigue sin correr y
+   sigue sin ser el paso siguiente.
 
-Sin una instrucción explícita del usuario sobre cuál de los dos caminos
-tomar, no avanzar por cuenta propia en ninguno.
+**P5 (extensibilidad) sigue bloqueado.** Sólo entra por una limitación real
+observada del MVP, nunca por curiosidad técnica (regla 10 de "Reglas para
+no volver a iterar de más"). Los hallazgos observados pertenecen al Gate
+pre-MVP y no justifican promover ningún elemento de extensibilidad de P5.
+
+Sin una instrucción explícita del usuario sobre cuál de Gate-MVP.1/.2
+encarar primero, no avanzar por cuenta propia en ninguno.
 
 ---
 
@@ -522,7 +612,7 @@ tomar, no avanzar por cuenta propia en ninguno.
 
 Usar este texto literalmente como punto de partida:
 
-> Lee `CLAUDE.md`/las instrucciones del repo y `PLANS.md` completos. Verifica que estás sobre `main` actualizado y limpio. **P4 está completo (P4.1-P4.5).** No reabras P0, P1, P2, P3.1 (a+b), P3.2, P3.3, P3.4 ni ningún sub-hito de P4 salvo una regresión demostrable o un requisito concreto que lo justifique (ver el disparador de revisión en ADR 0033 para el caso de backend, la condición futura en ADR 0034 para habilitar ejecución aislada, el límite de carpetas planas sin snapshot transaccional en ADR 0035, la falta de tracking incremental "desde la última exportación" en ADR 0036, las dos limitaciones explícitas de ADR 0037 -- recover sólo ofrece artefactos propios del item, sin badge de conteo en vivo en el nav --, las de ADR 0038 -- el informe/historial no se auto-refrescan tras una acción, y la guarda A→B no se retrofiteó a `loadRepairArtifacts()` de P4.3b --, y las de ADR 0039 -- el bug de UTF-8 en `benchmark run` sigue en backlog a propósito, y el `ValueError` sin capturar de `RoleCatalog.select_provider()` queda detectado por `doctor` pero no corregido en su origen). No hay una fase siguiente automática: el "Gate pre-MVP — segunda matriz completa" sólo corre cuando exista un flujo candidato a MVP real (decisión explícita, no algo que se dispara solo), y P5 (extensibilidad) sólo entra por una limitación real observada del MVP, nunca por curiosidad técnica -- ver las reglas 9 y 10 de "Reglas para no volver a iterar de más". Si no hay una instrucción explícita del usuario sobre cuál de esos dos caminos tomar, preguntá antes de avanzar en cualquiera.
+> Lee `CLAUDE.md`/las instrucciones del repo y `PLANS.md` completos. Verifica que estás sobre `main` actualizado y limpio. **P4 está completo (P4.1-P4.5).** No reabras P0, P1, P2, P3.1 (a+b), P3.2, P3.3, P3.4 ni ningún sub-hito de P4 salvo una regresión demostrable o un requisito concreto que lo justifique (ver el disparador de revisión en ADR 0033 para el caso de backend, la condición futura en ADR 0034 para habilitar ejecución aislada, el límite de carpetas planas sin snapshot transaccional en ADR 0035, la falta de tracking incremental "desde la última exportación" en ADR 0036, las dos limitaciones explícitas de ADR 0037 -- recover sólo ofrece artefactos propios del item, sin badge de conteo en vivo en el nav --, las de ADR 0038 -- el informe/historial no se auto-refrescan tras una acción, y la guarda A→B no se retrofiteó a `loadRepairArtifacts()` de P4.3b --, y las de ADR 0039 -- el bug de UTF-8 en `benchmark run` sigue en backlog a propósito, y el `ValueError` sin capturar de `RoleCatalog.select_provider()` queda detectado por `doctor` pero no corregido en su origen). El flujo candidato a MVP ya se eligió y se midió una vez (15 de agosto de 2026): "Gate pre-MVP — medición realizada, candidato no aprobado" -- `measurement_valid=true`/`candidate_passed=false`, 5/9 del checklist, evidencia completa en `benchmarks/results/mvp-candidate-textkit-slugify-2026-08/`. Quedan registrados, sin implementar, Gate-MVP.1 (frontera efectiva de escritura) y Gate-MVP.2 (verificación honesta de proyectos importados); recién después de cerrar ambos entra Gate-MVP.3 (una repetición única, no la matriz). La "segunda matriz completa" sigue sin correr y sigue sin ser automática. Los hallazgos observados pertenecen al Gate pre-MVP y no justifican promover ningún elemento de extensibilidad de P5 -- P5 sigue bloqueado, ver las reglas 9 y 10 de "Reglas para no volver a iterar de más". Si no hay una instrucción explícita del usuario sobre cuál de Gate-MVP.1/.2 encarar primero, preguntá antes de avanzar en cualquiera.
 
 ---
 
@@ -549,5 +639,6 @@ Usar este texto literalmente como punto de partida:
 - `docs/guides/windows-setup.md` — guía de instalación y diagnóstico en Windows (P4.5).
 - `benchmarks/results/p1-baseline-2026-08/` — baseline, ambiente y adjudicación manual.
 - `benchmarks/results/p3.0-confirmation-2026-08/` — confirmación dirigida de P2 con modelo real, ambiente y hallazgos.
+- `benchmarks/results/mvp-candidate-textkit-slugify-2026-08/` — candidato MVP medido, no aprobado; adjudicación read-only de la colisión de ownership, evidencia completa.
 
 Cuando una afirmación histórica de este plan choque con un ADR o con datos versionados del benchmark, la evidencia versionada manda; actualizar este resumen en vez de reinterpretar el pasado.
