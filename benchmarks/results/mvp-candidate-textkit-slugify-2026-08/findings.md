@@ -30,8 +30,9 @@ califica como candidato aprobado.
 
 [^2]: `unverified_completed_items=[]` da verde sólo según la definición
 mecánica **actual** de esa red de seguridad (`services/delivery_report.py`):
-confirma que el work item `completed` tiene un `Review` y un `TestReport`
-persistidos y consistentes con los eventos -- **no** demuestra que el
+confirma únicamente que existe al menos un `Review` y un `TestReport`
+persistidos para el work item `completed`; no comprueba `verdict`,
+`passed`, eventos ni ejecución real -- **no** demuestra que el
 candidato se haya ejecutado ni que sea funcionalmente correcto, como prueba
 el punto 7 de esta misma tabla (el mismo work item que deja este punto en
 verde es el que integró código con `NameError`). Esta insuficiencia -- que
