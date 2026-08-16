@@ -18,10 +18,21 @@ corrida una vez, sin repetirse.
 | Versión de Ollama | 0.32.5 |
 | Concurrencia | `model_concurrency: 1` |
 | `agentarium doctor` previo a la corrida | 14 ok, 1 advertencia (`openai_compatible` inactivo, no bloquea), 0 errores |
-| Base de datos | `sqlite:///C:/Users/Renzo/Desktop/Agentarium/runtime/agentarium.db` (la misma que usa cualquier invocación normal de la CLI, sin aislar — una sola corrida no lo necesita, mismo criterio que P3.0) |
+| Base de datos | `sqlite:///<AGENTARIUM_ROOT>/runtime/agentarium.db` (la misma que usa cualquier invocación normal de la CLI, sin aislar — una sola corrida no lo necesita, mismo criterio que P3.0) |
 | `project_id` | `f685b363-da54-4280-99cb-e2ca22b354b4` |
 | `imported_commit` | `f3e6ba583a3688398fc7a339681f2767fa40de39` |
 | Goal (persistido) | sha256 `eb6b09a0571e99485875bfad9dd2a6376659e6645d940e27330c361291b48d71` — verificado byte a byte contra el texto exacto acordado, tanto vía CLI (con `PYTHONUTF8=1`) como por consulta directa a la base |
+
+**Nota de normalización:** en este archivo y en `summary.md`,
+`export-summary.json`, `project-report.json` y `relevant-trace.json` se
+reemplazaron rutas absolutas locales por placeholders --
+`<AGENTARIUM_ROOT>` (raíz del repo), `<WORKSPACE_ROOT>` (workspace/worktree
+concreto de este proyecto), `<SOURCE_FIXTURE>` (carpeta del repo fixture
+importado) y `<EXPORT_DIR>` (carpeta de salida del export) -- para no
+versionar la ruta de usuario/máquina ni el GUID de sesión del scratchpad
+que las contenía. Ningún hash, commit, ID, timestamp ni contenido técnico
+fue alterado; `changes.patch` no se tocó. Comando y verificación exactos
+en `verification.md`.
 
 ## Qué se corrió
 
@@ -58,9 +69,12 @@ agentarium project import <source> "<goal de arriba>" -t "textkit-slugify"
 agentarium project run f685b363-da54-4280-99cb-e2ca22b354b4
 ```
 
-Una sola corrida. No se reintentó, no se ajustó el goal, no se usó
-repair-center, no se corrigió nada del hallazgo mientras el proyecto seguía
-`RUNNING`. Duración real de la ejecución (`project_run_started` →
+Una sola corrida: no se repitió la corrida ni se realizaron reintentos
+manuales, no se ajustó el goal, no se usó repair-center, no se corrigió
+nada del hallazgo mientras el proyecto seguía `RUNNING`. Los reintentos
+automáticos normales del orquestador sí ocurrieron (tarea `22ec7032`
+intentos 1-3, subtarea `bc15f7f1` intentos 1-3). Duración real de la
+ejecución (`project_run_started` →
 `project_failed`): 21:00:59.317 → 21:02:24.690 (≈1m45s), 12 llamadas al
 modelo, las 12 con `outcome=artifact_delivered` en `agent_runs` (el modelo
 respondió en todas; ningún fallo de proveedor).

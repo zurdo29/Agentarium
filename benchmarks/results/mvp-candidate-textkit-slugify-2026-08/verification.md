@@ -75,8 +75,10 @@ EXIT:0
 status: "failed"
 ```
 `project_run_started` 21:00:59.317 → `project_failed` 21:02:24.690.
-12/12 `agent_runs.outcome=artifact_delivered`. Sin reintento manual, sin
-tocar el goal, sin repair-center.
+12/12 `agent_runs.outcome=artifact_delivered`. Sin repetir la corrida ni
+realizar reintentos manuales, sin tocar el goal, sin repair-center -- los
+reintentos automáticos normales del orquestador sí ocurrieron (`22ec7032`
+intentos 1-3, `bc15f7f1` intentos 1-3).
 
 ## 5. Export
 

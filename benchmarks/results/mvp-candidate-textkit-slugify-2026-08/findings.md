@@ -2,8 +2,11 @@
 
 **Veredicto: `measurement_valid = true` / `candidate_passed = false`.**
 
-Corrida única, sin reintentos, sin ajustar el goal, sin usar repair-center,
-sin corregir nada mientras el proyecto corría. El entorno estaba correcto,
+Corrida única: sin repetir la corrida ni realizar reintentos manuales, sin
+ajustar el goal, sin usar repair-center, sin corregir nada mientras el
+proyecto corría. Los reintentos automáticos normales del orquestador sí
+ocurrieron (tarea `22ec7032` intentos 1-3, subtarea `bc15f7f1` intentos
+1-3 -- detalle en la adjudicación más abajo). El entorno estaba correcto,
 el modelo respondió en las 12 llamadas (`agent_runs.outcome=artifact_delivered`
 en todas), y el recorrido completo quedó registrado (`relevant-trace.json`).
 El proyecto terminó `failed` y, aun mirando lo parcialmente entregado, no
@@ -14,7 +17,7 @@ califica como candidato aprobado.
 | # | Criterio | Resultado |
 |---|---|---|
 | 1 | Estado `completed` | ❌ `failed` — descalifica por sí solo |
-| 2 | `unverified_completed_items` vacío | ✅ `[]` (`project-report.json`) |
+| 2 | `unverified_completed_items` vacío | ✅[^2] `[]` (`project-report.json`) |
 | 3 | `consistency.matches_git_history=true` | ✅ `true` (`export-summary.json`) |
 | 4 | Patch aplica limpio | ✅ `git am` exit 0, sin conflictos |
 | 5 | Árbol idéntico al `main` integrado | ✅ ambos `eb92017b5f126eadf8b592e1ca87d604c70d1b0a` |
@@ -24,6 +27,17 @@ califica como candidato aprobado.
 | 9 | Origen intacto byte a byte | ✅ `source-hashes.txt` idéntico antes/después, HEAD sin mover |
 
 5/9. El punto 1 ya cierra el veredicto; los puntos 6-7 son la razón de fondo.
+
+[^2]: `unverified_completed_items=[]` da verde sólo según la definición
+mecánica **actual** de esa red de seguridad (`services/delivery_report.py`):
+confirma que el work item `completed` tiene un `Review` y un `TestReport`
+persistidos y consistentes con los eventos -- **no** demuestra que el
+candidato se haya ejecutado ni que sea funcionalmente correcto, como prueba
+el punto 7 de esta misma tabla (el mismo work item que deja este punto en
+verde es el que integró código con `NameError`). Esta insuficiencia -- que
+la definición actual de "verificado" no requiera ejecución -- es
+exactamente lo que Gate-MVP.2 existe para cerrar, no un error de esta
+adjudicación.
 
 ---
 
@@ -165,11 +179,28 @@ sobre un clon limpio del original + `python -m unittest discover -s tests -v`
   byte (verificado por hash). Mismo ítem ya anotado en el backlog de
   `PLANS.md` para `benchmark run`, ahora confirmado también en
   `project import`/`report`.
-- **`agent_runs.output_summary` truncado en almacenamiento**: al menos 3
-  filas para `22ec7032` quedaron con JSON cortado a mitad de string
-  (`Unterminated string`) — no impidió esta adjudicación porque el mensaje
-  de rechazo y el título del artifact alcanzan para reconstruir el
-  candidato, pero es una pérdida de fidelidad de diagnóstico real.
+- **`agent_runs.output_summary` truncado en almacenamiento a 1000
+  caracteres.** No en `relevant-trace.json` (no incluye `agent_runs` a
+  propósito, ver su `_note`); evidencia agregada, sin contenido completo,
+  de las 12 filas de `agent_runs` de este proyecto — exactamente 5 quedan
+  en `length=1000` con JSON inválido (`Unterminated string`), afectando no
+  sólo a la tarea `22ec7032` sino también a la primera planificación
+  (`technical_manager`) y al primer intento de la tarea 1:
+
+  | run_id | work_item_id | length | json_valid |
+  |---|---|---:|---|
+  | `b9201b77-1198-4115-a80c-f7406b27d855` | *(planificación, sin work item)* | 1000 | false |
+  | `07a9bd0f-5951-4ef9-b2ea-1600e57c3c9d` | `75b4c813-f124-42ac-bafb-db03df9433e5` | 1000 | false |
+  | `4a7b613f-01e3-4762-84d6-262e3b8e607f` | `22ec7032-308e-4096-af5e-a562f4394798` | 1000 | false |
+  | `f91457ff-1663-4682-8d32-ff5a84061351` | `22ec7032-308e-4096-af5e-a562f4394798` | 1000 | false |
+  | `0d440277-aae5-4129-8e68-7e1b741527fe` | `22ec7032-308e-4096-af5e-a562f4394798` | 1000 | false |
+
+  Las 7 filas restantes tienen `length` entre 554 y 930 y `json_valid=true`
+  — el corte es un límite de longitud fijo, no un fallo esporádico. No
+  impidió esta adjudicación (el mensaje de rechazo + el título del
+  artifact + la tabla `artifacts` real alcanzan para reconstruir el
+  candidato en cada caso), pero es una pérdida de fidelidad de diagnóstico
+  real para cualquier lectura futura que necesite el contenido completo.
 - **Gap de comunicación confirmado, en la dirección buena**: el DIRECTOR no
   sabe de la restricción de ejecución de proyectos importados (sin mención
   en `llm/prompts.py`), pero con el goal explícito no derivó criterios que

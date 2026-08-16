@@ -386,11 +386,11 @@
             "tests/test_slug.py"
           ],
           "command": [
-            "C:\\Users\\Renzo\\Desktop\\Agentarium\\.venv\\Scripts\\python.exe",
+            "<AGENTARIUM_ROOT>\\.venv\\Scripts\\python.exe",
             "-c",
             "from pathlib import Path;paths=sorted(p.as_posix() for p in Path('.').rglob('*') if p.is_file() and '.git' not in p.parts);print('\\n'.join(paths))"
           ],
-          "cwd": "C:\\Users\\Renzo\\Desktop\\Agentarium\\workspaces\\f685b363-da54-4280-99cb-e2ca22b354b4\\worktrees\\75b4c813-1-0026afb126",
+          "cwd": "<WORKSPACE_ROOT>\\worktrees\\75b4c813-1-0026afb126",
           "stdout": ".gitignore\r\nREADME.md\r\ntests/test_slug.py\r\ntextkit/__init__.py\r\ntextkit/slug.py\r\n",
           "stderr": "",
           "return_code": 0,
@@ -406,12 +406,12 @@
             "textkit/slug.py"
           ],
           "command": [
-            "C:\\Users\\Renzo\\Desktop\\Agentarium\\.venv\\Scripts\\python.exe",
+            "<AGENTARIUM_ROOT>\\.venv\\Scripts\\python.exe",
             "-c",
             "from pathlib import Path;import sys;path=sys.argv[1];compile(Path(path).read_text(encoding='utf-8'),path,'exec')",
             "textkit/slug.py"
           ],
-          "cwd": "C:\\Users\\Renzo\\Desktop\\Agentarium\\workspaces\\f685b363-da54-4280-99cb-e2ca22b354b4\\worktrees\\75b4c813-1-0026afb126",
+          "cwd": "<WORKSPACE_ROOT>\\worktrees\\75b4c813-1-0026afb126",
           "stdout": "",
           "stderr": "",
           "return_code": 0,
@@ -427,12 +427,12 @@
             "tests/test_slug.py"
           ],
           "command": [
-            "C:\\Users\\Renzo\\Desktop\\Agentarium\\.venv\\Scripts\\python.exe",
+            "<AGENTARIUM_ROOT>\\.venv\\Scripts\\python.exe",
             "-c",
             "from pathlib import Path;import sys;path=sys.argv[1];compile(Path(path).read_text(encoding='utf-8'),path,'exec')",
             "tests/test_slug.py"
           ],
-          "cwd": "C:\\Users\\Renzo\\Desktop\\Agentarium\\workspaces\\f685b363-da54-4280-99cb-e2ca22b354b4\\worktrees\\75b4c813-1-0026afb126",
+          "cwd": "<WORKSPACE_ROOT>\\worktrees\\75b4c813-1-0026afb126",
           "stdout": "",
           "stderr": "",
           "return_code": 0,
@@ -446,7 +446,7 @@
           "profile": "import_preflight",
           "targets": [],
           "command": [],
-          "cwd": "C:\\Users\\Renzo\\Desktop\\Agentarium\\workspaces\\f685b363-da54-4280-99cb-e2ca22b354b4\\worktrees\\75b4c813-1-0026afb126",
+          "cwd": "<WORKSPACE_ROOT>\\worktrees\\75b4c813-1-0026afb126",
           "stdout": "",
           "stderr": "",
           "return_code": 0,
@@ -508,7 +508,7 @@
       "agent_role": null,
       "model": null,
       "action": "project_imported",
-      "message": "Proyecto importado desde C:\\Users\\Renzo\\AppData\\Local\\Temp\\claude\\C--Users-Renzo-Desktop-Agentarium\\edf60fe4-bfff-40dd-9dfa-7cf136f77f5f\\scratchpad\\textkit-slugify-source.",
+      "message": "Proyecto importado desde <SOURCE_FIXTURE>.",
       "previous_state": null,
       "new_state": "draft",
       "attempt": null,
@@ -516,7 +516,7 @@
       "resource_usage_json": null,
       "correlation_id": "27d0ee1c-0126-49c2-a708-596a357c04b2",
       "metadata_json": {
-        "source_path": "C:\\Users\\Renzo\\AppData\\Local\\Temp\\claude\\C--Users-Renzo-Desktop-Agentarium\\edf60fe4-bfff-40dd-9dfa-7cf136f77f5f\\scratchpad\\textkit-slugify-source",
+        "source_path": "<SOURCE_FIXTURE>",
         "commit": "f3e6ba583a3688398fc7a339681f2767fa40de39",
         "branch": "main"
       },
@@ -1811,7 +1811,7 @@
       "agent_role": null,
       "model": null,
       "action": "project_exported",
-      "message": "Cambios exportados a C:\\Users\\Renzo\\AppData\\Local\\Temp\\claude\\C--Users-Renzo-Desktop-Agentarium\\edf60fe4-bfff-40dd-9dfa-7cf136f77f5f\\scratchpad\\export-out\\agentarium-export-f685b363-20260815T212214Z-63aeb5a9 (bundle, patch).",
+      "message": "Cambios exportados a <EXPORT_DIR> (bundle, patch).",
       "previous_state": null,
       "new_state": null,
       "attempt": null,
@@ -1819,7 +1819,7 @@
       "resource_usage_json": null,
       "correlation_id": "4cabb915-281c-41f6-bb27-0fbb51fe3761",
       "metadata_json": {
-        "destination": "C:\\Users\\Renzo\\AppData\\Local\\Temp\\claude\\C--Users-Renzo-Desktop-Agentarium\\edf60fe4-bfff-40dd-9dfa-7cf136f77f5f\\scratchpad\\export-out\\agentarium-export-f685b363-20260815T212214Z-63aeb5a9",
+        "destination": "<EXPORT_DIR>",
         "base_commit": "f3e6ba583a3688398fc7a339681f2767fa40de39",
         "head_commit": "a0ee047234306afb446c4b35dba07f4be02943b0",
         "commit_count": 2,

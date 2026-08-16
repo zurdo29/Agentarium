@@ -129,11 +129,11 @@
             "tests/test_slug.py"
           ],
           "command": [
-            "C:\\Users\\Renzo\\Desktop\\Agentarium\\.venv\\Scripts\\python.exe",
+            "<AGENTARIUM_ROOT>\\.venv\\Scripts\\python.exe",
             "-c",
             "from pathlib import Path;paths=sorted(p.as_posix() for p in Path('.').rglob('*') if p.is_file() and '.git' not in p.parts);print('\\n'.join(paths))"
           ],
-          "cwd": "C:\\Users\\Renzo\\Desktop\\Agentarium\\workspaces\\f685b363-da54-4280-99cb-e2ca22b354b4\\worktrees\\75b4c813-1-0026afb126",
+          "cwd": "<WORKSPACE_ROOT>\\worktrees\\75b4c813-1-0026afb126",
           "stdout": ".gitignore\r\nREADME.md\r\ntests/test_slug.py\r\ntextkit/__init__.py\r\ntextkit/slug.py\r\n",
           "stderr": "",
           "return_code": 0,
@@ -149,12 +149,12 @@
             "textkit/slug.py"
           ],
           "command": [
-            "C:\\Users\\Renzo\\Desktop\\Agentarium\\.venv\\Scripts\\python.exe",
+            "<AGENTARIUM_ROOT>\\.venv\\Scripts\\python.exe",
             "-c",
             "from pathlib import Path;import sys;path=sys.argv[1];compile(Path(path).read_text(encoding='utf-8'),path,'exec')",
             "textkit/slug.py"
           ],
-          "cwd": "C:\\Users\\Renzo\\Desktop\\Agentarium\\workspaces\\f685b363-da54-4280-99cb-e2ca22b354b4\\worktrees\\75b4c813-1-0026afb126",
+          "cwd": "<WORKSPACE_ROOT>\\worktrees\\75b4c813-1-0026afb126",
           "stdout": "",
           "stderr": "",
           "return_code": 0,
@@ -170,12 +170,12 @@
             "tests/test_slug.py"
           ],
           "command": [
-            "C:\\Users\\Renzo\\Desktop\\Agentarium\\.venv\\Scripts\\python.exe",
+            "<AGENTARIUM_ROOT>\\.venv\\Scripts\\python.exe",
             "-c",
             "from pathlib import Path;import sys;path=sys.argv[1];compile(Path(path).read_text(encoding='utf-8'),path,'exec')",
             "tests/test_slug.py"
           ],
-          "cwd": "C:\\Users\\Renzo\\Desktop\\Agentarium\\workspaces\\f685b363-da54-4280-99cb-e2ca22b354b4\\worktrees\\75b4c813-1-0026afb126",
+          "cwd": "<WORKSPACE_ROOT>\\worktrees\\75b4c813-1-0026afb126",
           "stdout": "",
           "stderr": "",
           "return_code": 0,
@@ -189,7 +189,7 @@
           "profile": "import_preflight",
           "targets": [],
           "command": [],
-          "cwd": "C:\\Users\\Renzo\\Desktop\\Agentarium\\workspaces\\f685b363-da54-4280-99cb-e2ca22b354b4\\worktrees\\75b4c813-1-0026afb126",
+          "cwd": "<WORKSPACE_ROOT>\\worktrees\\75b4c813-1-0026afb126",
           "stdout": "",
           "stderr": "",
           "return_code": 0,
