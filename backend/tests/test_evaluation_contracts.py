@@ -330,6 +330,224 @@ def test_colliding_dependency_paths_allows_matching_shared_component_fragment(
     ) == {"library_api.py"}
 
 
+def _proposal(paths: list[str]) -> WorkArtifactProposal:
+    return WorkArtifactProposal.model_validate(
+        {
+            "artifact_type": "code",
+            "title": "Entrega",
+            "summary": "s",
+            "quality": "verified",
+            "files": [
+                {"path": path, "content": "contenido", "purpose": "p"}
+                for path in paths
+            ],
+        }
+    )
+
+
+def test_out_of_scope_paths_rejects_a_file_outside_the_items_own_claims() -> None:
+    item = WorkItem(
+        project_id="p",
+        milestone_id="m",
+        title="Modificar la función `slugify`",
+        description="Corrige el bug de guiones al borde",
+        expected_outputs=["textkit/slug.py"],
+        acceptance_criteria=["Existe"],
+    )
+    proposal = _proposal(["textkit/slug.py", "tests/test_slug.py"])
+
+    assert Orchestrator._out_of_scope_paths(item, proposal) == {"tests/test_slug.py"}
+
+
+def test_out_of_scope_paths_is_permissive_without_any_parseable_claim() -> None:
+    item = WorkItem(
+        project_id="p",
+        milestone_id="m",
+        title="Tarea en prosa",
+        description="Escribe el glosario",
+        expected_outputs=["glosario"],
+        acceptance_criteria=["Existe"],
+    )
+    proposal = _proposal(["docs/design.md"])
+
+    assert Orchestrator._out_of_scope_paths(item, proposal) == set()
+
+
+def test_out_of_scope_paths_combines_owned_paths_and_expected_outputs() -> None:
+    item = WorkItem(
+        project_id="p",
+        milestone_id="m",
+        title="Tarea con dos claims",
+        description="Entrega dos archivos declarados por dos vías distintas",
+        expected_outputs=["b.py"],
+        acceptance_criteria=["Existe"],
+        owned_paths=["a.py"],
+    )
+    proposal = _proposal(["a.py", "b.py"])
+
+    assert Orchestrator._out_of_scope_paths(item, proposal) == set()
+
+
+def test_out_of_scope_paths_normalizes_backslashes_and_case() -> None:
+    # owned_paths declarado con backslash y mayúsculas; merge_path_claims lo
+    # devuelve tal cual (sin normalizar) -- la normalización es responsabilidad
+    # de _out_of_scope_paths, no de merge_path_claims.
+    item = WorkItem(
+        project_id="p",
+        milestone_id="m",
+        title="Tarea con claim declarado en formato distinto",
+        description="owned_paths con separador y mayúsculas distintos al candidato",
+        expected_outputs=["el caso de prueba"],
+        acceptance_criteria=["Existe"],
+        owned_paths=["Tests\\Test_Slug.PY"],
+    )
+    proposal = _proposal(["tests/test_slug.py"])
+
+    assert Orchestrator._out_of_scope_paths(item, proposal) == set()
+
+
+def test_out_of_scope_paths_ignores_shared_component_without_an_own_claim() -> None:
+    # shared_component ya NO exime nada acá (a diferencia de
+    # _colliding_dependency_paths): esa excepción responde "¿pueden dos
+    # tareas relacionadas compartir un archivo?", no "¿esta tarea se salió
+    # de su propio scope?".
+    item = WorkItem(
+        project_id="p",
+        milestone_id="m",
+        title="Fragmento B",
+        description="Escribe su propia parte del módulo compartido",
+        expected_outputs=["library_api_part_b.py"],
+        acceptance_criteria=["Existe"],
+        shared_component="library_api",
+        output_strategy=OutputStrategy.FRAGMENT,
+    )
+    # Claim real propio (library_api_part_b.py) + el path que "posee" la
+    # hermana del fragmento (library_api.py) -- shared_component no debe
+    # extender el claim propio a ese segundo path.
+    proposal = _proposal(["library_api_part_b.py", "library_api.py"])
+
+    assert Orchestrator._out_of_scope_paths(item, proposal) == {"library_api.py"}
+
+
+def test_out_of_scope_paths_allows_a_shared_path_when_the_item_declares_it_itself() -> None:
+    item = WorkItem(
+        project_id="p",
+        milestone_id="m",
+        title="Fragmento B",
+        description="Escribe su propia parte, declarándola explícitamente",
+        expected_outputs=["modulo_parte_b"],
+        acceptance_criteria=["Existe"],
+        owned_paths=["library_api.py"],
+        shared_component="library_api",
+        output_strategy=OutputStrategy.FRAGMENT,
+    )
+    proposal = _proposal(["library_api.py"])
+
+    assert Orchestrator._out_of_scope_paths(item, proposal) == set()
+
+
+def test_out_of_scope_paths_ignores_dependency_ids_without_an_own_claim() -> None:
+    # Tener un ancestro real tampoco exime nada acá -- a diferencia de
+    # _colliding_dependency_paths, que sí puede dejar reescribir el path de
+    # un ancestro. Esta compuerta sólo mira el scope propio declarado.
+    item = WorkItem(
+        project_id="p",
+        milestone_id="m",
+        title="Cierre",
+        description="Consolida el resultado",
+        expected_outputs=["docs/final.md"],
+        acceptance_criteria=["Existe"],
+        dependency_ids=["ancestor-id"],
+    )
+    proposal = _proposal(["docs/final.md", "docs/architecture.md"])
+
+    assert Orchestrator._out_of_scope_paths(item, proposal) == {"docs/architecture.md"}
+
+
+def test_out_of_scope_paths_allows_a_path_when_the_item_declares_it_despite_dependencies() -> None:
+    item = WorkItem(
+        project_id="p",
+        milestone_id="m",
+        title="Cierre",
+        description="Reescribe legítimamente el archivo del ancestro, declarado",
+        expected_outputs=["docs/final.md"],
+        acceptance_criteria=["Existe"],
+        owned_paths=["docs/architecture.md"],
+        dependency_ids=["ancestor-id"],
+    )
+    proposal = _proposal(["docs/final.md", "docs/architecture.md"])
+
+    assert Orchestrator._out_of_scope_paths(item, proposal) == set()
+
+
+def test_reject_out_of_scope_write_emits_event_and_raises(
+    service: ApplicationService,
+) -> None:
+    project = service.create_project("Rechazo de escritura fuera de scope")
+    milestone = Milestone(
+        project_id=project.id,
+        title="Hito",
+        description="Hito de prueba",
+        order=0,
+    )
+    service.repository.add_milestone(milestone)
+    item = WorkItem(
+        project_id=project.id,
+        milestone_id=milestone.id,
+        title="Modificar la función `slugify`",
+        description="Corrige el bug de guiones al borde",
+        expected_outputs=["textkit/slug.py"],
+        acceptance_criteria=["Existe"],
+    )
+    service.repository.add_work_item(item)
+    proposal = _proposal(["textkit/slug.py", "tests/test_slug.py"])
+
+    with pytest.raises(InvalidPlan, match="own declared scope"):
+        service.orchestrator._reject_out_of_scope_write(item, proposal, "corr-1")
+
+    events = service.repository.list_events_for_work_item(project.id, item.id)
+    matching = [
+        event for event in events if event["action"] == "workspace_own_scope_rejected"
+    ]
+    assert len(matching) == 1
+    metadata = matching[0]["metadata"]
+    assert metadata["paths"] == ["tests/test_slug.py"]
+    assert metadata["candidate_paths"] == ["tests/test_slug.py", "textkit/slug.py"]
+    assert metadata["claimed_paths"] == ["textkit/slug.py"]
+    assert metadata["owned_paths"] == []
+    assert metadata["expected_outputs"] == ["textkit/slug.py"]
+
+
+def test_reject_out_of_scope_write_is_a_noop_when_everything_is_in_scope(
+    service: ApplicationService,
+) -> None:
+    project = service.create_project("Sin violación de scope")
+    milestone = Milestone(
+        project_id=project.id,
+        title="Hito",
+        description="Hito de prueba",
+        order=0,
+    )
+    service.repository.add_milestone(milestone)
+    item = WorkItem(
+        project_id=project.id,
+        milestone_id=milestone.id,
+        title="Modificar la función `slugify`",
+        description="Corrige el bug de guiones al borde",
+        expected_outputs=["textkit/slug.py"],
+        acceptance_criteria=["Existe"],
+    )
+    service.repository.add_work_item(item)
+    proposal = _proposal(["textkit/slug.py"])
+
+    service.orchestrator._reject_out_of_scope_write(item, proposal, "corr-2")
+
+    events = service.repository.list_events_for_work_item(project.id, item.id)
+    assert not any(
+        event["action"] == "workspace_own_scope_rejected" for event in events
+    )
+
+
 @pytest.mark.parametrize(
     ("raw_verdict", "criterion_passed", "expected_verdict"),
     [

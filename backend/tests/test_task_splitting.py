@@ -38,6 +38,41 @@ async def test_task_splits_into_subtasks_after_exhausting_retries_and_project_co
     original_generate = MockProvider.generate
 
     async def always_reject_target(self, request, agent):  # type: ignore[no-untyped-def]
+        if request.operation == "work":
+            candidate_item = service.repository.get_work_item(request.work_item_id)
+            if candidate_item.output_strategy is OutputStrategy.CONSOLIDATION:
+                # Gate-MVP.1 (ADR 0040): MockProvider._workspace_file
+                # translates this task's inherited, unsuffixed
+                # expected_outputs label ("implementation_artifact" ->
+                # "src/implementation.md") through a fixed table that
+                # ignores the owned_paths the split machinery actually
+                # assigned this consolidation task (the union of its
+                # children's owned_paths) -- deliver into what it really
+                # owns instead, so this test still exercises what it names
+                # (split -> consolidate -> project completes), not an
+                # accidental mismatch between two unrelated parts of the
+                # mock provider.
+                content = {
+                    "artifact_type": "Documento",
+                    "title": "Consolidación",
+                    "summary": "Confirma que las subtareas cubren el contrato original.",
+                    "quality": "verified",
+                    "files": [
+                        {
+                            "path": path,
+                            "content": f"# {path}\n",
+                            "purpose": "Consolidación",
+                        }
+                        for path in candidate_item.owned_paths
+                    ],
+                }
+                raw = json.dumps(content)
+                return ProviderResponse(
+                    content=content,
+                    raw_text=raw,
+                    prompt_characters=len(raw),
+                    response_characters=len(raw),
+                )
         if request.operation == "review" and request.work_item_id == target.id:
             content = {
                 "verdict": "changes_requested",
