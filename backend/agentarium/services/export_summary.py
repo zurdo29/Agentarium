@@ -13,6 +13,30 @@ from agentarium.domain.models import Project, Review, TestReport, WorkItem
 from agentarium.isolation.export import ExportManifest
 
 
+def removed_top_level_names(report: TestReport | None) -> dict[str, list[str]]:
+    """Gate-MVP.2 (ADR 0041): the `removed_top_level_names` entries the
+    Orchestrator persisted into `TestReport.command_evidence` -- one per
+    delivered `.py` file, deliberately including the empty ones so the
+    evidence trail distinguishes "checked, nothing removed" from "never
+    checked". Only the non-empty ones are surfaced: the normal case is
+    that nothing was removed, and a section that is always present and
+    almost always empty trains a reader to skip it.
+    """
+    if report is None:
+        return {}
+    removed: dict[str, list[str]] = {}
+    for entry in report.command_evidence:
+        if entry.get("check") != "removed_top_level_names":
+            continue
+        names = entry.get("removed") or []
+        if not isinstance(names, list) or not names:
+            continue
+        path = entry.get("path")
+        if isinstance(path, str):
+            removed[path] = [str(name) for name in names]
+    return removed
+
+
 def build_export_summary(
     *,
     project: Project,
@@ -62,6 +86,7 @@ def build_export_summary(
                 "tester_verification_mode": (
                     test_report.verification_mode.value if test_report else None
                 ),
+                "removed_top_level_names": removed_top_level_names(test_report),
                 "tester_summary": test_report.summary if test_report else None,
                 "review_verdict": review.verdict.value if review else None,
                 "review_acceptance_results": review.acceptance_results if review else {},
@@ -162,5 +187,33 @@ def render_export_summary_markdown(payload: dict[str, Any]) -> str:
                 f"{tester} | {reviewer} | `{commit}` | {in_range} |"
             )
         lines.append("")
+
+        # Gate-MVP.2 (ADR 0041): its own subsection rather than another
+        # table column -- a list of removed names is unreadable inside a
+        # cell. Rendered only when something was actually removed: a
+        # heading that is always there and almost always empty teaches the
+        # reader to skip it. Not a rejection, by design (a refactor may
+        # remove names legitimately) -- this exists so the removal cannot
+        # stay invisible.
+        with_removals = [
+            item for item in delivered if item["removed_top_level_names"]
+        ]
+        if with_removals:
+            lines += [
+                "## Definiciones de nivel superior eliminadas",
+                "",
+                "Presentes en la versión base y ausentes del candidato "
+                "integrado. No implica que la entrega sea incorrecta: puede "
+                "ser un refactor legítimo. Se registra para que la "
+                "eliminación no quede invisible.",
+                "",
+            ]
+            for item in with_removals:
+                lines.append(f"- **{item['title'] or item['work_item_id']}**")
+                for file_path, names in sorted(
+                    item["removed_top_level_names"].items()
+                ):
+                    lines.append(f"  - `{file_path}`: {', '.join(sorted(names))}")
+            lines.append("")
 
     return "\n".join(lines) + "\n"

@@ -236,6 +236,40 @@ test("work item drawer's tester evidence never claims execution for a static-onl
   assert.equal(screen.queryByText(/código ejecutado/), null);
 });
 
+test("the drawer's tester evidence shows removed base definitions, only the non-empty ones", async () => {
+  const mock = createFetchMock();
+  globalThis.fetch = mock.fetch;
+  const item = buildWorkItem({
+    id: "item-removed",
+    title: "Tarea que borró tests",
+    status: "completed",
+  });
+  const testReport = buildTestReport({
+    work_item_id: "item-removed",
+    command_evidence: [
+      buildCommandEvidence({ check: "validation_profile", profile: "python_syntax" }),
+      buildCommandEvidence({
+        check: "removed_top_level_names",
+        path: "textkit/slug.py",
+        removed: [],
+      }),
+      buildCommandEvidence({
+        check: "removed_top_level_names",
+        path: "tests/test_slug.py",
+        removed: ["SlugifyTests", "SlugifyTests.test_strips_accents"],
+      }),
+    ],
+  });
+  await openProjectWith(mock, { work_items: [item], test_reports: [testReport] });
+
+  await userEvent.click(screen.getByRole("button", { name: /Tarea que borró tests/i }));
+  await screen.findByRole("heading", { name: "Tarea que borró tests" });
+
+  await screen.findByText("tests/test_slug.py");
+  await screen.findByText(/SlugifyTests, SlugifyTests\.test_strips_accents/);
+  assert.equal(screen.queryByText("textkit/slug.py"), null);
+});
+
 test("project view surfaces decisions and metrics P4.4's audit trail will read", async () => {
   const mock = createFetchMock();
   globalThis.fetch = mock.fetch;

@@ -2497,6 +2497,64 @@ textarea:focus-visible {
   margin: 5px 0 0;
 }
 
+/* Gate-MVP.2 (ADR 0041): each unverified item shows its own structured
+   reason -- "código no ejecutado" is expected for an imported project,
+   "sin review o informe técnico" is a data-integrity problem. */
+.delivery-report-unverified-list {
+  display: grid;
+  gap: 4px;
+  list-style: none;
+  margin: 6px 0 0;
+  padding: 0;
+}
+
+.delivery-report-unverified-list li {
+  align-items: baseline;
+  display: flex;
+  gap: 8px;
+}
+
+.delivery-report-unverified-list strong {
+  font-family: inherit;
+  font-size: 10px;
+}
+
+.delivery-report-unverified-list span {
+  color: var(--muted);
+  font-size: 9px;
+}
+
+/* Gate-MVP.2 (ADR 0041): base-vs-candidate removals, rendered only when
+   non-empty. Shared by DeliveryReportView and TaskDrawer. */
+.delivery-report-removed-names {
+  margin-top: 8px;
+}
+
+.delivery-report-removed-names ul {
+  display: grid;
+  gap: 4px;
+  list-style: none;
+  margin: 5px 0 0;
+  padding: 0;
+}
+
+.delivery-report-removed-names li {
+  align-items: baseline;
+  display: flex;
+  gap: 8px;
+}
+
+.delivery-report-removed-names code {
+  font-family: ui-monospace, "Cascadia Code", monospace;
+  font-size: 9px;
+  word-break: break-all;
+}
+
+.delivery-report-removed-names li > span {
+  color: var(--muted);
+  font-size: 9px;
+}
+
 .delivery-report-totals {
   display: flex;
   flex-wrap: wrap;

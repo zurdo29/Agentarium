@@ -108,18 +108,61 @@ fue renombrada, así que un walk de sólo `tree.body` habría visto que
 que sobrevive nunca se reporta, aunque su cuerpo haya sido reescrito por
 completo -- este mecanismo detecta eliminación, no cambios de
 comportamiento. Persistido como una entrada determinista por archivo `.py`
-entregado en `TestReport.command_evidence` (incluso vacía) y enviado como
-mapa completo `removed_top_level_names` en las dos rutas de
+entregado en `TestReport.command_evidence` (incluso vacía -- así el rastro
+de evidencia distingue "revisado, nada eliminado" de "nunca revisado") y
+enviado como mapa completo `removed_top_level_names` en las dos rutas de
 `_review_payload` (revisión inicial y focalizada por criterio). No es un
 gate automático: el prompt del reviewer exige que justifique explícitamente
 cualquier lista no vacía, pero un refactor legítimo puede seguir
 aprobándose.
+
+**Visible, no sólo persistido.** Persistir sin exponer habría repetido la
+misma clase de problema que la nota [^2] de `findings.md` ya corrigió sobre
+`unverified_completed_items`: un dato que no llega a los ojos de quien
+decide es, en la práctica, invisible. `export_summary.removed_top_level_names()`
+extrae las entradas por `check == "removed_top_level_names"` (no por la
+presencia de `path`, que `materialized_file_checksum` también trae), entra
+en `summary.json` por item entregado y se rinde en `summary.md` como
+subsección propia -- no una columna más de la tabla, donde una lista de
+nombres sería ilegible. `DeliveryReportView` y `TaskDrawer` la muestran en
+el detalle del tester. En los tres lugares se muestran **sólo las listas no
+vacías**: el caso normal es que no se eliminó nada, y una sección siempre
+presente y casi siempre vacía entrena a ignorarla.
+
+Por la misma razón, `OUTCOME_HINT.completed` ("Completada con evidencia
+verificada") dejó de aplicarse a ciegas: para un item `completed` con
+`verification_mode=static_only` -- el caso normal de un proyecto importado
+-- ese texto era exactamente el sobreclaim que este gate existe para
+evitar. Ahora pasa por `outcomeHint()`, que devuelve "Completada con
+verificación estática; el código no se ejecutó". Y la advertencia de
+`unverified_completed_items` muestra el `reason` de cada item en vez de
+unir títulos: `static_only_verification` -> "código no ejecutado" (estado
+honesto y esperado de un proyecto importado) frente a
+`missing_review_or_test_report` -> "sin review o informe técnico" (problema
+real de integridad de datos). Dos hechos estructuralmente distintos que no
+deben leerse igual.
 
 `WORKSPACE_PROMPT_VERSION` sólo aplica a `operation=="work"`
 (`llm/prompts.py`); review/test usaban un literal `"artifact-v1"` fijo.
 Corrección sobre el diseño inicial: se extrajo ese literal a
 `ARTIFACT_PROMPT_VERSION = "artifact-v2"` y se bumpeó esa constante, no
 `WORKSPACE_PROMPT_VERSION` (que nunca se habría aplicado a este cambio).
+
+**Congelamiento en el benchmark.** Bumpear la constante no alcanzaba:
+`prompt_versions()` (`benchmarks/runner.py`) sólo declaraba
+`planning`/`workspace`/`decompose`/`plan_revision`, así que el prompt de
+tester/reviewer era el único que una corrida usaba sin declarar -- un
+cambio de su contrato no producía `SuiteDrift` y dos baselines
+incomparables podían mezclarse en un mismo informe. `ARTIFACT_PROMPT_VERSION`
+se exporta desde `agentarium.llm` y entra como clave `"artifact"`.
+Consecuencia real, declarada y no maquillada: `assert_comparable` compara
+la unión de ambos conjuntos de claves, así que **todo registro de ledger
+anterior a esta decisión ahora produce drift** (la clave está ausente, no
+sólo distinta). Es exactamente la semántica buscada -- esas corridas
+usaron otro contrato de reviewer -- y es inocuo para la evidencia
+versionada: los ledgers locales viven bajo `runtime/`, gitignorado, y los
+snapshots de `benchmarks/results/` son inmutables y nadie los vuelve a
+appendear. PLANS.md ya exigía suite nueva para una matriz nueva.
 
 ## Hallazgos durante la implementación
 
@@ -196,11 +239,30 @@ nuevo): reconstrucción byte a byte del incidente real vía
 presentes en cada payload del reviewer que efectivamente se disparó; más
 un control negativo (mismo flujo sin el bug, nada dispara) y un caso no
 importado que ejecuta y falla (`executed`, no `static_only` -- prueba
-directa de que el modo no depende de `passed`). Delivery/export/UI:
-`test_delivery_report.py` (item `completed` `static_only` entra en
-`unverified_completed_items` con su razón), `test_export_summary.py`
-(archivo nuevo: las 3 ramas de texto del markdown), `test_export_project_service.py`,
+directa de que el modo no depende de `passed`), y el cruce de que la misma
+evidencia persistida es la que el export puede leer, sin volver a derivar
+el diff.
+
+Benchmark: `test_benchmarks.py` cubre las dos formas del drift de
+`artifact` -- versión distinta y clave **ausente** (la forma real de todo
+registro anterior a esta decisión, que `assert_comparable` detecta porque
+compara la unión de claves); `test_benchmark_identity.py` fija el conjunto
+exacto de prompts que una corrida declara, para que un prompt que la suite
+ejercita no vuelva a quedar sin declarar.
+
+Delivery/export/UI: `test_delivery_report.py` (item `completed`
+`static_only` entra en `unverified_completed_items` con su razón),
+`test_export_summary.py` (las 3 ramas de texto del tester, la extracción
+que ignora `materialized_file_checksum` aunque también traiga `path`, y el
+markdown que renderiza la subsección con archivo y nombres pero **no** la
+renderiza cuando nada se eliminó), `test_export_project_service.py`,
 `tests/home-delivery-report.test.mjs` y `tests/home-work-items.test.mjs`
-(la tercera cláusula visible en ambos componentes). `test_type_contract.py`
-confirma que no hay drift backend↔TypeScript. `ruff`, `mypy` y
-`.\test.ps1` completos en verde.
+(la tercera cláusula visible en ambos componentes; los borrados visibles
+con archivo y nombres, con el archivo de lista vacía ausente; el bloque
+entero ausente cuando no se eliminó nada; cada razón de
+`unverified_completed_items` con su texto propio; y que el hint del outcome
+no diga "evidencia verificada" para un item `static_only`).
+`test_type_contract.py` confirma que no hay drift backend↔TypeScript --
+los dos campos nuevos de `command_evidence` (`path?`, `removed?`) son
+opcionales, que es lo que ese gate exige para un campo TS que no toda
+respuesta real trae. `ruff`, `mypy` y `.\test.ps1` completos en verde.

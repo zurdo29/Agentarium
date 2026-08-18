@@ -183,6 +183,8 @@ export type DeliveryReportWorkItem = {
     timed_out?: boolean;
     passed?: boolean;
     verified?: boolean;
+    path?: string;
+    removed?: string[];
   }>;
   integration_commit: string | null;
   integration_branch: string | null;
@@ -305,6 +307,8 @@ export type ProjectDetail = {
       timed_out?: boolean;
       passed?: boolean;
       verified?: boolean;
+      path?: string;
+      removed?: string[];
     }>;
   }>;
   decisions: Array<{

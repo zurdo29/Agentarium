@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from agentarium.llm import (
+    ARTIFACT_PROMPT_VERSION,
     DECOMPOSE_PROMPT_VERSION,
     PLAN_REVISION_PROMPT_VERSION,
     PLANNING_PROMPT_VERSION,
@@ -74,11 +75,21 @@ def plan_matrix(
 
 
 def prompt_versions() -> dict[str, str]:
+    # Gate-MVP.2 (ADR 0041): "artifact" covers the tester/reviewer prompt
+    # (ARTIFACT_PROMPT_VERSION), which was previously the only prompt not
+    # frozen here -- a change to the reviewer's contract produced no
+    # SuiteDrift, so two incomparable baselines could be mixed into one
+    # report. Adding the key makes every pre-existing ledger record drift,
+    # which is exactly the intended semantics: those runs used a different
+    # reviewer contract. Historical evidence is unaffected -- the local
+    # ledgers live under the gitignored `runtime/`, and the versioned
+    # snapshots in `benchmarks/results/` are never appended to again.
     return {
         "planning": PLANNING_PROMPT_VERSION,
         "workspace": WORKSPACE_PROMPT_VERSION,
         "decompose": DECOMPOSE_PROMPT_VERSION,
         "plan_revision": PLAN_REVISION_PROMPT_VERSION,
+        "artifact": ARTIFACT_PROMPT_VERSION,
     }
 
 

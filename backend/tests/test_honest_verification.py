@@ -8,6 +8,9 @@ from agentarium.isolation import WorktreeSession
 from agentarium.llm import ModelRequest
 from agentarium.llm.mock import MockProvider
 from agentarium.services import ApplicationService
+from agentarium.services.export_summary import (
+    removed_top_level_names as export_removed_top_level_names,
+)
 
 # Gate-MVP.2 (ADR 0041): direct regression for the textkit-slugify incident
 # (Gate pre-MVP evidence run, PR #27) -- a work item on an imported project
@@ -219,6 +222,18 @@ async def test_incident_candidate_fails_undefined_names_and_is_marked_static_onl
 
     reloaded = service.repository.get_work_item(item.id)
     assert reloaded.status is not WorkItemStatus.COMPLETED
+
+    # Persisted is not the same as visible: the export summary must be able
+    # to surface the same removals without re-deriving the diff. Called
+    # directly on the real TestReport rather than through export_project(),
+    # which needs an integrated commit this rejected candidate never got.
+    assert export_removed_top_level_names(report) == {
+        "tests/test_slug.py": [
+            "SlugifyTests",
+            "SlugifyTests.test_basic_lowercase",
+            "SlugifyTests.test_strips_accents",
+        ]
+    }
 
     # Whatever review round(s) actually happened, each one carried the
     # real removed-names map -- never silently dropped for a focused

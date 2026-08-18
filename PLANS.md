@@ -609,17 +609,28 @@ que intenta ignorar `F821` dentro del propio árbol validado. Ruff pasa a
 (funciones/clases de nivel de módulo y métodos directos de esas clases,
 como `"Clase.metodo"`) y persisten una entrada determinista por archivo en
 `TestReport.command_evidence`, enviada en las dos rutas de
-`_review_payload`; nunca un auto-reject. `ARTIFACT_PROMPT_VERSION` nuevo
-(no `WORKSPACE_PROMPT_VERSION`, que sólo aplica a `operation=="work"`)
-bumpeado por el cambio de payload del reviewer. Un bug real de la propia
-política de seguridad se encontró durante la verificación, no por
-inspección: `--output-format=concise` matcheaba el deny-token `format`
-(`-`/`=` cuentan como frontera de palabra) y `PYTHON_UNDEFINED_NAMES`
-habría fallado siempre, para cualquier `.py`, por `CommandRejected` --
-corregido quitando esa flag, sin tocar la política de seguridad. Verificado
-con `test_validation_profiles.py`, `test_safe_commands.py`,
-`test_schema_migration.py`, `test_git_worktree_isolation.py`,
-`test_evaluation_contracts.py`, `test_export_summary.py` (nuevo),
+`_review_payload`; nunca un auto-reject, y expuesto de verdad (no sólo
+persistido) en `summary.json`/`summary.md` y en el detalle del tester de
+`DeliveryReportView`/`TaskDrawer`, mostrando únicamente las listas no
+vacías. `ARTIFACT_PROMPT_VERSION` nuevo (no `WORKSPACE_PROMPT_VERSION`, que
+sólo aplica a `operation=="work"`) bumpeado por el cambio de payload del
+reviewer, y **congelado por el benchmark**: `prompt_versions()` no lo
+declaraba, así que un cambio del contrato del reviewer no producía
+`SuiteDrift` -- consecuencia declarada, todo ledger anterior ahora produce
+drift, que es la semántica buscada y no afecta la evidencia versionada.
+La advertencia de `unverified_completed_items` muestra la razón de cada
+item ("código no ejecutado" vs. "sin review o informe técnico") y el hint
+del outcome dejó de decir "evidencia verificada" para un item
+`static_only`. Un bug real de la propia política de seguridad se encontró
+durante la verificación, no por inspección: `--output-format=concise`
+matcheaba el deny-token `format` (`-`/`=` cuentan como frontera de palabra)
+y `PYTHON_UNDEFINED_NAMES` habría fallado siempre, para cualquier `.py`,
+por `CommandRejected` -- corregido quitando esa flag, sin tocar la política
+de seguridad. Verificado con `test_validation_profiles.py`,
+`test_safe_commands.py`, `test_schema_migration.py`,
+`test_git_worktree_isolation.py`, `test_evaluation_contracts.py`,
+`test_benchmarks.py`/`test_benchmark_identity.py` (drift de `artifact` con
+versión distinta y con clave ausente), `test_export_summary.py` (nuevo),
 `tests/home-delivery-report.test.mjs`/`home-work-items.test.mjs`, y
 `test_honest_verification.py` (nuevo): reconstrucción byte a byte del
 incidente real vía `evaluate_operator_candidate` contra un proyecto
@@ -682,13 +693,13 @@ Después de Gate-MVP.3 se toma una decisión explícita:
 
 **Bloqueado explícitamente (15 de agosto de 2026):** el candidato MVP
 corrido no fue aprobado (`candidate_passed=false`, ver "Gate pre-MVP —
-medición realizada, candidato no aprobado" arriba). Sí se observaron dos
-limitaciones reales (colisión de ownership por escritura fuera de scope;
-verificación que no distingue estático de ejecutado), pero ambas
-pertenecen al núcleo/Gate-MVP. Los hallazgos observados pertenecen al Gate
-pre-MVP y no justifican promover ningún elemento de extensibilidad de la
-lista de abajo -- primero cierran Gate-MVP.2, Gate-MVP.3 y la decisión de
-alpha posterior.
+medición realizada, candidato no aprobado" arriba). Las dos limitaciones
+reales que esa medición observó (colisión de ownership por escritura fuera
+de scope; verificación que no distingue estático de ejecutado) pertenecían
+al núcleo/Gate-MVP y **ya están cerradas** -- Gate-MVP.1 (ADR 0040) y
+Gate-MVP.2 (ADR 0041) respectivamente. Ninguna de las dos justificó
+promover un elemento de extensibilidad de la lista de abajo, y eso no
+cambia: antes de P5 falta Gate-MVP.3 y la decisión de alpha posterior.
 
 Fuera del camino crítico actual:
 

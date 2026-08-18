@@ -2,7 +2,12 @@ from __future__ import annotations
 
 from typing import Any
 
-from agentarium.services.export_summary import render_export_summary_markdown
+from agentarium.domain.enums import VerificationMode
+from agentarium.domain.models import TestReport
+from agentarium.services.export_summary import (
+    removed_top_level_names,
+    render_export_summary_markdown,
+)
 
 # Gate-MVP.2 (ADR 0041): export_summary.py has no dedicated test file yet
 # (only exercised indirectly via test_export_project_service.py's real
@@ -53,12 +58,27 @@ def _delivered(**overrides: Any) -> dict[str, Any]:
         "in_exported_range": True,
         "tester_passed": True,
         "tester_verification_mode": "executed",
+        "removed_top_level_names": {},
         "tester_summary": "Resultado",
         "review_verdict": "approved",
         "review_acceptance_results": {},
     }
     base.update(overrides)
     return base
+
+
+def _test_report(command_evidence: list[dict[str, Any]]) -> TestReport:
+    return TestReport(
+        project_id="p1",
+        work_item_id="item-1",
+        artifact_id="a1",
+        tester_run_id="run-1",
+        passed=True,
+        verification_mode=VerificationMode.STATIC_ONLY,
+        checks=[],
+        command_evidence=command_evidence,
+        summary="Resultado",
+    )
 
 
 def test_static_only_evidence_never_reads_as_executed_ok() -> None:
@@ -86,3 +106,76 @@ def test_executed_and_failing_reads_as_executed_falla_not_static() -> None:
 
     assert "ejecutada: falla" in markdown
     assert "sólo estática" not in markdown
+
+
+# -- removed_top_level_names (Gate-MVP.2, ADR 0041) ---------------------------
+# The Orchestrator persists one entry per delivered .py file, empty ones
+# included, so the evidence trail distinguishes "checked, nothing removed"
+# from "never checked". Only the non-empty ones reach export/UI.
+
+
+def test_removed_top_level_names_extracts_only_the_non_empty_lists() -> None:
+    report = _test_report(
+        [
+            {"check": "materialized_file_checksum", "path": "x.json", "verified": True},
+            {"check": "removed_top_level_names", "path": "textkit/slug.py", "removed": []},
+            {
+                "check": "removed_top_level_names",
+                "path": "tests/test_slug.py",
+                "removed": ["SlugifyTests", "SlugifyTests.test_strips_accents"],
+            },
+        ]
+    )
+
+    assert removed_top_level_names(report) == {
+        "tests/test_slug.py": ["SlugifyTests", "SlugifyTests.test_strips_accents"]
+    }
+
+
+def test_removed_top_level_names_is_empty_without_a_test_report() -> None:
+    assert removed_top_level_names(None) == {}
+
+
+def test_removed_top_level_names_ignores_unrelated_evidence_kinds() -> None:
+    """`path` is not exclusive to this check -- materialized_file_checksum
+    carries one too, so keying off `check` (not the presence of `path`) is
+    what keeps an unrelated entry out."""
+    report = _test_report(
+        [
+            {"check": "materialized_file_checksum", "path": "x.json", "verified": True},
+            {"check": "validation_profile", "profile": "python_syntax", "passed": True},
+        ]
+    )
+
+    assert removed_top_level_names(report) == {}
+
+
+def test_markdown_renders_removed_names_with_file_and_names() -> None:
+    markdown = render_export_summary_markdown(
+        _payload(
+            [
+                _delivered(
+                    removed_top_level_names={
+                        "tests/test_slug.py": [
+                            "SlugifyTests",
+                            "SlugifyTests.test_basic_lowercase",
+                        ]
+                    }
+                )
+            ]
+        )
+    )
+
+    assert "Definiciones de nivel superior eliminadas" in markdown
+    assert "tests/test_slug.py" in markdown
+    assert "SlugifyTests.test_basic_lowercase" in markdown
+
+
+def test_markdown_omits_the_removed_names_section_when_nothing_was_removed() -> None:
+    """A heading that is always present and almost always empty trains the
+    reader to skip it -- the normal case must render nothing at all."""
+    markdown = render_export_summary_markdown(
+        _payload([_delivered(removed_top_level_names={})])
+    )
+
+    assert "Definiciones de nivel superior eliminadas" not in markdown

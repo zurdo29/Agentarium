@@ -697,6 +697,56 @@ def test_a_prompt_version_change_refuses_to_reuse_the_suite(
         runner.pending(plan_matrix([_case()], [ModelTarget.parse("mock")], 1))
 
 
+def test_the_artifact_prompt_version_is_frozen_by_the_suite(
+    service: ApplicationService,
+    tmp_path: Path,
+) -> None:
+    """Gate-MVP.2 (ADR 0041): the tester/reviewer prompt was the only one
+    `prompt_versions()` did not freeze, so changing the reviewer's contract
+    produced no SuiteDrift and two incomparable baselines could be mixed
+    into one report. A record whose `artifact` differs must now drift."""
+    from agentarium.benchmarks import SuiteDrift, prompt_versions
+
+    ledger = BenchmarkLedger(tmp_path / "ledger.jsonl")
+    ledger.append(
+        _record(
+            "demo",
+            1,
+            prompt_versions={**prompt_versions(), "artifact": "artifact-v1"},
+        )
+    )
+    runner = _runner(service, ledger)
+
+    with pytest.raises(SuiteDrift, match="artifact"):
+        runner.pending(plan_matrix([_case()], [ModelTarget.parse("mock")], 1))
+
+
+def test_a_ledger_predating_the_artifact_prompt_version_is_not_comparable(
+    service: ApplicationService,
+    tmp_path: Path,
+) -> None:
+    """The real shape of every record written before ADR 0041: the key is
+    absent entirely, not merely different. `assert_comparable` compares the
+    union of both key sets, so an old ledger must drift too -- otherwise a
+    resumed suite would silently mix runs made under a reviewer contract
+    that no longer exists."""
+    from agentarium.benchmarks import SuiteDrift, prompt_versions
+
+    legacy_versions = {
+        name: version
+        for name, version in prompt_versions().items()
+        if name != "artifact"
+    }
+    assert "artifact" not in legacy_versions
+
+    ledger = BenchmarkLedger(tmp_path / "ledger.jsonl")
+    ledger.append(_record("demo", 1, prompt_versions=legacy_versions))
+    runner = _runner(service, ledger)
+
+    with pytest.raises(SuiteDrift, match="artifact"):
+        runner.pending(plan_matrix([_case()], [ModelTarget.parse("mock")], 1))
+
+
 def test_an_unchanged_suite_is_comparable(
     service: ApplicationService,
     tmp_path: Path,
