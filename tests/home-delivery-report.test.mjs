@@ -211,6 +211,50 @@ test("a static-only verified item never reads as if its code had run", async () 
   mock.assertAllMatched();
 });
 
+test("a completed item with no test report at all never claims verified evidence", async () => {
+  const mock = createFetchMock();
+  globalThis.fetch = mock.fetch;
+  const project = buildProject({ id: "noreport-project", title: "Proyecto sin informe" });
+  mockBackgroundRefresh(mock, buildDashboard({ projects: [project] }));
+  await renderHome();
+
+  mock.on("GET", "/api/projects/noreport-project", buildProjectDetail({ project }));
+  mock.on("GET", "/api/projects/noreport-project/events", []);
+  await userEvent.click(screen.getByRole("button", { name: /Proyecto sin informe/i }));
+  await screen.findByRole("heading", { name: "Proyecto sin informe" });
+
+  // Third state: no TestReport at all. Distinct from both "executed" and
+  // "static_only" -- absence of evidence must not borrow either wording.
+  const completedItem = buildDeliveryReportWorkItem({
+    work_item_id: "item-noreport",
+    title: "Tarea completada sin informe",
+    outcome: "completed",
+    test_passed: null,
+    test_verification_mode: null,
+    test_summary: null,
+    test_checks: [],
+    test_command_evidence: [],
+  });
+  mock.on(
+    "GET",
+    "/api/projects/noreport-project/report",
+    buildDeliveryReport({
+      project: { id: "noreport-project", title: "Proyecto sin informe", goal: project.goal },
+      work_items: [completedItem],
+      totals: { completed: 1 },
+    }),
+  );
+
+  await userEvent.click(screen.getByRole("button", { name: /Generar informe/i }));
+  await screen.findByText("Tarea completada sin informe");
+  await userEvent.click(screen.getByRole("button", { name: /Tarea completada sin informe/i }));
+
+  await screen.findByText(/Completada sin informe técnico disponible/i);
+  assert.equal(screen.queryByText(/Completada con evidencia verificada/i), null);
+  assert.equal(screen.queryByText(/verificación estática/i), null);
+  mock.assertAllMatched();
+});
+
 test("removed base definitions are shown with file and names, not just persisted", async () => {
   const mock = createFetchMock();
   globalThis.fetch = mock.fetch;

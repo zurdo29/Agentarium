@@ -108,6 +108,22 @@ def test_executed_and_failing_reads_as_executed_falla_not_static() -> None:
     assert "sólo estática" not in markdown
 
 
+def test_a_delivered_item_without_a_test_report_reads_as_missing_not_failed() -> None:
+    """Third state, not a variant of the other two: mode `None` means no
+    TestReport exists at all. `tester_passed` is `None` too, which is
+    falsey -- so the old two-branch logic reported "ejecutada: falla",
+    inventing an execution that never happened. That is the mirror image of
+    the overclaim this gate exists to prevent, and just as wrong."""
+    markdown = render_export_summary_markdown(
+        _payload([_delivered(tester_passed=None, tester_verification_mode=None)])
+    )
+
+    assert "sin informe técnico" in markdown
+    assert "ejecutada: falla" not in markdown
+    assert "ejecutada: ok" not in markdown
+    assert "sólo estática" not in markdown
+
+
 # -- removed_top_level_names (Gate-MVP.2, ADR 0041) ---------------------------
 # The Orchestrator persists one entry per delivered .py file, empty ones
 # included, so the evidence trail distinguishes "checked, nothing removed"

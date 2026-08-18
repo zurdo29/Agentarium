@@ -172,8 +172,14 @@ def render_export_summary_markdown(payload: dict[str, Any]) -> str:
         for item in delivered:
             # Gate-MVP.2 (ADR 0041): never render "ok" as if it proved the
             # code runs -- a static_only tester result says so explicitly,
-            # independent of tester_passed.
-            if item["tester_verification_mode"] == "static_only":
+            # independent of tester_passed. Three states, not two: a mode of
+            # None means there is no TestReport at all, which is absence of
+            # evidence -- reading it as "ejecutada: falla" would invent an
+            # execution that never happened, the mirror image of the
+            # overclaim this gate exists to prevent.
+            if item["tester_verification_mode"] is None:
+                tester = "sin informe técnico"
+            elif item["tester_verification_mode"] == "static_only":
                 tester = "sólo estática"
             elif item["tester_passed"]:
                 tester = "ejecutada: ok"

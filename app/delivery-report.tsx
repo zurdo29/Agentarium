@@ -21,11 +21,20 @@ const OUTCOME_HINT: Record<DeliveryReportOutcome, string> = {
 // Gate-MVP.2 (ADR 0041): "evidencia verificada" is exactly the overclaim
 // this gate exists to prevent when nothing was ever executed -- the normal
 // case for an imported project. The outcome alone cannot carry that claim.
+// Three states, not two: `null` (no TestReport at all) is a third,
+// distinct fact -- absence of evidence, which must never borrow the
+// wording of either verified execution or a real static check.
 function outcomeHint(item: DeliveryReportWorkItem): string {
-  if (item.outcome === "completed" && item.test_verification_mode === "static_only") {
+  if (item.outcome !== "completed") {
+    return OUTCOME_HINT[item.outcome];
+  }
+  if (item.test_verification_mode === "static_only") {
     return "Completada con verificación estática; el código no se ejecutó.";
   }
-  return OUTCOME_HINT[item.outcome];
+  if (item.test_verification_mode === null) {
+    return "Completada sin informe técnico disponible.";
+  }
+  return OUTCOME_HINT.completed;
 }
 
 // Why an item counted as completed still has no usable verification --
