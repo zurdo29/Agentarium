@@ -2,6 +2,7 @@
 
 from .base import LLMProvider, ModelRequest, ProviderDiagnostic, ProviderResponse
 from .prompts import (
+    ARTIFACT_PROMPT_VERSION,
     DECOMPOSE_PROMPT_VERSION,
     PLAN_REVISION_PROMPT_VERSION,
     PLANNING_PROMPT_VERSION,
@@ -14,6 +15,7 @@ from .selection import ProviderSelection, ProviderSelectionStore
 __all__ = [
     "LLMProvider",
     "ModelRequest",
+    "ARTIFACT_PROMPT_VERSION",
     "DECOMPOSE_PROMPT_VERSION",
     "PLAN_REVISION_PROMPT_VERSION",
     "PLANNING_PROMPT_VERSION",

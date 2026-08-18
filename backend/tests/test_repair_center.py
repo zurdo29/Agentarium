@@ -6,7 +6,13 @@ from pathlib import Path
 
 import pytest
 from agentarium.api.app import create_app
-from agentarium.domain.enums import AgentRole, ReviewVerdict, RunOutcome, WorkItemStatus
+from agentarium.domain.enums import (
+    AgentRole,
+    ReviewVerdict,
+    RunOutcome,
+    VerificationMode,
+    WorkItemStatus,
+)
 from agentarium.domain.models import (
     AgentRun,
     Artifact,
@@ -296,6 +302,7 @@ def test_repair_center_surfaces_latest_review_and_test_evidence(
             artifact_id=artifact.id,
             tester_run_id=run.id,
             passed=False,
+            verification_mode=VerificationMode.STATIC_ONLY,
             checks=[],
             summary="Dos pruebas fallaron",
         )

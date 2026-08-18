@@ -153,6 +153,22 @@ def test_the_identity_is_part_of_the_serialized_record(tmp_path: Path) -> None:
     assert raw["model_digest"] == "sha256:aaaa"
 
 
+def test_every_prompt_a_run_actually_uses_is_frozen_in_the_record() -> None:
+    """Gate-MVP.2 (ADR 0041): `artifact` (the tester/reviewer prompt) was
+    missing here, so a real run recorded four of the five prompt versions
+    it actually used. A prompt this suite exercises but does not declare
+    cannot be detected as drift later -- see
+    test_benchmarks.py::test_the_artifact_prompt_version_is_frozen_by_the_suite
+    for the drift behavior itself."""
+    assert set(prompt_versions()) == {
+        "planning",
+        "workspace",
+        "decompose",
+        "plan_revision",
+        "artifact",
+    }
+
+
 # --- drift ------------------------------------------------------------------
 
 

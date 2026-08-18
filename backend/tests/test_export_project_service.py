@@ -66,6 +66,10 @@ async def test_export_project_summary_matches_real_database_state(
     for entry in payload["delivered_work_items"]:
         assert entry["status"] == "completed"
         assert entry["tester_passed"] is True
+        # Gate-MVP.2 (ADR 0041): whichever mode a real run actually
+        # produced, it must survive the export payload as a real value,
+        # never silently dropped.
+        assert entry["tester_verification_mode"] in {"static_only", "executed"}
         assert entry["review_verdict"] is not None
         assert entry["in_exported_range"] is True
 

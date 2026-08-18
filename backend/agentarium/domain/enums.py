@@ -69,3 +69,13 @@ class OutputStrategy(StrEnum):
     FRAGMENT = "fragment"
     PATCH = "patch"
     CONSOLIDATION = "consolidation"
+
+
+class VerificationMode(StrEnum):
+    """Gate-MVP.2 (ADR 0041): whether a TestReport's evidence came from a
+    real SCRIPT_EXECUTION invocation, independent of whether it passed.
+    A process that started and exited non-zero, or timed out, is still
+    EXECUTED -- STATIC_ONLY means the process never started at all."""
+
+    STATIC_ONLY = "static_only"
+    EXECUTED = "executed"

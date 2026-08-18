@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, cast
 
-from agentarium.domain.enums import ReviewVerdict
+from agentarium.domain.enums import ReviewVerdict, VerificationMode
 from agentarium.domain.models import Artifact, Review, WorkItem
 from agentarium.domain.models import TestReport as ReportModel
 from agentarium.execution.capabilities import RuntimeCapabilityManifest
@@ -134,6 +134,7 @@ def test_operational_context_uses_only_approved_dependencies_and_retry_feedback(
         artifact_id="previous-attempt",
         tester_run_id="tester",
         passed=False,
+        verification_mode=VerificationMode.STATIC_ONLY,
         checks=[],
         command_evidence=[
             {

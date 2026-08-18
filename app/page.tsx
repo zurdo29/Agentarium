@@ -170,6 +170,7 @@ export type DeliveryReportWorkItem = {
   review_reasons: string[];
   review_acceptance_results: Record<string, boolean>;
   test_passed: boolean | null;
+  test_verification_mode: "static_only" | "executed" | null;
   test_summary: string | null;
   test_checks: Array<{ name: string; passed: boolean; evidence: string }>;
   test_command_evidence: Array<{
@@ -182,6 +183,8 @@ export type DeliveryReportWorkItem = {
     timed_out?: boolean;
     passed?: boolean;
     verified?: boolean;
+    path?: string;
+    removed?: string[];
   }>;
   integration_commit: string | null;
   integration_branch: string | null;
@@ -198,7 +201,11 @@ export type DeliveryReport = {
     brief: Brief | null;
   };
   work_items: DeliveryReportWorkItem[];
-  unverified_completed_items: Array<{ work_item_id: string; title: string }>;
+  unverified_completed_items: Array<{
+    work_item_id: string;
+    title: string;
+    reason: "missing_review_or_test_report" | "static_only_verification";
+  }>;
   totals: Record<string, number>;
 };
 
@@ -287,6 +294,7 @@ export type ProjectDetail = {
     id: string;
     work_item_id: string;
     passed: boolean;
+    verification_mode: "static_only" | "executed";
     summary: string;
     checks: Array<{ name: string; passed: boolean; evidence: string }>;
     command_evidence?: Array<{
@@ -299,6 +307,8 @@ export type ProjectDetail = {
       timed_out?: boolean;
       passed?: boolean;
       verified?: boolean;
+      path?: string;
+      removed?: string[];
     }>;
   }>;
   decisions: Array<{
@@ -499,6 +509,7 @@ const SAMPLE_DETAIL: ProjectDetail = {
       id: "test-1",
       work_item_id: "task-build",
       passed: true,
+      verification_mode: "static_only",
       summary: "Comprobaciones automáticas superadas.",
       checks: [
         {

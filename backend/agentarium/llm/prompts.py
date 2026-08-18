@@ -20,6 +20,13 @@ PLANNING_PROMPT_VERSION = "planning-v4"
 WORKSPACE_PROMPT_VERSION = "workspace-v11"
 DECOMPOSE_PROMPT_VERSION = "decompose-v3"
 PLAN_REVISION_PROMPT_VERSION = "plan-revision-v3"
+# Gate-MVP.2 (ADR 0041): covers "test" and "review" both, same grouping the
+# code already had as a bare "artifact-v1" literal -- v1 -> v2 because the
+# review payload gained a required removed_top_level_names field. Named and
+# bumped instead of WORKSPACE_PROMPT_VERSION, which render_prompt() only
+# ever applies to operation=="work" (see the ternary below); it never
+# reaches test/review, so bumping it would not have versioned this change.
+ARTIFACT_PROMPT_VERSION = "artifact-v2"
 
 _OPERATION_CONTRACTS: dict[str, type[BaseModel]] = {
     "brief": BriefProposal,
@@ -178,7 +185,13 @@ _OPERATION_INSTRUCTIONS = {
         "en una dependencia aprobada. "
         "acceptance_results debe contener exacta y únicamente las claves recibidas en "
         "acceptance_criteria, sin agregar checks técnicos. No exijas entregables fuera "
-        "del alcance de la tarea actual."
+        "del alcance de la tarea actual. "
+        "removed_top_level_names mapea cada archivo Python entregado a los nombres de "
+        "nivel superior (funciones, clases, métodos) que existían en la versión base y "
+        "ya no están en el candidato. Si algún archivo tiene una lista no vacía, "
+        "menciónalo explícitamente en tus reasons y justifica si la eliminación es un "
+        "refactor legítimo o una regresión encubierta -- no es un rechazo automático, "
+        "pero ignorarlo en silencio no es aceptable."
     ),
     "decompose": (
         "SOLICITUD.payload.task agotó sus intentos sin producir una entrega "
@@ -215,7 +228,7 @@ def render_prompt(request: ModelRequest, agent: AgentDefinition) -> str:
         if request.operation == "decompose"
         else PLAN_REVISION_PROMPT_VERSION
         if request.operation == "plan_revision"
-        else "artifact-v1"
+        else ARTIFACT_PROMPT_VERSION
     )
     instruction = _OPERATION_INSTRUCTIONS.get(
         request.operation,

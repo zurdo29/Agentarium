@@ -399,6 +399,7 @@ async def test_fixed_profiles_capture_command_evidence(tmp_path: Path) -> None:
     assert {result.profile for result in results} == {
         ValidationProfile.WORKSPACE_INVENTORY,
         ValidationProfile.PYTHON_SYNTAX,
+        ValidationProfile.PYTHON_UNDEFINED_NAMES,
         ValidationProfile.IMPORT_PREFLIGHT,
         ValidationProfile.JSON_SYNTAX,
         ValidationProfile.JAVASCRIPT_SYNTAX,
@@ -1366,6 +1367,7 @@ async def test_script_execution_fails_when_python_claimed_without_source(
 
     assert not script_result.passed
     assert "no incluye" in script_result.result.stderr
+    assert not script_result.result.started
 
 
 @pytest.mark.asyncio
@@ -1402,6 +1404,7 @@ async def test_script_execution_runs_a_working_python_tool(tmp_path: Path) -> No
 
     assert script_result.passed
     assert script_result.result.return_code == 0
+    assert script_result.result.started
 
 
 @pytest.mark.asyncio
@@ -1436,6 +1439,9 @@ async def test_script_execution_fails_when_script_crashes(tmp_path: Path) -> Non
     assert not script_result.passed
     assert script_result.result.return_code != 0
     assert "RuntimeError" in script_result.result.stderr
+    # Gate-MVP.2 (ADR 0041): a real crash is still real evidence -- started
+    # tracks "did a process launch", never "did it succeed".
+    assert script_result.result.started
 
 
 @pytest.mark.asyncio
@@ -1643,6 +1649,9 @@ async def test_script_execution_contract_fails_when_entrypoint_is_missing(
     assert not script_results[0].passed
     assert "tool.py" in script_results[0].result.stderr
     assert "no lo incluye" in script_results[0].result.stderr
+    # Gate-MVP.2 (ADR 0041): a declared entrypoint the delivery doesn't
+    # include never launches a process.
+    assert not script_results[0].result.started
 
 
 @pytest.mark.asyncio
@@ -1916,6 +1925,9 @@ async def test_authority_gate_blocks_blind_script_execution_without_running_it(
     assert script_result.as_evidence()["blocked_by_authority"] is True
     # The real proof, not just the structured flag: the script never ran.
     assert list(workspace_root.rglob("output.txt")) == []
+    # Gate-MVP.2 (ADR 0041): blocked-by-authority must never read as
+    # executed evidence.
+    assert not script_result.result.started
 
 
 @pytest.mark.asyncio
@@ -1999,3 +2011,199 @@ async def test_authority_gate_reports_authority_not_missing_file(
     assert script_result.blocked_by_authority
     assert not script_result.passed
     assert "no incluye" not in script_result.result.stderr
+
+
+# Gate-MVP.2 (ADR 0041): PYTHON_UNDEFINED_NAMES -- the incident this gate
+# closes was a NameError (`re.sub` used without `import re`) that no
+# existing non-executing profile could ever have caught: compile() never
+# resolves names, and IMPORT_PREFLIGHT only checks imports that ARE
+# present, never names used without any import at all.
+
+
+@pytest.mark.asyncio
+async def test_python_undefined_names_rejects_a_real_name_error(tmp_path: Path) -> None:
+    workspace_root = tmp_path / "workspaces"
+    materializer = WorkspaceMaterializer(workspace_root, _policy_path())
+    validator = ValidationProfileExecutor(workspace_root, _policy_path())
+    files = materializer.materialize(
+        "project",
+        "task",
+        1,
+        [
+            WorkspaceFileProposal(
+                path="slug.py",
+                content=(
+                    "def slugify(value: str) -> str:\n"
+                    "    return re.sub(r'[^a-z0-9]+', '-', value.lower())\n"
+                ),
+                purpose="Funcion que usa 're' sin importarlo",
+            ),
+        ],
+    )
+
+    results = await validator.validate("project", files)
+    undefined_names = next(
+        result
+        for result in results
+        if result.profile is ValidationProfile.PYTHON_UNDEFINED_NAMES
+    )
+
+    assert not undefined_names.passed
+    assert undefined_names.result.return_code != 0
+    assert "re" in undefined_names.result.stdout + undefined_names.result.stderr
+    assert undefined_names.result.started
+
+
+@pytest.mark.asyncio
+async def test_python_undefined_names_passes_correct_source(tmp_path: Path) -> None:
+    workspace_root = tmp_path / "workspaces"
+    materializer = WorkspaceMaterializer(workspace_root, _policy_path())
+    validator = ValidationProfileExecutor(workspace_root, _policy_path())
+    files = materializer.materialize(
+        "project",
+        "task",
+        1,
+        [
+            WorkspaceFileProposal(
+                path="slug.py",
+                content=(
+                    "import re\n\n"
+                    "def slugify(value: str) -> str:\n"
+                    "    return re.sub(r'[^a-z0-9]+', '-', value.lower())\n"
+                ),
+                purpose="Funcion correcta, con el import presente",
+            ),
+        ],
+    )
+
+    results = await validator.validate("project", files)
+    undefined_names = next(
+        result
+        for result in results
+        if result.profile is ValidationProfile.PYTHON_UNDEFINED_NAMES
+    )
+
+    assert undefined_names.passed
+    assert undefined_names.result.return_code == 0
+
+
+@pytest.mark.asyncio
+async def test_python_undefined_names_ignores_a_project_supplied_ruff_config(
+    tmp_path: Path,
+) -> None:
+    """--isolated is not cosmetic: without it, an imported project's own
+    ruff.toml could silence exactly the check this profile exists to
+    guarantee -- this asserts the flag's actual reason for being, not just
+    the happy path."""
+    workspace_root = tmp_path / "workspaces"
+    materializer = WorkspaceMaterializer(workspace_root, _policy_path())
+    validator = ValidationProfileExecutor(workspace_root, _policy_path())
+    files = materializer.materialize(
+        "project",
+        "task",
+        1,
+        [
+            WorkspaceFileProposal(
+                path="slug.py",
+                content=(
+                    "def slugify(value: str) -> str:\n"
+                    "    return re.sub(r'[^a-z0-9]+', '-', value.lower())\n"
+                ),
+                purpose="Funcion que usa 're' sin importarlo",
+            ),
+            WorkspaceFileProposal(
+                path="ruff.toml",
+                content='[lint]\nignore = ["F821"]\n',
+                purpose="Config del propio proyecto que intenta silenciar F821",
+            ),
+        ],
+    )
+
+    results = await validator.validate("project", files)
+    undefined_names = next(
+        result
+        for result in results
+        if result.profile is ValidationProfile.PYTHON_UNDEFINED_NAMES
+        and result.targets == ("slug.py",)
+    )
+
+    assert not undefined_names.passed
+
+
+@pytest.mark.asyncio
+async def test_python_undefined_names_runs_even_when_project_execution_is_disallowed(
+    tmp_path: Path,
+) -> None:
+    """P3.4 (ADR 0034): PYTHON_UNDEFINED_NAMES never executes the delivered
+    file's own logic (ruff only parses it), so it must run unconditionally
+    for imported projects too -- never fall into blocked_by_authority."""
+    workspace_root = tmp_path / "workspaces"
+    materializer = WorkspaceMaterializer(workspace_root, _policy_path())
+    validator = ValidationProfileExecutor(workspace_root, _policy_path())
+    files = materializer.materialize(
+        "project",
+        "task",
+        1,
+        [
+            WorkspaceFileProposal(
+                path="slug.py",
+                content=(
+                    "def slugify(value: str) -> str:\n"
+                    "    return re.sub(r'[^a-z0-9]+', '-', value.lower())\n"
+                ),
+                purpose="Funcion que usa 're' sin importarlo, proyecto importado",
+            ),
+        ],
+    )
+
+    results = await validator.validate(
+        "project", files, allow_project_code_execution=False
+    )
+    undefined_names = next(
+        result
+        for result in results
+        if result.profile is ValidationProfile.PYTHON_UNDEFINED_NAMES
+    )
+
+    assert not undefined_names.blocked_by_authority
+    assert not undefined_names.passed
+    assert undefined_names.result.started
+
+
+@pytest.mark.asyncio
+async def test_script_execution_marks_started_false_when_a_declared_arg_is_rejected(
+    tmp_path: Path,
+) -> None:
+    """Gate-MVP.2 (ADR 0041): a command the policy refuses to launch at all
+    (denied token, here via a contract arg) is exactly as "never started"
+    as one nobody attempted -- _execute()'s CommandRejected/OSError catch
+    must not silently claim started=True for it."""
+    workspace_root = tmp_path / "workspaces"
+    materializer = WorkspaceMaterializer(workspace_root, _policy_path())
+    validator = ValidationProfileExecutor(workspace_root, _policy_path())
+    files = materializer.materialize(
+        "project",
+        "task",
+        1,
+        [
+            WorkspaceFileProposal(
+                path="tool.py",
+                content="print('nunca deberia llegar a correr')\n",
+                purpose="Herramienta con un argumento declarado peligroso",
+            ),
+        ],
+    )
+
+    results = await validator.validate(
+        "project",
+        files,
+        execution_contract=ScriptExecutionContract(entrypoint="tool.py", args=["rm"]),
+    )
+    script_result = next(
+        result
+        for result in results
+        if result.profile is ValidationProfile.SCRIPT_EXECUTION
+    )
+
+    assert not script_result.result.started
+    assert not script_result.passed

@@ -42,6 +42,12 @@ class CommandResult:
     stderr: str
     return_code: int
     timed_out: bool
+    # Gate-MVP.2 (ADR 0041): True only when a real subprocess actually
+    # started -- a non-zero return_code or timed_out=True still leaves this
+    # True, since the process ran and produced real evidence either way.
+    # False for every hand-built CommandResult elsewhere (authority block,
+    # rejected/never-launched command, synthetic "no target" result).
+    started: bool
 
 
 class SafeCommandExecutor:
@@ -120,6 +126,7 @@ class SafeCommandExecutor:
             stderr=self._truncate(stderr_bytes),
             return_code=process.returncode if process.returncode is not None else -1,
             timed_out=timed_out,
+            started=True,
         )
 
     def _truncate(self, value: bytes) -> str:

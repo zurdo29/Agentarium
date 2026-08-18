@@ -820,6 +820,7 @@ def test_semantic_review_payload_excludes_tester_opinions() -> None:
         [{"path": "docs/design.md", "content": "1. A\n2. B\n3. C"}],
         ["Incluye al menos tres tipos"],
         [],
+        {"docs/design.md": []},
     )
 
     assert payload == {
@@ -829,10 +830,113 @@ def test_semantic_review_payload_excludes_tester_opinions() -> None:
         ],
         "acceptance_criteria": ["Incluye al menos tres tipos"],
         "dependency_artifacts": [],
+        "removed_top_level_names": {"docs/design.md": []},
     }
     assert "test_report" not in payload
     assert "acceptance_criteria_addressed" not in payload["artifact"]
     assert "isolation" not in payload["artifact"]
+
+
+# Gate-MVP.2 (ADR 0041): _removed_top_level_definitions -- decision-support
+# for the reviewer, never an auto-reject. Pure AST comparison, no pipeline.
+
+
+def test_removed_top_level_definitions_is_empty_for_a_brand_new_file() -> None:
+    assert Orchestrator._removed_top_level_definitions(None, "def f():\n    pass\n") == []
+
+
+def test_removed_top_level_definitions_is_empty_for_identical_content() -> None:
+    source = "def f():\n    return 1\n"
+    assert Orchestrator._removed_top_level_definitions(source, source) == []
+
+
+def test_removed_top_level_definitions_ignores_a_rewritten_function_body() -> None:
+    """Documented limit (ADR 0041): a name that survives is never flagged,
+    even when its behavior changed completely -- this mechanism detects
+    removal, not silent behavior changes."""
+    base = "def slugify(value):\n    return value.lower()\n"
+    candidate = "def slugify(value):\n    return value.upper()[::-1]\n"
+
+    assert Orchestrator._removed_top_level_definitions(base, candidate) == []
+
+
+def test_removed_top_level_definitions_detects_a_removed_function() -> None:
+    base = "def keep():\n    pass\n\n\ndef drop():\n    pass\n"
+    candidate = "def keep():\n    pass\n"
+
+    assert Orchestrator._removed_top_level_definitions(base, candidate) == ["drop"]
+
+
+def test_removed_top_level_definitions_detects_a_removed_async_function() -> None:
+    base = "async def fetch():\n    pass\n"
+    candidate = "\n"
+
+    assert Orchestrator._removed_top_level_definitions(base, candidate) == ["fetch"]
+
+
+def test_removed_top_level_definitions_detects_a_removed_method_inside_a_surviving_class() -> (
+    None
+):
+    base = (
+        "class SlugifyTests:\n"
+        "    def test_basic_lowercase(self):\n"
+        "        pass\n\n"
+        "    def test_strips_accents(self):\n"
+        "        pass\n"
+    )
+    candidate = "class SlugifyTests:\n    def test_basic_lowercase(self):\n        pass\n"
+
+    assert Orchestrator._removed_top_level_definitions(base, candidate) == [
+        "SlugifyTests.test_strips_accents"
+    ]
+
+
+def test_removed_top_level_definitions_flags_class_and_methods_when_the_class_is_renamed() -> (
+    None
+):
+    """Real shape of the textkit-slugify incident: SlugifyTests was
+    renamed and its methods swapped for a differently named one -- the old
+    class name and both its old qualified method names must all appear,
+    since a walk of tree.body alone would only have noticed the class
+    disappeared, not which methods went with it."""
+    base = (
+        "class SlugifyTests:\n"
+        "    def test_basic_lowercase(self):\n"
+        "        pass\n\n"
+        "    def test_strips_accents(self):\n"
+        "        pass\n"
+    )
+    candidate = (
+        "class SlugTests:\n"
+        "    def test_slug_roundtrip(self):\n"
+        "        pass\n"
+    )
+
+    assert Orchestrator._removed_top_level_definitions(base, candidate) == [
+        "SlugifyTests",
+        "SlugifyTests.test_basic_lowercase",
+        "SlugifyTests.test_strips_accents",
+    ]
+
+
+def test_removed_top_level_definitions_ignores_nested_and_closure_functions() -> None:
+    """Only module-level defs and one level into a module-level class body
+    count -- a helper nested inside another function is never "top-level",
+    so it dropping out must not be reported."""
+    base = "def outer():\n    def inner():\n        pass\n    return inner\n"
+    candidate = "def outer():\n    return None\n"
+
+    assert Orchestrator._removed_top_level_definitions(base, candidate) == []
+
+
+def test_removed_top_level_definitions_survives_a_syntax_error_on_either_side() -> None:
+    """Defers to PYTHON_SYNTAX, which already owns reporting this -- must
+    never crash the evaluation."""
+    valid = "def f():\n    pass\n"
+    broken = "def f(:\n    pass\n"
+
+    assert Orchestrator._removed_top_level_definitions(broken, valid) == []
+    assert Orchestrator._removed_top_level_definitions(valid, broken) == []
 
 
 def test_foreign_criterion_declaration_is_detected_without_rejecting_content() -> None:

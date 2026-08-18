@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import asyncio
 from typing import Any
 
@@ -15,6 +16,7 @@ from agentarium.domain.enums import (
     ReviewVerdict,
     RiskLevel,
     RunOutcome,
+    VerificationMode,
     WorkItemStatus,
 )
 from agentarium.domain.models import (
@@ -39,6 +41,7 @@ from agentarium.execution import (
     ValidationProfileExecutor,
     WorkArtifactProposal,
     WorkspaceFileEvidence,
+    WorkspaceFileProposal,
     WorkspaceInfrastructureRejected,
     WorkspaceMaterializer,
     WorkspaceRejected,
@@ -680,6 +683,28 @@ class Orchestrator:
                 await self.isolation.discard(session)
         return self.repository.get_work_item(item.id)
 
+    async def _removed_top_level_names_by_file(
+        self,
+        changes: GitChangeSet,
+        files: list[WorkspaceFileProposal],
+    ) -> dict[str, list[str]]:
+        """Gate-MVP.2 (ADR 0041): one entry per delivered `.py` file, even
+        when nothing was removed -- so the reviewer/evidence trail can
+        always tell "checked, nothing removed" apart from "never checked",
+        rather than an empty map meaning either. The worktree behind
+        `changes` is still alive for the whole evaluation (discard() runs
+        in a `finally` around the caller), so `read_base_file` never needs
+        an extra checkout."""
+        removed: dict[str, list[str]] = {}
+        for file in files:
+            if not file.path.casefold().endswith(".py"):
+                continue
+            base = await self.isolation.read_base_file(changes, file.path)
+            removed[file.path] = self._removed_top_level_definitions(
+                base, file.content
+            )
+        return removed
+
     async def _evaluate_candidate(
         self,
         item: WorkItem,
@@ -734,6 +759,9 @@ class Orchestrator:
             self.repository.get_work_item(item.id),
             WorkItemStatus.AWAITING_REVIEW,
             correlation_id,
+        )
+        removed_top_level_names = await self._removed_top_level_names_by_file(
+            changes, work_proposal.files
         )
 
         # Reading the files back can fail for reasons that have nothing to do
@@ -899,12 +927,22 @@ class Orchestrator:
                 error=str(exc),
                 correlation_id=correlation_id,
             )
+        verification_mode = (
+            VerificationMode.EXECUTED
+            if any(
+                check.get("profile") == ValidationProfile.SCRIPT_EXECUTION.value
+                and check.get("started") is True
+                for check in validation_checks
+            )
+            else VerificationMode.STATIC_ONLY
+        )
         report = TestReport(
             project_id=item.project_id,
             work_item_id=item.id,
             artifact_id=artifact.id,
             tester_run_id=tester_run.id,
             passed=report_passed,
+            verification_mode=verification_mode,
             checks=[
                 {
                     "name": "fixed_evidence_gate",
@@ -932,6 +970,14 @@ class Orchestrator:
                 *workspace_checks,
                 *validation_checks,
                 isolation_check,
+                *[
+                    {
+                        "check": "removed_top_level_names",
+                        "path": file_path,
+                        "removed": names,
+                    }
+                    for file_path, names in removed_top_level_names.items()
+                ],
             ],
             summary=test_proposal.summary,
         )
@@ -963,6 +1009,7 @@ class Orchestrator:
                         ],
                         semantic_review_criteria,
                         dependency_artifacts,
+                        removed_top_level_names,
                     ),
                 ),
                 correlation_id,
@@ -1003,6 +1050,7 @@ class Orchestrator:
                             ],
                             [criterion],
                             dependency_artifacts,
+                            removed_top_level_names,
                         ),
                     ),
                     correlation_id,
@@ -2482,11 +2530,57 @@ class Orchestrator:
         )
 
     @staticmethod
+    def _top_level_definition_names(tree: ast.Module) -> set[str]:
+        """Module-level `def`/`async def`/`class` names, plus each class's
+        own direct methods as `"Clase.metodo"` -- one level into a
+        module-level class body only, never nested classes/closures. A walk
+        of `tree.body` alone (not `ast.walk`) is deliberate: it is scoped to
+        exactly the same "top-level definition" concept a human skimming a
+        diff would recognize, not every def anywhere in the file."""
+        names: set[str] = set()
+        for node in tree.body:
+            if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
+                names.add(node.name)
+            elif isinstance(node, ast.ClassDef):
+                names.add(node.name)
+                for member in node.body:
+                    if isinstance(member, ast.FunctionDef | ast.AsyncFunctionDef):
+                        names.add(f"{node.name}.{member.name}")
+        return names
+
+    @staticmethod
+    def _removed_top_level_definitions(base: str | None, candidate: str) -> list[str]:
+        """Gate-MVP.2 (ADR 0041): names of module-level functions/classes
+        (and direct methods of a module-level class) present in `base` but
+        absent from `candidate` -- decision-support for the reviewer, never
+        an auto-reject (a legitimate refactor can remove names on purpose).
+        `base=None` means the candidate introduced the file: nothing could
+        have been removed. A `SyntaxError` on either side defers entirely to
+        PYTHON_SYNTAX, which already owns reporting that -- same defensive
+        posture as `_check_import_preflight`, never lets a parse failure
+        here take the whole evaluation down. Renaming a function's body
+        while keeping its name produces an empty result by design: this
+        detects removal, not behavior changes to a name that survives."""
+        if base is None:
+            return []
+        try:
+            base_names = Orchestrator._top_level_definition_names(
+                ast.parse(base)
+            )
+            candidate_names = Orchestrator._top_level_definition_names(
+                ast.parse(candidate)
+            )
+        except SyntaxError:
+            return []
+        return sorted(base_names - candidate_names)
+
+    @staticmethod
     def _review_payload(
         artifact: dict[str, Any],
         workspace_file_contents: list[dict[str, Any]],
         acceptance_criteria: list[str],
         dependency_artifacts: list[dict[str, Any]],
+        removed_top_level_names: dict[str, list[str]],
     ) -> dict[str, Any]:
         """Keep technical model opinions out of the semantic review."""
         semantic_artifact = {
@@ -2504,6 +2598,7 @@ class Orchestrator:
             "workspace_file_contents": workspace_file_contents,
             "acceptance_criteria": acceptance_criteria,
             "dependency_artifacts": dependency_artifacts,
+            "removed_top_level_names": removed_top_level_names,
         }
 
     @staticmethod

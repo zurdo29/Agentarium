@@ -193,8 +193,39 @@ export function TaskDrawer({
                           evidence.verified,
                       )
                         ? "worktree verificado"
-                        : "sin aislamiento registrado"}
+                        : "sin aislamiento registrado"} ·{" "}
+                      {result.verification_mode === "static_only"
+                        ? "código no ejecutado"
+                        : "código ejecutado"}
                     </small>
+                    {/* Gate-MVP.2 (ADR 0041): only the non-empty lists --
+                        one entry per delivered .py file is persisted,
+                        empty ones included, but a block that is almost
+                        always empty trains the reader to skip it. Never a
+                        rejection: a refactor may remove names legitimately. */}
+                    {(() => {
+                      const removed = (result.command_evidence ?? []).filter(
+                        (evidence) =>
+                          evidence.check === "removed_top_level_names" &&
+                          (evidence.removed?.length ?? 0) > 0,
+                      );
+                      if (removed.length === 0) return null;
+                      return (
+                        <div className="delivery-report-removed-names">
+                          <span className="micro-label">
+                            Definiciones eliminadas respecto de la base
+                          </span>
+                          <ul>
+                            {removed.map((evidence) => (
+                              <li key={evidence.path}>
+                                <code>{evidence.path}</code>
+                                <span>{(evidence.removed ?? []).join(", ")}</span>
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      );
+                    })()}
                   </div>
                 </>
               ) : (

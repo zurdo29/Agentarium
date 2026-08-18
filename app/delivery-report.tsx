@@ -18,6 +18,32 @@ const OUTCOME_HINT: Record<DeliveryReportOutcome, string> = {
   in_progress: "Todavía en curso.",
 };
 
+// Gate-MVP.2 (ADR 0041): "evidencia verificada" is exactly the overclaim
+// this gate exists to prevent when nothing was ever executed -- the normal
+// case for an imported project. The outcome alone cannot carry that claim.
+// Three states, not two: `null` (no TestReport at all) is a third,
+// distinct fact -- absence of evidence, which must never borrow the
+// wording of either verified execution or a real static check.
+function outcomeHint(item: DeliveryReportWorkItem): string {
+  if (item.outcome !== "completed") {
+    return OUTCOME_HINT[item.outcome];
+  }
+  if (item.test_verification_mode === "static_only") {
+    return "Completada con verificación estática; el código no se ejecutó.";
+  }
+  if (item.test_verification_mode === null) {
+    return "Completada sin informe técnico disponible.";
+  }
+  return OUTCOME_HINT.completed;
+}
+
+// Why an item counted as completed still has no usable verification --
+// two structurally different facts that must not read the same.
+const UNVERIFIED_REASON_LABEL: Record<string, string> = {
+  static_only_verification: "código no ejecutado",
+  missing_review_or_test_report: "sin review o informe técnico",
+};
+
 export function DeliveryReportView({
   report,
   loading,
@@ -56,9 +82,20 @@ export function DeliveryReportView({
               {report.unverified_completed_items.length} ítem(s) completados sin
               evidencia verificable
             </strong>
-            <p>
-              {report.unverified_completed_items.map((item) => item.title).join(", ")}
-            </p>
+            {/* The reason is the whole point: "código no ejecutado" is the
+                expected, honest state of an imported project, while "sin
+                review o informe técnico" is a data-integrity problem. A
+                joined list of titles hid that difference entirely. */}
+            <ul className="delivery-report-unverified-list">
+              {report.unverified_completed_items.map((item) => (
+                <li key={item.work_item_id}>
+                  <strong>{item.title}</strong>
+                  <span>
+                    {UNVERIFIED_REASON_LABEL[item.reason] ?? item.reason}
+                  </span>
+                </li>
+              ))}
+            </ul>
           </div>
         </div>
       )}
@@ -136,6 +173,17 @@ function DeliveryReportRow({
   const worktreeVerified = item.test_command_evidence.some(
     (evidence) => evidence.check === "isolated_change_set" && evidence.verified,
   );
+  // Gate-MVP.2 (ADR 0041): only the non-empty lists. The Orchestrator
+  // persists one entry per delivered .py file, empty ones included (so the
+  // evidence trail can tell "checked, nothing removed" from "never
+  // checked") -- but the normal case is nothing removed, and a block that
+  // is always present and almost always empty trains the reader to skip
+  // it. Never a rejection: a refactor may remove names legitimately.
+  const removedTopLevelNames = item.test_command_evidence.filter(
+    (evidence) =>
+      evidence.check === "removed_top_level_names" &&
+      (evidence.removed?.length ?? 0) > 0,
+  );
 
   return (
     <article className="delivery-report-card">
@@ -163,7 +211,7 @@ function DeliveryReportRow({
 
       {expanded && (
         <div className="delivery-report-card-detail">
-          <p>{OUTCOME_HINT[item.outcome]}</p>
+          <p>{outcomeHint(item)}</p>
 
           {item.review_verdict && (
             <div className="review-result">
@@ -211,8 +259,28 @@ function DeliveryReportRow({
                 {item.test_command_evidence.length > 0 && (
                   <small>
                     {validationProfileCount} perfiles registrados ·{" "}
-                    {worktreeVerified ? "worktree verificado" : "sin aislamiento registrado"}
+                    {worktreeVerified ? "worktree verificado" : "sin aislamiento registrado"} ·{" "}
+                    {item.test_verification_mode === "static_only"
+                      ? "código no ejecutado"
+                      : item.test_verification_mode === "executed"
+                        ? "código ejecutado"
+                        : "modo de verificación desconocido"}
                   </small>
+                )}
+                {removedTopLevelNames.length > 0 && (
+                  <div className="delivery-report-removed-names">
+                    <span className="micro-label">
+                      Definiciones eliminadas respecto de la base
+                    </span>
+                    <ul>
+                      {removedTopLevelNames.map((evidence) => (
+                        <li key={evidence.path}>
+                          <code>{evidence.path}</code>
+                          <span>{(evidence.removed ?? []).join(", ")}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
                 )}
               </div>
             </div>

@@ -3,8 +3,17 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from agentarium.domain.enums import WorkItemStatus
-from agentarium.domain.models import Milestone, Project, ScriptExecutionContract, WorkItem
+from agentarium.domain.enums import AgentRole, RunOutcome, VerificationMode, WorkItemStatus
+from agentarium.domain.models import (
+    AgentRun,
+    Artifact,
+    Milestone,
+    Project,
+    ResourceUsage,
+    ScriptExecutionContract,
+    TestReport,
+    WorkItem,
+)
 from agentarium.repositories import Repository
 from agentarium.repositories.database import Database
 from agentarium.repositories.migrations import CURRENT_SCHEMA_VERSION
@@ -340,6 +349,49 @@ def test_projects_gains_imported_column_after_upgrading_a_legacy_database(
     database.dispose()
 
 
+def test_reports_gains_verification_mode_column_after_upgrading_a_legacy_database(
+    tmp_path: Path,
+) -> None:
+    """Gate-MVP.2 (ADR 0041): first migration step to ever target
+    test_reports. Backfills to 'static_only' -- the only honest default,
+    since there is no way to reconstruct after the fact whether a legacy
+    row's SCRIPT_EXECUTION actually started."""
+    path = tmp_path / "legacy-test-reports.db"
+    database = Database(f"sqlite:///{path}")
+    with database.engine.connect() as connection:
+        # test_reports lives in _LEGACY_OTHER_TABLES, not the work_items-only
+        # _LEGACY_SCHEMA that _legacy_database() creates -- build both, same
+        # as test_upgrading_a_full_legacy_schema_reaches_current_version_...
+        for statement in (_LEGACY_SCHEMA + _LEGACY_OTHER_TABLES).strip().split(";"):
+            if statement.strip():
+                connection.execute(text(statement))
+        # A pre-existing test_reports row, in the legacy shape (no
+        # verification_mode column).
+        connection.execute(
+            text(
+                "INSERT INTO test_reports "
+                "(id, project_id, work_item_id, artifact_id, tester_run_id, "
+                "passed, checks_json, command_evidence_json, summary, created_at) "
+                "VALUES ('tr1', 'p1', 'planned', 'a1', 'run1', 1, '[]', '[]', "
+                "'Legacy summary', '2026-07-31 00:00:00')"
+            )
+        )
+        connection.commit()
+
+    database.create_all()
+
+    with database.engine.connect() as connection:
+        columns = {
+            row[1] for row in connection.execute(text("PRAGMA table_info(test_reports)"))
+        }
+        assert "verification_mode" in columns
+        (verification_mode,) = connection.execute(
+            text("SELECT verification_mode FROM test_reports WHERE id = 'tr1'")
+        ).fetchone()
+    assert verification_mode == "static_only"
+    database.dispose()
+
+
 def test_a_project_created_with_imported_true_round_trips(tmp_path: Path) -> None:
     database = Database(f"sqlite:///{(tmp_path / 'agentarium.db').as_posix()}")
     database.create_all()
@@ -476,17 +528,83 @@ def test_a_work_item_without_a_contract_loads_execution_contract_as_none(
     database.dispose()
 
 
-# The 9 tables besides work_items and projects -- see _LEGACY_OTHER_TABLES
-# above. `projects` moved out of this tuple in P3.4/ADR 0034, the first
-# migration step to target it (see
-# test_projects_gains_imported_column_after_upgrading_a_legacy_database).
+@pytest.mark.parametrize(
+    "mode", [VerificationMode.STATIC_ONLY, VerificationMode.EXECUTED]
+)
+def test_a_test_report_round_trips_both_verification_modes(
+    tmp_path: Path, mode: VerificationMode
+) -> None:
+    """Gate-MVP.2 (ADR 0041): a fresh (post-migration) database must
+    persist and reload whichever mode was actually recorded -- not just
+    accept the legacy-backfill default from the migration step itself
+    (see test_reports_gains_verification_mode_column_after_upgrading_a_legacy_database
+    for that, narrower, case)."""
+    database = Database(f"sqlite:///{(tmp_path / 'agentarium.db').as_posix()}")
+    database.create_all()
+    repository = Repository(database)
+    milestone = _project_with_milestone(repository)
+    item = WorkItem(
+        project_id=milestone.project_id,
+        milestone_id=milestone.id,
+        title="task",
+        description="description",
+        expected_outputs=["artifact"],
+        acceptance_criteria=["passes"],
+    )
+    repository.add_work_item(item)
+    run = AgentRun(
+        project_id=milestone.project_id,
+        work_item_id=item.id,
+        agent_role=AgentRole.IMPLEMENTATION_WORKER,
+        model="fake-model",
+        provider="fake",
+        outcome=RunOutcome.ARTIFACT_DELIVERED,
+        input_summary="{}",
+        output_summary="done",
+        resource_usage=ResourceUsage(duration_ms=1, model="fake-model", provider="fake"),
+        correlation_id="corr-1",
+    )
+    repository.add_agent_run(run)
+    artifact = Artifact(
+        project_id=milestone.project_id,
+        work_item_id=item.id,
+        agent_run_id=run.id,
+        artifact_type="code",
+        title="Artefacto",
+        content={},
+    )
+    repository.add_artifact(artifact)
+
+    repository.add_test_report(
+        TestReport(
+            project_id=milestone.project_id,
+            work_item_id=item.id,
+            artifact_id=artifact.id,
+            tester_run_id=run.id,
+            passed=True,
+            verification_mode=mode,
+            checks=[{"name": "existe", "passed": True}],
+            summary="Resultado",
+        )
+    )
+    (reloaded,) = repository.list_test_reports(milestone.project_id)
+
+    assert reloaded.verification_mode is mode
+    database.dispose()
+
+
+# The 8 tables besides work_items, projects, and test_reports -- see
+# _LEGACY_OTHER_TABLES above. `projects` moved out of this tuple in P3.4/
+# ADR 0034 (see test_projects_gains_imported_column_after_upgrading_a_legacy_database);
+# `test_reports` moved out in Gate-MVP.2/ADR 0041, the first migration step
+# to target it (see
+# test_reports_gains_verification_mode_column_after_upgrading_a_legacy_database).
 _NEVER_CHANGED_TABLES = (
     "milestones",
     "dependencies",
     "agent_runs",
     "artifacts",
     "reviews",
-    "test_reports",
     "decisions",
     "approval_requests",
     "execution_events",
