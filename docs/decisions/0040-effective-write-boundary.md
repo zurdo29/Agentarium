@@ -124,11 +124,22 @@ Mismo costo ya aceptado por ADR 0019 para `_colliding_dependency_paths`.
 puro + wrapper) y `backend/tests/test_effective_write_boundary.py` (4 tests
 end-to-end, uno por camino real más una regresión nombrada que reproduce el
 incidente `textkit-slugify` y confirma que la tarea hermana deja de
-bloquearse). Dos tests preexistentes necesitaron un ajuste de una línea
-(`test_workspace_io_failures.py`, `expected_outputs` no coincidía con el
-`CANDIDATE_FILES` que ya reutilizaban) y uno necesitó que su mock también
-fijara la respuesta de `"work"` (`test_expected_output_criteria.py`, el
-fallback de `MockProvider` producía un path que no coincidía con el
-declarado) — documentados en el PR, no indicios de que el gate esté mal
-calibrado: ambos exponían el mismo desajuste que este gate existe para
-detectar, sólo que accidental en vez de real.
+bloquearse). Tres tests preexistentes necesitaron un ajuste, documentado en
+el PR como evidencia de que el gate detecta exactamente la clase de
+desajuste para la que se diseñó, no como indicio de mala calibración:
+
+- `test_workspace_io_failures.py` (2 tests): `expected_outputs=["api.py"]`
+  no coincidía con el `CANDIDATE_FILES` (`"library/api.py"`) que ya
+  reutilizaban -- alineados a `expected_outputs=["library/api.py"]`.
+- `test_expected_output_criteria.py`: el fallback de `MockProvider`
+  producía `"deliverables/INFORME.md.md"` para
+  `expected_outputs=["INFORME.md"]` -- el monkeypatch ya existente ahora
+  también fija una respuesta `"work"` explícita que entrega literalmente
+  `INFORME.md`.
+- `test_task_splitting.py`: `MockProvider._workspace_file` traduce el
+  label heredado sin sufijo de la tarea de consolidación
+  (`"implementation_artifact"` → `"src/implementation.md"`) ignorando los
+  `owned_paths` que la maquinaria de split realmente le asignó (unión de
+  los `owned_paths` de sus hijas, ej. `"deliverables/implementation_artifact_part_1.md"`)
+  -- el monkeypatch de esta prueba ahora hace que la consolidación mockeada
+  entregue esos `owned_paths` reales en vez del path fijo de la tabla.

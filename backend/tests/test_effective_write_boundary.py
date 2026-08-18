@@ -146,6 +146,7 @@ async def test_execute_work_item_rejects_a_candidate_that_writes_outside_its_own
 @pytest.mark.asyncio
 async def test_re_evaluate_artifact_rejects_a_recovered_candidate_outside_its_own_scope(
     service: ApplicationService,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     project = _project(service)
     milestone = _milestone(service, project.id)
@@ -189,14 +190,23 @@ async def test_re_evaluate_artifact_rejects_a_recovered_candidate_outside_its_ow
     )
     service.repository.add_artifact(artifact)
     # The fixture Artifact above is itself outside item's own scope, so it
-    # would poison list_artifacts()-based checks; not relevant here since
-    # _out_of_scope_paths never queries the repository (ADR 0040) -- only
-    # the recovered proposal's own files matter.
+    # would poison list_artifacts()-based checks; not relevant to
+    # _out_of_scope_paths, which never queries the repository (ADR 0040) --
+    # only the recovered proposal's own files matter. It IS the baseline
+    # the "no new Artifact" assertion below compares against.
 
+    prepare_calls = _track_prepare_calls(monkeypatch, service)
     result = await service.orchestrator.re_evaluate_artifact(item.id, artifact.id)
 
     assert result.status is WorkItemStatus.READY
     assert result.attempt_count == 1
+    # Rejected before isolation.prepare() ever ran -- the recovered
+    # candidate's own out-of-scope file never touched disk.
+    assert prepare_calls == []
+    # No new Artifact: only the pre-existing fixture one remains.
+    assert [a.id for a in service.repository.list_artifacts(project.id)] == [
+        artifact.id
+    ]
 
     events = _own_scope_events(service, project.id)
     assert len(events) == 1
@@ -204,11 +214,13 @@ async def test_re_evaluate_artifact_rejects_a_recovered_candidate_outside_its_ow
 
     action_names = {e["action"] for e in service.repository.list_events(project.id)}
     assert "task_split_created" not in action_names
+    assert "change_set_integrated" not in action_names
 
 
 @pytest.mark.asyncio
 async def test_evaluate_operator_candidate_rejects_a_manual_candidate_outside_its_own_scope(
     service: ApplicationService,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     project = _project(service)
     milestone = _milestone(service, project.id)
@@ -228,10 +240,14 @@ async def test_evaluate_operator_candidate_rejects_a_manual_candidate_outside_it
         ],
     )
 
+    prepare_calls = _track_prepare_calls(monkeypatch, service)
     result = await service.orchestrator.evaluate_operator_candidate(item.id, proposal)
 
     assert result.status is WorkItemStatus.READY
     assert result.attempt_count == 1
+    # Rejected before isolation.prepare() ever ran.
+    assert prepare_calls == []
+    assert service.repository.list_artifacts(project.id) == []
 
     events = _own_scope_events(service, project.id)
     assert len(events) == 1
@@ -239,6 +255,7 @@ async def test_evaluate_operator_candidate_rejects_a_manual_candidate_outside_it
 
     action_names = {e["action"] for e in service.repository.list_events(project.id)}
     assert "task_split_created" not in action_names
+    assert "change_set_integrated" not in action_names
 
 
 @pytest.mark.asyncio

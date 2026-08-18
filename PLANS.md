@@ -523,10 +523,15 @@ que una tarea honesta-pero-descuidada dañe en silencio el trabajo de una
 hermana. Verificado con 10 tests nuevos en `test_evaluation_contracts.py` +
 4 end-to-end en `test_effective_write_boundary.py` (uno por camino real más
 la regresión nombrada `textkit-slugify`, que confirma que la tarea hermana
-deja de bloquearse), y dos ajustes de una línea sobre tests preexistentes
-cuyo `expected_outputs` no coincidía con lo que su propio fixture/mock
-entregaba -- mismo desajuste que este gate existe para detectar, documentado
-en el PR. Detalle completo en ADR 0040.
+deja de bloquearse), y tres ajustes sobre tests preexistentes cuyo
+`expected_outputs`/mock no coincidía con lo que su propio fixture
+entregaba -- `test_workspace_io_failures.py` (dos `expected_outputs`
+alineados con `library/api.py`), `test_expected_output_criteria.py`
+(respuesta `work` explícita que entrega `INFORME.md`) y
+`test_task_splitting.py` (la consolidación mockeada entrega los
+`owned_paths` reales que la maquinaria de split le asignó, en vez del path
+fijo que traducía antes) -- mismo desajuste que este gate existe para
+detectar, documentado en el PR. Detalle completo en ADR 0040.
 
 ### Gate-MVP.2 — Verificación honesta de proyectos importados
 
