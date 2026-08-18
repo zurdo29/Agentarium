@@ -423,6 +423,7 @@ class Orchestrator:
         session: WorktreeSession | None = None
         try:
             work_proposal = self._validate_work(work_response.content)
+            self._reject_out_of_scope_write(item, work_proposal, correlation_id)
             prior_artifacts = [
                 artifact
                 for artifact in self.repository.list_artifacts(item.project_id)
@@ -553,6 +554,7 @@ class Orchestrator:
         item = self.repository.increment_attempt(item.id)
         session: WorktreeSession | None = None
         try:
+            self._reject_out_of_scope_write(item, work_proposal, correlation_id)
             session = await self.isolation.prepare(
                 item.project_id,
                 item.id,
@@ -631,6 +633,7 @@ class Orchestrator:
         item = self.repository.increment_attempt(item.id)
         session: WorktreeSession | None = None
         try:
+            self._reject_out_of_scope_write(item, work_proposal, correlation_id)
             session = await self.isolation.prepare(
                 item.project_id,
                 item.id,
@@ -2270,6 +2273,83 @@ class Orchestrator:
                 continue
             colliding.add(file.path)
         return colliding
+
+    @staticmethod
+    def _normalize_scope_path(path: str) -> str:
+        return path.strip().replace("\\", "/").casefold()
+
+    @staticmethod
+    def _out_of_scope_paths(
+        item: WorkItem,
+        proposal: WorkArtifactProposal,
+    ) -> set[str]:
+        """Paths `proposal.files` writes outside `item`'s own declared scope.
+
+        Pure function, no repository/dependency-graph lookups (ADR 0040):
+        this answers "did this task stay inside what it itself claimed?",
+        a different question from `_colliding_dependency_paths` ("can this
+        task's write coexist with what other tasks already claimed?").
+        Ancestors and `shared_component` siblings answer the second
+        question, not this one -- a task that legitimately needs to write
+        a shared path must declare that path in its own `owned_paths`/
+        `expected_outputs`, not inherit it from a relative.
+
+        Permissive when `item` declares nothing parseable as a path
+        (`merge_path_claims` returns empty) -- most tasks describe their
+        deliverable in prose on purpose (ADR 0023/0024's conservative
+        default), and this must not become the first mechanical gate to
+        punish that dominant, legitimate pattern.
+        """
+        claims = merge_path_claims(item.owned_paths, item.expected_outputs)
+        if not claims:
+            return set()
+        normalized_claims = {
+            Orchestrator._normalize_scope_path(claim) for claim in claims
+        }
+        return {
+            file.path
+            for file in proposal.files
+            if Orchestrator._normalize_scope_path(file.path) not in normalized_claims
+        }
+
+    def _reject_out_of_scope_write(
+        self,
+        item: WorkItem,
+        proposal: WorkArtifactProposal,
+        correlation_id: str,
+    ) -> None:
+        """Raise `InvalidPlan` (ADR 0040) when `proposal` writes outside
+        `item`'s own effective scope, emitting a dedicated event first so
+        an adjudicator can tell this apart from a `workspace_action_rejected`
+        cross-task collision without re-reading code."""
+        offending = self._out_of_scope_paths(item, proposal)
+        if not offending:
+            return
+        self._event(
+            item.project_id,
+            "workspace_own_scope_rejected",
+            (
+                "La entrega incluye archivos fuera del alcance declarado de "
+                "la propia tarea: " + ", ".join(sorted(offending))
+            ),
+            work_item_id=item.id,
+            attempt=item.attempt_count,
+            error=", ".join(sorted(offending)),
+            metadata={
+                "paths": sorted(offending),
+                "candidate_paths": sorted(file.path for file in proposal.files),
+                "claimed_paths": sorted(
+                    merge_path_claims(item.owned_paths, item.expected_outputs)
+                ),
+                "owned_paths": list(item.owned_paths),
+                "expected_outputs": list(item.expected_outputs),
+            },
+            correlation_id=correlation_id,
+        )
+        raise InvalidPlan(
+            "Workspace file paths fall outside this task's own declared "
+            "scope: " + ", ".join(sorted(offending))
+        )
 
     def _transitive_dependency_ids(self, item: WorkItem) -> set[str]:
         by_id = {

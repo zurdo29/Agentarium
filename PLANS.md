@@ -499,6 +499,40 @@ fuera de su propio scope, no un interbloqueo contra la tarea de cierre; no
 atribuir el problema a esa tarea de cierre sin evidencia equivalente la
 próxima vez que se retome esto.
 
+**Resultado (17 de agosto de 2026): CERRADO.**
+`Orchestrator._out_of_scope_paths` (`engine.py`, función pura, sin
+`Repository` ni grafo de dependencias) compara el candidato contra
+`merge_path_claims(item.owned_paths, item.expected_outputs)` normalizando
+separador y mayúsculas en ambos lados -- deliberadamente **sin** las
+excepciones de ancestro/`shared_component` que sí tiene
+`_colliding_dependency_paths`, porque esas responden una pregunta cruzada
+("¿pueden dos tareas relacionadas compartir esto?"), no si esta tarea se
+salió de su propio scope. `_reject_out_of_scope_write` lo envuelve, emite
+`workspace_own_scope_rejected` (evento distinto de
+`workspace_action_rejected`) y lanza `InvalidPlan`. Tres puntos de
+integración, los tres antes de `isolation.prepare()`/`workspace.stage()` --
+nunca dentro de `_evaluate_candidate`, que en el camino autónomo vive fuera
+del único `except` que captura `InvalidPlan` (se habría propagado sin
+capturar). Dos límites explícitos, documentados en ADR 0040: **sin ningún
+claim parseable la frontera es permisiva** (no una garantía universal --
+`expected_outputs` en prosa sigue sin exigir nada, a propósito, mismo
+criterio que ya fijó ADR 0023 del lado cruzado); y **es una frontera de
+coordinación entre tareas, no una sandbox de seguridad** -- no impide
+escritura adversarial dentro de lo ya autorizado a nivel de proyecto, sólo
+que una tarea honesta-pero-descuidada dañe en silencio el trabajo de una
+hermana. Verificado con 10 tests nuevos en `test_evaluation_contracts.py` +
+4 end-to-end en `test_effective_write_boundary.py` (uno por camino real más
+la regresión nombrada `textkit-slugify`, que confirma que la tarea hermana
+deja de bloquearse), y tres ajustes sobre tests preexistentes cuyo
+`expected_outputs`/mock no coincidía con lo que su propio fixture
+entregaba -- `test_workspace_io_failures.py` (dos `expected_outputs`
+alineados con `library/api.py`), `test_expected_output_criteria.py`
+(respuesta `work` explícita que entrega `INFORME.md`) y
+`test_task_splitting.py` (la consolidación mockeada entrega los
+`owned_paths` reales que la maquinaria de split le asignó, en vez del path
+fijo que traducía antes) -- mismo desajuste que este gate existe para
+detectar, documentado en el PR. Detalle completo en ADR 0040.
+
 ### Gate-MVP.2 — Verificación honesta de proyectos importados
 
 **Objetivo:** mantener deshabilitada la ejecución por defecto (P3.4/ADR
@@ -636,6 +670,7 @@ Usar este texto literalmente como punto de partida:
 - `docs/decisions/0037-*` — centro de reparación: agregación por causa, vínculo estructural escalar→aprobar, interfaz (P4.3).
 - `docs/decisions/0038-*` — informe de entrega y auditoría, historial de intentos on-demand, guarda A→B (P4.4).
 - `docs/decisions/0039-*` — onboarding Windows: `doctor` con diagnóstico real, mensaje accionable de `$GIT_DIR`, documentación de fallos frecuentes (P4.5).
+- `docs/decisions/0040-*` — frontera efectiva de escritura del propio work item, distinta de la colisión cruzada de `_colliding_dependency_paths` (Gate-MVP.1).
 - `docs/guides/windows-setup.md` — guía de instalación y diagnóstico en Windows (P4.5).
 - `benchmarks/results/p1-baseline-2026-08/` — baseline, ambiente y adjudicación manual.
 - `benchmarks/results/p3.0-confirmation-2026-08/` — confirmación dirigida de P2 con modelo real, ambiente y hallazgos.

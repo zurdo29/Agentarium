@@ -135,6 +135,33 @@ async def test_derived_criterion_reaches_the_reviewer_and_a_false_result_blocks_
     original_generate = MockProvider.generate
 
     async def reject_this_task(self, request, agent):  # type: ignore[no-untyped-def]
+        if request.operation == "work" and request.work_item_id == item.id:
+            # Gate-MVP.1 (ADR 0040): MockProvider's own path-derivation
+            # fallback (llm/mock.py, artifact_type not in its label table)
+            # produces "deliverables/INFORME.md.md", which does not match
+            # this item's own expected_outputs=["INFORME.md"] and would get
+            # rejected before ever reaching the review step below -- fix the
+            # delivered path so this test still exercises what it names.
+            content = {
+                "artifact_type": "Documento",
+                "title": "Informe final",
+                "summary": "Entrega determinista para la prueba.",
+                "quality": "verified",
+                "files": [
+                    {
+                        "path": "INFORME.md",
+                        "content": "# Informe final\n",
+                        "purpose": "Informe final del proyecto",
+                    }
+                ],
+            }
+            raw = json.dumps(content)
+            return ProviderResponse(
+                content=content,
+                raw_text=raw,
+                prompt_characters=len(raw),
+                response_characters=len(raw),
+            )
         if request.operation == "review" and request.work_item_id == item.id:
             payload_criteria = list(request.payload["acceptance_criteria"])
             seen_payload_criteria.append(payload_criteria)
