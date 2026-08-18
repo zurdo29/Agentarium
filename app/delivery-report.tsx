@@ -211,7 +211,12 @@ function DeliveryReportRow({
                 {item.test_command_evidence.length > 0 && (
                   <small>
                     {validationProfileCount} perfiles registrados ·{" "}
-                    {worktreeVerified ? "worktree verificado" : "sin aislamiento registrado"}
+                    {worktreeVerified ? "worktree verificado" : "sin aislamiento registrado"} ·{" "}
+                    {item.test_verification_mode === "static_only"
+                      ? "código no ejecutado"
+                      : item.test_verification_mode === "executed"
+                        ? "código ejecutado"
+                        : "modo de verificación desconocido"}
                   </small>
                 )}
               </div>

@@ -27,7 +27,12 @@ from agentarium.benchmarks import (
     render_markdown,
 )
 from agentarium.benchmarks.contracts import CASE_SCHEMA_VERSION, BenchmarkRunRecord
-from agentarium.domain.enums import ProjectStatus, ReviewVerdict, WorkItemStatus
+from agentarium.domain.enums import (
+    ProjectStatus,
+    ReviewVerdict,
+    VerificationMode,
+    WorkItemStatus,
+)
 from agentarium.domain.models import Project, Review, WorkItem
 
 # Aliased: pytest tries to collect anything named Test* as a test class.
@@ -431,6 +436,7 @@ def _report(work_item_id: str, passed: bool) -> ReportModel:
         artifact_id="a",
         tester_run_id="t",
         passed=passed,
+        verification_mode=VerificationMode.STATIC_ONLY,
         checks=[],
         summary="resumen",
     )

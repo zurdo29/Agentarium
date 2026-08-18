@@ -123,6 +123,17 @@ STEPS: tuple[MigrationStep, ...] = (
     # real value for either, so NULL is correct throughout.
     MigrationStep(8, "imported_source_path", "TEXT", table="projects"),
     MigrationStep(9, "imported_commit", "VARCHAR(64)", table="projects"),
+    # Gate-MVP.2 (ADR 0041): first step to target test_reports. Backfills to
+    # "static_only" -- the only honest default, because there is no way to
+    # reconstruct after the fact whether a legacy row's SCRIPT_EXECUTION
+    # actually started (see VerificationMode); "executed" would overclaim
+    # for every one of those rows.
+    MigrationStep(
+        10,
+        "verification_mode",
+        "VARCHAR(20) NOT NULL DEFAULT 'static_only'",
+        table="test_reports",
+    ),
 )
 
 CURRENT_SCHEMA_VERSION = STEPS[-1].version

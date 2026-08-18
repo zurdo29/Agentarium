@@ -86,6 +86,7 @@ async def test_git_dir_too_big_failure_gets_an_actionable_message(
             stderr="fatal: '$GIT_DIR' too big\n",
             return_code=128,
             timed_out=False,
+            started=True,
         )
 
     monkeypatch.setattr(isolation.executor, "execute", _fake_execute)

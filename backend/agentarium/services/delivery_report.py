@@ -13,7 +13,7 @@ from __future__ import annotations
 from collections import Counter
 from typing import Any
 
-from agentarium.domain.enums import WorkItemStatus
+from agentarium.domain.enums import VerificationMode, WorkItemStatus
 from agentarium.domain.models import Project, Review, TestReport, WorkItem
 
 
@@ -37,13 +37,18 @@ def build_delivery_report(
     }
 
     items_payload: list[dict[str, Any]] = []
-    # Under every normal code path a COMPLETED item already required a
-    # passing test_report and an APPROVED review (engine.py's single
-    # gate into integrate()) -- this list is a data-integrity safety
-    # net for a hand-edited DB (SQLite can be edited directly, as this
-    # phase's own manual verification will do), not the report's
-    # primary "qué quedó sin verificar" signal. It is expected to be
-    # empty in normal operation.
+    # Two distinct reasons an item lands here, never both at once for the
+    # same item (Gate-MVP.2, ADR 0041):
+    # - "missing_review_or_test_report": data-integrity safety net for a
+    #   hand-edited DB (SQLite can be edited directly) -- under every
+    #   normal code path a COMPLETED item already required a passing
+    #   test_report and an APPROVED review (engine.py's single gate into
+    #   integrate()), so this case is expected to be empty in normal
+    #   operation.
+    # - "static_only_verification": the *expected*, common case for an
+    #   imported project -- COMPLETED can legitimately mean "the workflow
+    #   finished", but must never silently read as "this was proven to
+    #   run". `verification_mode` is what actually distinguishes the two.
     unverified_completed_items: list[dict[str, Any]] = []
     totals: Counter[str] = Counter()
 
@@ -79,8 +84,23 @@ def build_delivery_report(
 
         totals[outcome] += 1
 
-        if outcome == "completed" and (review is None or test_report is None):
-            unverified_completed_items.append({"work_item_id": item.id, "title": item.title})
+        if outcome == "completed":
+            if review is None or test_report is None:
+                unverified_completed_items.append(
+                    {
+                        "work_item_id": item.id,
+                        "title": item.title,
+                        "reason": "missing_review_or_test_report",
+                    }
+                )
+            elif test_report.verification_mode is VerificationMode.STATIC_ONLY:
+                unverified_completed_items.append(
+                    {
+                        "work_item_id": item.id,
+                        "title": item.title,
+                        "reason": "static_only_verification",
+                    }
+                )
 
         blocking = stuck[1] if stuck is not None else None
         items_payload.append(
@@ -95,6 +115,9 @@ def build_delivery_report(
                 "review_reasons": review.reasons if review else [],
                 "review_acceptance_results": review.acceptance_results if review else {},
                 "test_passed": test_report.passed if test_report else None,
+                "test_verification_mode": (
+                    test_report.verification_mode.value if test_report else None
+                ),
                 "test_summary": test_report.summary if test_report else None,
                 "test_checks": test_report.checks if test_report else [],
                 "test_command_evidence": test_report.command_evidence if test_report else [],

@@ -185,6 +185,9 @@ test("work item drawer surfaces tester and reviewer evidence P4.3/P4.4 will read
   await drawer.findByText("PASS");
   await drawer.findByText(/2 perfiles registrados/);
   await drawer.findByText(/worktree verificado/);
+  // Gate-MVP.2 (ADR 0041): the fixture's default verification_mode is
+  // "executed" -- confirms the third clause renders.
+  await drawer.findByText(/código ejecutado/);
 
   // Reviewer result: not approved -> "REVIEW", plus the reasons text.
   await drawer.findByText("REVIEW");
@@ -209,6 +212,28 @@ test("work item drawer's tester evidence flags a missing worktree distinctly", a
 
   await screen.findByText(/1 perfiles registrados/);
   await screen.findByText(/sin aislamiento registrado/);
+});
+
+test("work item drawer's tester evidence never claims execution for a static-only report", async () => {
+  const mock = createFetchMock();
+  globalThis.fetch = mock.fetch;
+  const item = buildWorkItem({
+    id: "item-static-only",
+    title: "Tarea de proyecto importado",
+    status: "completed",
+  });
+  const testReport = buildTestReport({
+    work_item_id: "item-static-only",
+    verification_mode: "static_only",
+    command_evidence: [buildCommandEvidence({ check: "validation_profile", profile: "workspace_inventory" })],
+  });
+  await openProjectWith(mock, { work_items: [item], test_reports: [testReport] });
+
+  await userEvent.click(screen.getByRole("button", { name: /Tarea de proyecto importado/i }));
+  await screen.findByRole("heading", { name: "Tarea de proyecto importado" });
+
+  await screen.findByText(/código no ejecutado/);
+  assert.equal(screen.queryByText(/código ejecutado/), null);
 });
 
 test("project view surfaces decisions and metrics P4.4's audit trail will read", async () => {

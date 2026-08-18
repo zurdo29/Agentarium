@@ -167,6 +167,7 @@ class TestReportRow(Base):
     artifact_id: Mapped[str] = mapped_column(ForeignKey("artifacts.id", ondelete="CASCADE"))
     tester_run_id: Mapped[str] = mapped_column(ForeignKey("agent_runs.id", ondelete="CASCADE"))
     passed: Mapped[bool] = mapped_column(Boolean)
+    verification_mode: Mapped[str] = mapped_column(String(20))
     checks_json: Mapped[list[dict[str, Any]]] = mapped_column(JSON)
     command_evidence_json: Mapped[list[dict[str, Any]]] = mapped_column(JSON)
     summary: Mapped[str] = mapped_column(Text)

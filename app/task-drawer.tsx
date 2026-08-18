@@ -193,7 +193,10 @@ export function TaskDrawer({
                           evidence.verified,
                       )
                         ? "worktree verificado"
-                        : "sin aislamiento registrado"}
+                        : "sin aislamiento registrado"} ·{" "}
+                      {result.verification_mode === "static_only"
+                        ? "código no ejecutado"
+                        : "código ejecutado"}
                     </small>
                   </div>
                 </>

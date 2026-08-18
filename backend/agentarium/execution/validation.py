@@ -82,6 +82,7 @@ class ValidationProfileResult:
             "passed": self.passed,
             "contract_version": VALIDATION_CONTRACT_VERSION,
             "blocked_by_authority": self.blocked_by_authority,
+            "started": self.result.started,
         }
 
 
@@ -300,6 +301,7 @@ class ValidationProfileExecutor:
                         ),
                         return_code=1,
                         timed_out=False,
+                        started=False,
                     ),
                 )
             )
@@ -361,6 +363,7 @@ class ValidationProfileExecutor:
                         ),
                         return_code=1,
                         timed_out=False,
+                        started=False,
                     ),
                 )
             ]
@@ -405,6 +408,7 @@ class ValidationProfileExecutor:
                         ),
                         return_code=1,
                         timed_out=False,
+                        started=False,
                     ),
                 )
             )
@@ -615,6 +619,7 @@ class ValidationProfileExecutor:
                     stderr="",
                     return_code=0,
                     timed_out=False,
+                    started=False,
                 ),
             )
 
@@ -639,6 +644,7 @@ class ValidationProfileExecutor:
                 stderr="\n".join(lines),
                 return_code=1,
                 timed_out=False,
+                started=False,
             ),
         )
 
@@ -715,6 +721,7 @@ class ValidationProfileExecutor:
                 ),
                 return_code=1,
                 timed_out=False,
+                started=False,
             ),
             blocked_by_authority=True,
         )
@@ -737,6 +744,9 @@ class ValidationProfileExecutor:
                 timeout_seconds=20,
             )
         except (CommandRejected, OSError) as exc:
+            # Rejected by policy before launch, or the OS itself never
+            # produced a process (FileNotFoundError and friends) -- either
+            # way nothing started, so this is never "executed" (ADR 0041).
             result = CommandResult(
                 command=command,
                 cwd=str(cwd),
@@ -744,6 +754,7 @@ class ValidationProfileExecutor:
                 stderr=str(exc),
                 return_code=-1,
                 timed_out=False,
+                started=False,
             )
         return ValidationProfileResult(profile=profile, targets=targets, result=result)
 

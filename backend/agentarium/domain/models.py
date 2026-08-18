@@ -14,6 +14,7 @@ from .enums import (
     ReviewVerdict,
     RiskLevel,
     RunOutcome,
+    VerificationMode,
     WorkItemStatus,
 )
 
@@ -262,6 +263,11 @@ class TestReport(DomainModel):
     artifact_id: str
     tester_run_id: str
     passed: bool
+    # Gate-MVP.2 (ADR 0041): computed by Agentarium from a real executor
+    # signal (CommandResult.started), never from the LLM tester's own
+    # `checks` -- required, no default, so every construction site must
+    # decide it explicitly.
+    verification_mode: VerificationMode
     checks: list[dict[str, Any]]
     command_evidence: list[dict[str, Any]] = Field(default_factory=list)
     summary: str

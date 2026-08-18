@@ -1366,6 +1366,7 @@ async def test_script_execution_fails_when_python_claimed_without_source(
 
     assert not script_result.passed
     assert "no incluye" in script_result.result.stderr
+    assert not script_result.result.started
 
 
 @pytest.mark.asyncio
@@ -1402,6 +1403,7 @@ async def test_script_execution_runs_a_working_python_tool(tmp_path: Path) -> No
 
     assert script_result.passed
     assert script_result.result.return_code == 0
+    assert script_result.result.started
 
 
 @pytest.mark.asyncio
@@ -1436,6 +1438,9 @@ async def test_script_execution_fails_when_script_crashes(tmp_path: Path) -> Non
     assert not script_result.passed
     assert script_result.result.return_code != 0
     assert "RuntimeError" in script_result.result.stderr
+    # Gate-MVP.2 (ADR 0041): a real crash is still real evidence -- started
+    # tracks "did a process launch", never "did it succeed".
+    assert script_result.result.started
 
 
 @pytest.mark.asyncio
@@ -1643,6 +1648,9 @@ async def test_script_execution_contract_fails_when_entrypoint_is_missing(
     assert not script_results[0].passed
     assert "tool.py" in script_results[0].result.stderr
     assert "no lo incluye" in script_results[0].result.stderr
+    # Gate-MVP.2 (ADR 0041): a declared entrypoint the delivery doesn't
+    # include never launches a process.
+    assert not script_results[0].result.started
 
 
 @pytest.mark.asyncio
@@ -1916,6 +1924,9 @@ async def test_authority_gate_blocks_blind_script_execution_without_running_it(
     assert script_result.as_evidence()["blocked_by_authority"] is True
     # The real proof, not just the structured flag: the script never ran.
     assert list(workspace_root.rglob("output.txt")) == []
+    # Gate-MVP.2 (ADR 0041): blocked-by-authority must never read as
+    # executed evidence.
+    assert not script_result.result.started
 
 
 @pytest.mark.asyncio

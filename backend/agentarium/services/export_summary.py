@@ -59,6 +59,9 @@ def build_export_summary(
                 "files": metadata.get("files", []),
                 "in_exported_range": in_range,
                 "tester_passed": test_report.passed if test_report else None,
+                "tester_verification_mode": (
+                    test_report.verification_mode.value if test_report else None
+                ),
                 "tester_summary": test_report.summary if test_report else None,
                 "review_verdict": review.verdict.value if review else None,
                 "review_acceptance_results": review.acceptance_results if review else {},
@@ -142,7 +145,15 @@ def render_export_summary_markdown(payload: dict[str, Any]) -> str:
             "|---|---|---|---|---|---|",
         ]
         for item in delivered:
-            tester = "ok" if item["tester_passed"] else "falla"
+            # Gate-MVP.2 (ADR 0041): never render "ok" as if it proved the
+            # code runs -- a static_only tester result says so explicitly,
+            # independent of tester_passed.
+            if item["tester_verification_mode"] == "static_only":
+                tester = "sólo estática"
+            elif item["tester_passed"]:
+                tester = "ejecutada: ok"
+            else:
+                tester = "ejecutada: falla"
             reviewer = item["review_verdict"] or "—"
             commit = (item["integration_commit"] or "")[:12] or "—"
             in_range = "sí" if item["in_exported_range"] else "NO"

@@ -15,6 +15,7 @@ from agentarium.domain.enums import (
     ReviewVerdict,
     RiskLevel,
     RunOutcome,
+    VerificationMode,
     WorkItemStatus,
 )
 from agentarium.domain.models import (
@@ -899,12 +900,22 @@ class Orchestrator:
                 error=str(exc),
                 correlation_id=correlation_id,
             )
+        verification_mode = (
+            VerificationMode.EXECUTED
+            if any(
+                check.get("profile") == ValidationProfile.SCRIPT_EXECUTION.value
+                and check.get("started") is True
+                for check in validation_checks
+            )
+            else VerificationMode.STATIC_ONLY
+        )
         report = TestReport(
             project_id=item.project_id,
             work_item_id=item.id,
             artifact_id=artifact.id,
             tester_run_id=tester_run.id,
             passed=report_passed,
+            verification_mode=verification_mode,
             checks=[
                 {
                     "name": "fixed_evidence_gate",

@@ -16,6 +16,7 @@ from agentarium.domain.enums import (
     ReviewVerdict,
     RiskLevel,
     RunOutcome,
+    VerificationMode,
     WorkItemStatus,
 )
 from agentarium.domain.models import (
@@ -543,6 +544,7 @@ class Repository:
                     artifact_id=report.artifact_id,
                     tester_run_id=report.tester_run_id,
                     passed=report.passed,
+                    verification_mode=report.verification_mode.value,
                     checks_json=report.checks,
                     command_evidence_json=report.command_evidence,
                     summary=report.summary,
@@ -565,6 +567,7 @@ class Repository:
                     artifact_id=row.artifact_id,
                     tester_run_id=row.tester_run_id,
                     passed=row.passed,
+                    verification_mode=VerificationMode(row.verification_mode),
                     checks=row.checks_json,
                     command_evidence=row.command_evidence_json,
                     summary=row.summary,

@@ -154,10 +154,55 @@ test("a completed item's expanded detail lists each test check, a command-eviden
   // already derives from the identical command_evidence shape.
   await screen.findByText(/2 perfiles registrados/);
   await screen.findByText(/worktree verificado/);
+  // Gate-MVP.2 (ADR 0041): the fixture's default test_verification_mode
+  // is "executed" -- confirms the third clause renders, not just exists.
+  await screen.findByText(/código ejecutado/);
 
   // Real integration file paths, not just a count.
   await screen.findByText("backend/agentarium/api/app.py");
   await screen.findByText("backend/tests/test_delivery_report.py");
+  mock.assertAllMatched();
+});
+
+test("a static-only verified item never reads as if its code had run", async () => {
+  const mock = createFetchMock();
+  globalThis.fetch = mock.fetch;
+  const project = buildProject({ id: "static-project", title: "Proyecto importado" });
+  mockBackgroundRefresh(mock, buildDashboard({ projects: [project] }));
+  await renderHome();
+
+  mock.on("GET", "/api/projects/static-project", buildProjectDetail({ project }));
+  mock.on("GET", "/api/projects/static-project/events", []);
+  await userEvent.click(screen.getByRole("button", { name: /Proyecto importado/i }));
+  await screen.findByRole("heading", { name: "Proyecto importado" });
+
+  const completedItem = buildDeliveryReportWorkItem({
+    work_item_id: "item-static",
+    title: "Tarea de proyecto importado",
+    outcome: "completed",
+    test_passed: true,
+    test_verification_mode: "static_only",
+    test_command_evidence: [
+      buildCommandEvidence({ check: "validation_profile", profile: "workspace_inventory" }),
+      buildCommandEvidence({ check: "isolated_change_set", backend: "git_worktree", verified: true }),
+    ],
+  });
+  mock.on(
+    "GET",
+    "/api/projects/static-project/report",
+    buildDeliveryReport({
+      project: { id: "static-project", title: "Proyecto importado", goal: project.goal },
+      work_items: [completedItem],
+      totals: { completed: 1 },
+    }),
+  );
+
+  await userEvent.click(screen.getByRole("button", { name: /Generar informe/i }));
+  await screen.findByText("Tarea de proyecto importado");
+  await userEvent.click(screen.getByRole("button", { name: /Tarea de proyecto importado/i }));
+
+  await screen.findByText(/código no ejecutado/);
+  assert.equal(screen.queryByText(/código ejecutado/), null);
   mock.assertAllMatched();
 });
 

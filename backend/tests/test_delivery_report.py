@@ -5,7 +5,13 @@ from pathlib import Path
 
 import pytest
 from agentarium.api.app import create_app
-from agentarium.domain.enums import AgentRole, ReviewVerdict, RunOutcome, WorkItemStatus
+from agentarium.domain.enums import (
+    AgentRole,
+    ReviewVerdict,
+    RunOutcome,
+    VerificationMode,
+    WorkItemStatus,
+)
 from agentarium.domain.models import (
     AgentRun,
     ApprovalRequest,
@@ -72,7 +78,11 @@ def _completed_with_evidence(
     thing the test actually wants to check. artifacts/reviews/test_reports
     all carry real FK columns into agent_runs, so a fabricated run id
     would violate the schema (same pitfall test_repair_center.py's own
-    evidence test already found in P4.3a) -- a real AgentRun row first."""
+    evidence test already found in P4.3a) -- a real AgentRun row first.
+    verification_mode=EXECUTED because every caller of this helper treats
+    its item as a genuinely verified completion (Gate-MVP.2, ADR 0041) --
+    a caller that specifically wants the static_only case builds its own
+    TestReport instead of reusing this one."""
     run = _agent_run(project_id, item.id)
     service.repository.add_agent_run(run)
     artifact = Artifact(
@@ -102,6 +112,7 @@ def _completed_with_evidence(
             artifact_id=artifact.id,
             tester_run_id=run.id,
             passed=True,
+            verification_mode=VerificationMode.EXECUTED,
             checks=[{"name": "existe", "passed": True}],
             summary="Todo paso",
         )
@@ -158,8 +169,72 @@ def test_delivery_report_marks_a_real_completed_item(service: ApplicationService
     assert row["review_verdict"] == "approved"
     assert row["review_acceptance_results"] == {"Existe": True}
     assert row["test_passed"] is True
+    assert row["test_verification_mode"] == "executed"
     assert report["unverified_completed_items"] == []
     assert report["totals"] == {"completed": 1}
+
+
+def test_delivery_report_flags_a_completed_item_verified_only_statically(
+    service: ApplicationService,
+) -> None:
+    """The expected, common case for an imported project (Gate-MVP.2,
+    ADR 0041): a real review+test_report both exist, engine.py's COMPLETED
+    gate was satisfied honestly, but SCRIPT_EXECUTION never ran. completed
+    must still surface this distinctly from the missing-evidence case
+    above -- same outcome, different reason."""
+    project = service.create_project("Proyecto importado con verificacion estatica")
+    milestone = _milestone(project.id)
+    service.repository.add_milestone(milestone)
+    item = _work_item(project.id, milestone.id, status=WorkItemStatus.COMPLETED)
+    service.repository.add_work_item(item)
+    run = _agent_run(project.id, item.id)
+    service.repository.add_agent_run(run)
+    artifact = Artifact(
+        project_id=project.id,
+        work_item_id=item.id,
+        agent_run_id=run.id,
+        artifact_type="code",
+        title="Artefacto",
+        content={},
+    )
+    service.repository.add_artifact(artifact)
+    service.repository.add_review(
+        Review(
+            project_id=project.id,
+            work_item_id=item.id,
+            artifact_id=artifact.id,
+            reviewer_run_id=run.id,
+            verdict=ReviewVerdict.APPROVED,
+            reasons=["Todo bien, sin ejecutar"],
+            acceptance_results={"Existe": True},
+        )
+    )
+    service.repository.add_test_report(
+        TestReport(
+            project_id=project.id,
+            work_item_id=item.id,
+            artifact_id=artifact.id,
+            tester_run_id=run.id,
+            passed=True,
+            verification_mode=VerificationMode.STATIC_ONLY,
+            checks=[{"name": "existe", "passed": True}],
+            summary="Paso validacion estatica",
+        )
+    )
+
+    report = service.delivery_report(project.id)
+
+    row = report["work_items"][0]
+    assert row["outcome"] == "completed"
+    assert row["test_passed"] is True
+    assert row["test_verification_mode"] == "static_only"
+    assert report["unverified_completed_items"] == [
+        {
+            "work_item_id": item.id,
+            "title": item.title,
+            "reason": "static_only_verification",
+        }
+    ]
 
 
 def test_delivery_report_flags_a_completed_item_missing_evidence(
@@ -179,7 +254,11 @@ def test_delivery_report_flags_a_completed_item_missing_evidence(
 
     assert report["work_items"][0]["outcome"] == "completed"
     assert report["unverified_completed_items"] == [
-        {"work_item_id": item.id, "title": item.title}
+        {
+            "work_item_id": item.id,
+            "title": item.title,
+            "reason": "missing_review_or_test_report",
+        }
     ]
 
 
