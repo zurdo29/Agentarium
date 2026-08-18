@@ -65,6 +65,68 @@ async def test_rejected_worktree_never_reaches_main(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_read_base_file_returns_prior_content_for_an_existing_file(
+    tmp_path: Path,
+) -> None:
+    """Gate-MVP.2 (ADR 0041): the reviewer needs to know what a file looked
+    like before this attempt, not just its final content. The first attempt
+    integrates real content onto main; a second attempt's own commit sits
+    on top of that, so `commit^` is exactly what main had when this second
+    worktree branched off."""
+    workspace_root = tmp_path / "workspaces"
+    isolation = GitWorktreeIsolation(workspace_root, _policy_path())
+    materializer = WorkspaceMaterializer(workspace_root, _policy_path())
+
+    first_session = await isolation.prepare("project", "task", 1)
+    materializer.stage(
+        "project",
+        first_session.path,
+        [WorkspaceFileProposal(path="slug.py", content="BASE\n", purpose="Base")],
+    )
+    first_changes = await isolation.collect(first_session)
+    await isolation.integrate(first_changes)
+    await isolation.discard(first_session)
+
+    second_session = await isolation.prepare("project", "task", 2)
+    materializer.stage(
+        "project",
+        second_session.path,
+        [
+            WorkspaceFileProposal(
+                path="slug.py", content="CANDIDATE\n", purpose="Candidato"
+            )
+        ],
+    )
+    second_changes = await isolation.collect(second_session)
+
+    base = await isolation.read_base_file(second_changes, "slug.py")
+
+    assert base == "BASE\n"
+    await isolation.discard(second_session)
+
+
+@pytest.mark.asyncio
+async def test_read_base_file_returns_none_for_a_file_the_candidate_introduces(
+    tmp_path: Path,
+) -> None:
+    workspace_root = tmp_path / "workspaces"
+    isolation = GitWorktreeIsolation(workspace_root, _policy_path())
+    materializer = WorkspaceMaterializer(workspace_root, _policy_path())
+    session = await isolation.prepare("project", "task", 1)
+    materializer.stage(
+        "project",
+        session.path,
+        [WorkspaceFileProposal(path="new_module.py", content="NEW\n", purpose="Nuevo")],
+    )
+    changes = await isolation.collect(session)
+
+    base = await isolation.read_base_file(changes, "new_module.py")
+
+    assert base is None
+    await isolation.discard(session)
+
+
+@pytest.mark.asyncio
 async def test_git_dir_too_big_failure_gets_an_actionable_message(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

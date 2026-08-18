@@ -18,13 +18,16 @@ from .workspace import WorkspaceFileEvidence
 # ADR 0016 precedent — activating a new validation profile bumps this
 # constant so retries already in flight don't inherit a failure produced by
 # semantics that didn't exist when they started.
-VALIDATION_CONTRACT_VERSION = "profiles-v7"
+# Gate-MVP.2 (ADR 0041): v7 -> v8 when PYTHON_UNDEFINED_NAMES was activated,
+# same precedent.
+VALIDATION_CONTRACT_VERSION = "profiles-v8"
 
 
 class ValidationProfile(StrEnum):
     WORKSPACE_INVENTORY = "workspace_inventory"
     PYTHON_SYNTAX = "python_syntax"
     IMPORT_PREFLIGHT = "import_preflight"
+    PYTHON_UNDEFINED_NAMES = "python_undefined_names"
     JSON_SYNTAX = "json_syntax"
     JAVASCRIPT_SYNTAX = "javascript_syntax"
     WEB_APPLICATION = "web_application"
@@ -35,17 +38,20 @@ class ValidationProfile(StrEnum):
 # logic -- WORKSPACE_INVENTORY lists files via a fixed snippet,
 # PYTHON_SYNTAX only `compile()`s (never `exec()`s), JSON_SYNTAX only
 # parses, JAVASCRIPT_SYNTAX only runs `node --check`, IMPORT_PREFLIGHT is a
-# static in-process AST walk with no subprocess at all, and WEB_APPLICATION
+# static in-process AST walk with no subprocess at all, WEB_APPLICATION
 # (web_smoke.py) parses HTML and regex-matches the JS source text without
-# ever interpreting it. Declared explicitly and checked fail-closed in
-# `_execute()`: a profile not on this list is treated as code execution and
-# blocked whenever the caller disallows it, including any profile added
+# ever interpreting it, and PYTHON_UNDEFINED_NAMES (Gate-MVP.2, ADR 0041)
+# runs `ruff check --select F821` -- static name-resolution analysis, never
+# `exec()`s the delivered file. Declared explicitly and checked fail-closed
+# in `_execute()`: a profile not on this list is treated as code execution
+# and blocked whenever the caller disallows it, including any profile added
 # here later without also being added to this set.
 NON_EXECUTING_PROFILES = frozenset(
     {
         ValidationProfile.WORKSPACE_INVENTORY,
         ValidationProfile.PYTHON_SYNTAX,
         ValidationProfile.IMPORT_PREFLIGHT,
+        ValidationProfile.PYTHON_UNDEFINED_NAMES,
         ValidationProfile.JSON_SYNTAX,
         ValidationProfile.JAVASCRIPT_SYNTAX,
         ValidationProfile.WEB_APPLICATION,
@@ -152,6 +158,23 @@ class ValidationProfileExecutor:
                         ValidationProfile.PYTHON_SYNTAX,
                         (relative,),
                         [sys.executable, "-c", self.PYTHON_SYNTAX_CODE, relative],
+                    )
+                )
+                commands.append(
+                    (
+                        ValidationProfile.PYTHON_UNDEFINED_NAMES,
+                        (relative,),
+                        [
+                            sys.executable,
+                            "-m",
+                            "ruff",
+                            "check",
+                            "--isolated",
+                            "--no-cache",
+                            "--select",
+                            "F821",
+                            relative,
+                        ],
                     )
                 )
             elif suffix == ".json":

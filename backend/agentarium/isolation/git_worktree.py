@@ -153,6 +153,29 @@ class GitWorktreeIsolation:
             diff=diff_result.stdout,
         )
 
+    async def read_base_file(self, changes: GitChangeSet, path: str) -> str | None:
+        """Gate-MVP.2 (ADR 0041): the reviewer only ever saw the candidate's
+        final content -- a candidate that silently deletes tests or
+        functions looked identical, from that alone, to one that only adds.
+        `changes.commit` is collect()'s own commit on the attempt's branch,
+        so `commit^` is whatever the worktree actually branched from: the
+        real pre-candidate content for a file that already existed, or
+        nothing for a file the candidate introduces. `_ensure_repository`
+        guarantees `main` always has at least one commit before any
+        worktree is created, so `commit^` always resolves; the failure path
+        below exists for the introduced-file case, not a missing parent.
+        The worktree (`changes.session.path`) is still alive when this
+        runs -- `discard()` sits in a `finally` around tester+reviewer in
+        every real path -- so no extra checkout is needed."""
+        result = await self._run(
+            ["git", "show", f"{changes.commit}^:{path}"],
+            cwd=changes.session.path,
+            allow_failure=True,
+        )
+        if result.return_code != 0:
+            return None
+        return result.stdout
+
     async def integrate(self, changes: GitChangeSet) -> IntegrationResult:
         project_root = self._project_root(changes.session.project_id)
         async with self._project_lock(changes.session.project_id):
