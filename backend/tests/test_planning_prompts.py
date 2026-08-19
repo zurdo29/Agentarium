@@ -452,6 +452,89 @@ def test_implicit_path_claims_only_counts_file_like_entries() -> None:
     )
 
 
+# Gate-MVP.3 follow-up (ADR 0042). The exact strings the planner produced in
+# `benchmarks/results/gate-mvp3-textkit-slugify-2026-08/`, read from the run's
+# own database -- not paraphrased. The original measurement produced bare
+# paths for the same goal and model; this run produced prose, and that alone
+# decided whether the ownership boundary armed at all.
+
+
+def test_implicit_path_claims_reads_the_exact_prose_gate_mvp3_produced() -> None:
+    assert implicit_path_claims(
+        ["Código modificado en `textkit/slug.py`"]
+    ) == ["textkit/slug.py"]
+    assert implicit_path_claims(
+        ["Nueva prueba en `tests/test_slug.py`"]
+    ) == ["tests/test_slug.py"]
+    assert implicit_path_claims(
+        ["Nueva prueba en `tests/test_slug.py` que cubra el ejemplo dado"]
+    ) == ["tests/test_slug.py"]
+
+
+def test_implicit_path_claims_ignores_dotted_identifiers_inside_backticks() -> None:
+    """`re.sub`, `str.strip` and `os.path` all match `_PATH_CLAIM_PATTERN`
+    (verified against the real pattern). Claiming them would arm an ownership
+    boundary with a path that does not exist and reject the task's own
+    legitimate delivery -- strictly worse than detecting nothing."""
+    assert (
+        implicit_path_claims(
+            [
+                "Usar `re.sub` para limpiar el texto",
+                "Llamar `str.strip` antes de comparar",
+                "Resolver con `os.path`",
+            ]
+        )
+        == []
+    )
+
+
+def test_implicit_path_claims_accepts_a_separator_less_file_inside_backticks() -> None:
+    assert implicit_path_claims(["Entregar `INFORME.md` al final"]) == ["INFORME.md"]
+    assert implicit_path_claims(["Ajustar `config.yaml` del proyecto"]) == [
+        "config.yaml"
+    ]
+
+
+def test_implicit_path_claims_rejects_unsafe_paths_inside_backticks() -> None:
+    assert (
+        implicit_path_claims(
+            [
+                "Leer `/etc/passwd`",
+                "Tocar `../outside.py`",
+                "Abrir `C:/tmp/out.py`",
+            ]
+        )
+        == []
+    )
+
+
+def test_implicit_path_claims_leaves_entries_without_backticks_unchanged() -> None:
+    """Regression of the pre-existing contract: the whole-entry rule keeps its
+    original, looser bar and its original results."""
+    assert implicit_path_claims(["api.py", "docs/design.md"]) == [
+        "api.py",
+        "docs/design.md",
+    ]
+    assert (
+        implicit_path_claims(
+            ["resultado", "Documento de arquitectura en Markdown", "informe final.md"]
+        )
+        == []
+    )
+
+
+def test_implicit_path_claims_deduplicates_across_both_spellings() -> None:
+    assert implicit_path_claims(
+        ["textkit/slug.py", "Código modificado en `textkit/slug.py`"]
+    ) == ["textkit/slug.py"]
+
+
+def test_implicit_path_claims_reads_several_backticked_paths_in_one_entry() -> None:
+    assert implicit_path_claims(
+        ["Tocar `textkit/slug.py` y también `tests/test_slug.py`"]
+    ) == ["textkit/slug.py", "tests/test_slug.py"]
+
+
 def test_merge_path_claims_keeps_declared_paths_and_adds_implicit_ones() -> None:
     assert merge_path_claims(["routes/books.py"], ["api.py", "resultado"]) == [
         "routes/books.py",

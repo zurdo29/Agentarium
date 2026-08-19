@@ -118,7 +118,7 @@ $ merge_path_claims([], ['Código modificado en `textkit/slug.py`'])
 exige un token único sin espacios; la prosa del planificador no matchea, el
 conjunto de claims queda vacío y `_out_of_scope_paths` devuelve `set()` —
 la frontera permisiva documentada en ADR 0040. Cero eventos
-`workspace_own_scope_rejected`. Ver `findings.md` §1.
+`workspace_own_scope_rejected`. Ver `findings.md` sección 1.
 
 **Gate-MVP.2 — evidencia honesta: funcionó en todo lo mecánico.**
 ```
@@ -137,7 +137,7 @@ ejecutó, como corresponde a un proyecto importado (P3.4 intacto).
 con la lista de eliminaciones no vacía, el `critical_reviewer` escribió
 literalmente: *"No se han eliminado nombres de nivel superior en los
 archivos Python entregados"*. Para `1b340098` (el que se integró) aprobó
-sin mencionarlas. Ver `findings.md` §2.
+sin mencionarlas. Ver `findings.md` sección 3.
 
 ## 7. Export
 

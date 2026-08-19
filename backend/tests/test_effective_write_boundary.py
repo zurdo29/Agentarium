@@ -328,3 +328,163 @@ async def test_textkit_slugify_regression_frees_the_sibling_path(
         service.orchestrator._colliding_dependency_paths(test_task, test_task_proposal)
         == set()
     )
+
+
+# -- Gate-MVP.3 follow-up (ADR 0042) ------------------------------------------
+# Gate-MVP.3 measured this exact shape and the boundary never armed: the
+# planner wrote the file inside backticks instead of bare, so
+# `merge_path_claims` returned [] and `_out_of_scope_paths` had nothing to
+# compare against. Same delivery, same two files -- only the spelling of
+# `expected_outputs` differed from the run that Gate-MVP.1 was built from.
+
+
+def _sibling_claim_events(
+    service: ApplicationService, project_id: str
+) -> list[dict[str, object]]:
+    return [
+        event
+        for event in service.repository.list_events(project_id)
+        if event["action"] == "workspace_sibling_claim_rejected"
+    ]
+
+
+@pytest.mark.asyncio
+async def test_prose_expected_output_with_a_backticked_path_now_arms_the_boundary(
+    service: ApplicationService,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The exact `expected_outputs` string Gate-MVP.3 recorded."""
+    project = _project(service)
+    milestone = _milestone(service, project.id)
+    item = _scoped_work_item(
+        project.id,
+        milestone.id,
+        title="Modificar la funcion slugify",
+        expected_output="Codigo modificado en `textkit/slug.py`",
+    )
+    service.repository.add_work_item(item)
+
+    original_generate = MockProvider.generate
+
+    async def controlled_generate(self, request, agent):  # type: ignore[no-untyped-def]
+        if request.operation == "work" and request.work_item_id == item.id:
+            return _work_response(
+                files=[
+                    ("textkit/slug.py", "def slugify(value):\n    return value\n"),
+                    ("tests/test_slug.py", "def test_slugify():\n    pass\n"),
+                ]
+            )
+        return await original_generate(self, request, agent)
+
+    monkeypatch.setattr(MockProvider, "generate", controlled_generate)
+    prepare_calls = _track_prepare_calls(monkeypatch, service)
+
+    await service.orchestrator._execute_work_item(item, "test-correlation")
+
+    rejections = _own_scope_events(service, project.id)
+    assert len(rejections) == 1
+    assert rejections[0]["metadata"]["paths"] == ["tests/test_slug.py"]
+    # The claim is now legible, which is the whole point.
+    assert rejections[0]["metadata"]["claimed_paths"] == ["textkit/slug.py"]
+    # Nothing reached disk: rejected before the worktree was ever prepared.
+    assert prepare_calls == []
+    assert service.repository.list_artifacts(project.id) == []
+
+
+@pytest.mark.asyncio
+async def test_a_task_without_claims_cannot_write_an_unrelated_siblings_path(
+    service: ApplicationService,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The residual case ADR 0040 left permissive: the writer declares nothing
+    parseable, so `_out_of_scope_paths` stays silent, but an unrelated sibling
+    did declare the path. The artifact-based check cannot see this -- the
+    sibling has not run yet, so it owns no artifact."""
+    project = _project(service)
+    milestone = _milestone(service, project.id)
+    writer = _scoped_work_item(
+        project.id,
+        milestone.id,
+        title="Tarea descrita en prosa",
+        expected_output="un informe en prosa",
+    )
+    service.repository.add_work_item(writer)
+    sibling = _scoped_work_item(
+        project.id,
+        milestone.id,
+        title="Tarea hermana con alcance real",
+        expected_output="Nueva prueba en `tests/test_slug.py`",
+    )
+    service.repository.add_work_item(sibling)
+
+    original_generate = MockProvider.generate
+
+    async def controlled_generate(self, request, agent):  # type: ignore[no-untyped-def]
+        if request.operation == "work" and request.work_item_id == writer.id:
+            return _work_response(
+                files=[("tests/test_slug.py", "def test_slugify():\n    pass\n")]
+            )
+        return await original_generate(self, request, agent)
+
+    monkeypatch.setattr(MockProvider, "generate", controlled_generate)
+    prepare_calls = _track_prepare_calls(monkeypatch, service)
+
+    await service.orchestrator._execute_work_item(writer, "test-correlation")
+
+    rejections = _sibling_claim_events(service, project.id)
+    assert len(rejections) == 1
+    assert rejections[0]["metadata"]["paths"] == ["tests/test_slug.py"]
+    assert rejections[0]["metadata"]["claimed_by"] == {
+        "tests/test_slug.py": [sibling.id]
+    }
+    assert prepare_calls == []
+    assert service.repository.list_artifacts(project.id) == []
+
+
+@pytest.mark.asyncio
+async def test_a_descendant_closing_task_does_not_block_its_own_prerequisite(
+    service: ApplicationService,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression for the asymmetry the reverse edge fixes: a BLOCKED closing
+    task that depends on the writer has already declared its outputs. Without
+    excluding descendants it would reserve its prerequisite's file in advance
+    and deadlock the task it is waiting for."""
+    project = _project(service)
+    milestone = _milestone(service, project.id)
+    writer = _scoped_work_item(
+        project.id,
+        milestone.id,
+        title="Tarea descrita en prosa",
+        expected_output="un informe en prosa",
+    )
+    service.repository.add_work_item(writer)
+    closer = WorkItem(
+        project_id=project.id,
+        milestone_id=milestone.id,
+        title="Completar y verificar la entrega del proyecto",
+        description="Consolida el resultado",
+        expected_outputs=["Consolidar `docs/report.md`"],
+        acceptance_criteria=["Existe"],
+        dependency_ids=[writer.id],
+        risk=RiskLevel.LOW,
+        status=WorkItemStatus.BLOCKED,
+    )
+    service.repository.add_work_item(closer)
+
+    original_generate = MockProvider.generate
+
+    async def controlled_generate(self, request, agent):  # type: ignore[no-untyped-def]
+        if request.operation == "work" and request.work_item_id == writer.id:
+            return _work_response(files=[("docs/report.md", "# Informe\n")])
+        return await original_generate(self, request, agent)
+
+    monkeypatch.setattr(MockProvider, "generate", controlled_generate)
+
+    await service.orchestrator._execute_work_item(writer, "test-correlation")
+
+    assert _sibling_claim_events(service, project.id) == []
+    assert _own_scope_events(service, project.id) == []
+    # The delivery went through: an artifact exists for the writer.
+    artifacts = service.repository.list_artifacts(project.id)
+    assert [artifact.work_item_id for artifact in artifacts] == [writer.id]

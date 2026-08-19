@@ -1,7 +1,12 @@
 from __future__ import annotations
 
 import pytest
-from agentarium.domain.enums import AgentRole, OutputStrategy, RunOutcome
+from agentarium.domain.enums import (
+    AgentRole,
+    OutputStrategy,
+    RunOutcome,
+    WorkItemStatus,
+)
 from agentarium.domain.models import AgentRun, Artifact, Milestone, ResourceUsage, WorkItem
 from agentarium.execution import ReviewEvaluationProposal, WorkArtifactProposal
 from agentarium.orchestration.engine import InvalidPlan, Orchestrator
@@ -998,3 +1003,295 @@ def test_partial_criterion_declaration_matches_the_current_task() -> None:
     )
 
     assert Orchestrator._work_declaration_matches_item(proposal, item)
+
+
+# -- Gate-MVP.3 follow-up (ADR 0042) ------------------------------------------
+# The write boundary only arms when the task declares something parseable.
+# When it does not, `_sibling_claimed_paths` is the fallback -- and because it
+# reads *declared* claims instead of materialized artifacts, "related" has to
+# be read in both directions of the dependency graph, not just upwards.
+
+
+def _claims_item(
+    project_id: str,
+    milestone_id: str,
+    title: str,
+    *,
+    expected_outputs: list[str],
+    dependency_ids: list[str] | None = None,
+    status: WorkItemStatus = WorkItemStatus.READY,
+    shared_component: str | None = None,
+    output_strategy: OutputStrategy = OutputStrategy.EXCLUSIVE,
+) -> WorkItem:
+    return WorkItem(
+        project_id=project_id,
+        milestone_id=milestone_id,
+        title=title,
+        description="Descripcion de la tarea",
+        expected_outputs=expected_outputs,
+        acceptance_criteria=["Existe"],
+        dependency_ids=dependency_ids or [],
+        status=status,
+        shared_component=shared_component,
+        output_strategy=output_strategy,
+    )
+
+
+def _claims_milestone(service: ApplicationService, title: str) -> Milestone:
+    project = service.create_project(title)
+    milestone = Milestone(
+        project_id=project.id,
+        title="Hito",
+        description="Hito de prueba",
+        order=0,
+    )
+    service.repository.add_milestone(milestone)
+    return milestone
+
+
+def test_sibling_claimed_paths_blocks_a_truly_unrelated_sibling(
+    service: ApplicationService,
+) -> None:
+    milestone = _claims_milestone(service, "Hermana no relacionada")
+    writer = _claims_item(
+        milestone.project_id,
+        milestone.id,
+        "Tarea en prosa sin alcance propio",
+        expected_outputs=["un informe en prosa"],
+    )
+    sibling = _claims_item(
+        milestone.project_id,
+        milestone.id,
+        "Tarea hermana con alcance real",
+        expected_outputs=["Nueva prueba en `a.py`"],
+    )
+    service.repository.add_work_item(writer)
+    service.repository.add_work_item(sibling)
+
+    claimed = service.orchestrator._sibling_claimed_paths(writer)
+
+    assert claimed == {"a.py": [sibling.id]}
+
+
+def test_sibling_claimed_paths_excludes_a_transitive_descendant(
+    service: ApplicationService,
+) -> None:
+    """A BLOCKED closing task that depends on the writer has already declared
+    its `expected_outputs`. Reading declarations instead of artifacts means it
+    would otherwise reserve the files of its own prerequisite in advance and
+    deadlock the task it waits for -- the reason this check needs the reverse
+    edge, which the artifact-based one never did."""
+    milestone = _claims_milestone(service, "Descendiente bloqueado")
+    writer = _claims_item(
+        milestone.project_id,
+        milestone.id,
+        "Tarea A, sin alcance propio",
+        expected_outputs=["un informe en prosa"],
+    )
+    service.repository.add_work_item(writer)
+    closer = _claims_item(
+        milestone.project_id,
+        milestone.id,
+        "Tarea B, cierre que depende de A",
+        expected_outputs=["Consolidar `a.py`"],
+        dependency_ids=[writer.id],
+        status=WorkItemStatus.BLOCKED,
+        shared_component=None,
+    )
+    service.repository.add_work_item(closer)
+
+    assert service.orchestrator._sibling_claimed_paths(writer) == {}
+
+
+def test_sibling_claimed_paths_excludes_an_indirect_descendant(
+    service: ApplicationService,
+) -> None:
+    milestone = _claims_milestone(service, "Descendiente indirecto")
+    writer = _claims_item(
+        milestone.project_id,
+        milestone.id,
+        "Tarea A",
+        expected_outputs=["un informe en prosa"],
+    )
+    service.repository.add_work_item(writer)
+    middle = _claims_item(
+        milestone.project_id,
+        milestone.id,
+        "Tarea intermedia",
+        expected_outputs=["otro informe en prosa"],
+        dependency_ids=[writer.id],
+        status=WorkItemStatus.BLOCKED,
+    )
+    service.repository.add_work_item(middle)
+    far = _claims_item(
+        milestone.project_id,
+        milestone.id,
+        "Tarea de cierre lejana",
+        expected_outputs=["Consolidar `a.py`"],
+        dependency_ids=[middle.id],
+        status=WorkItemStatus.BLOCKED,
+    )
+    service.repository.add_work_item(far)
+
+    assert service.orchestrator._sibling_claimed_paths(writer) == {}
+
+
+def test_sibling_claimed_paths_excludes_a_transitive_ancestor(
+    service: ApplicationService,
+) -> None:
+    milestone = _claims_milestone(service, "Ancestro")
+    upstream = _claims_item(
+        milestone.project_id,
+        milestone.id,
+        "Tarea B, prerequisito",
+        expected_outputs=["Base en `a.py`"],
+    )
+    service.repository.add_work_item(upstream)
+    writer = _claims_item(
+        milestone.project_id,
+        milestone.id,
+        "Tarea A, depende de B",
+        expected_outputs=["un informe en prosa"],
+        dependency_ids=[upstream.id],
+    )
+    service.repository.add_work_item(writer)
+
+    assert service.orchestrator._sibling_claimed_paths(writer) == {}
+
+
+def test_sibling_claimed_paths_ignores_a_cancelled_claimant(
+    service: ApplicationService,
+) -> None:
+    milestone = _claims_milestone(service, "Reclamante cancelada")
+    writer = _claims_item(
+        milestone.project_id,
+        milestone.id,
+        "Tarea en prosa",
+        expected_outputs=["un informe en prosa"],
+    )
+    cancelled = _claims_item(
+        milestone.project_id,
+        milestone.id,
+        "Tarea cancelada por un split",
+        expected_outputs=["Nueva prueba en `a.py`"],
+        status=WorkItemStatus.CANCELLED,
+    )
+    service.repository.add_work_item(writer)
+    service.repository.add_work_item(cancelled)
+
+    assert service.orchestrator._sibling_claimed_paths(writer) == {}
+
+
+def test_sibling_claimed_paths_allows_a_non_exclusive_shared_component(
+    service: ApplicationService,
+) -> None:
+    milestone = _claims_milestone(service, "Componente compartido")
+    writer = _claims_item(
+        milestone.project_id,
+        milestone.id,
+        "Fragmento sin alcance propio",
+        expected_outputs=["un informe en prosa"],
+        shared_component="split-x",
+        output_strategy=OutputStrategy.FRAGMENT,
+    )
+    grouped = _claims_item(
+        milestone.project_id,
+        milestone.id,
+        "Fragmento hermano del mismo split",
+        expected_outputs=["Fragmento de `a.py`"],
+        shared_component="split-x",
+        output_strategy=OutputStrategy.FRAGMENT,
+    )
+    service.repository.add_work_item(writer)
+    service.repository.add_work_item(grouped)
+
+    assert service.orchestrator._sibling_claimed_paths(writer) == {}
+
+
+def test_sibling_claimed_paths_still_blocks_an_exclusive_candidate_in_the_group(
+    service: ApplicationService,
+) -> None:
+    """Only the candidate's own strategy is constrained, the same asymmetry
+    the artifact-based check already applies."""
+    milestone = _claims_milestone(service, "Exclusiva dentro del grupo")
+    writer = _claims_item(
+        milestone.project_id,
+        milestone.id,
+        "Fragmento que reclama exclusividad",
+        expected_outputs=["un informe en prosa"],
+        shared_component="split-x",
+        output_strategy=OutputStrategy.EXCLUSIVE,
+    )
+    grouped = _claims_item(
+        milestone.project_id,
+        milestone.id,
+        "Fragmento hermano",
+        expected_outputs=["Fragmento de `a.py`"],
+        shared_component="split-x",
+        output_strategy=OutputStrategy.FRAGMENT,
+    )
+    service.repository.add_work_item(writer)
+    service.repository.add_work_item(grouped)
+
+    assert service.orchestrator._sibling_claimed_paths(writer) == {"a.py": [grouped.id]}
+
+
+def test_sibling_claim_rejection_names_who_claimed_each_path(
+    service: ApplicationService,
+) -> None:
+    """The event has to carry the owner, not just the path: adjudicating
+    Gate-MVP.3 meant re-reading the database to find out who claimed what."""
+    milestone = _claims_milestone(service, "Evento con propietario")
+    writer = _claims_item(
+        milestone.project_id,
+        milestone.id,
+        "Tarea en prosa",
+        expected_outputs=["un informe en prosa"],
+    )
+    sibling = _claims_item(
+        milestone.project_id,
+        milestone.id,
+        "Hermana con alcance",
+        expected_outputs=["Nueva prueba en `a.py`"],
+    )
+    service.repository.add_work_item(writer)
+    service.repository.add_work_item(sibling)
+
+    with pytest.raises(InvalidPlan, match="claimed by unrelated tasks"):
+        service.orchestrator._reject_sibling_claimed_write(
+            writer, _proposal(["a.py"]), "corr-1"
+        )
+
+    event = next(
+        event
+        for event in service.repository.list_events(milestone.project_id)
+        if event["action"] == "workspace_sibling_claim_rejected"
+    )
+    assert event["metadata"]["paths"] == ["a.py"]
+    assert event["metadata"]["claimed_by"] == {"a.py": [sibling.id]}
+
+
+def test_sibling_claim_check_does_nothing_when_the_task_declares_its_own_scope(
+    service: ApplicationService,
+) -> None:
+    """With real claims of its own, `_out_of_scope_paths` already decided --
+    this fallback must not second-guess a task that stayed inside its scope."""
+    milestone = _claims_milestone(service, "Con alcance propio")
+    writer = _claims_item(
+        milestone.project_id,
+        milestone.id,
+        "Tarea con alcance declarado",
+        expected_outputs=["Codigo modificado en `a.py`"],
+    )
+    sibling = _claims_item(
+        milestone.project_id,
+        milestone.id,
+        "Hermana que tambien nombra a.py",
+        expected_outputs=["Nueva prueba en `a.py`"],
+    )
+    service.repository.add_work_item(writer)
+    service.repository.add_work_item(sibling)
+
+    service.orchestrator._reject_sibling_claimed_write(
+        writer, _proposal(["a.py"]), "corr-1"
+    )

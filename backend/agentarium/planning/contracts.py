@@ -17,6 +17,52 @@ class PlanningModel(BaseModel):
 # funcionando" must not be read as a file claim.
 _PATH_CLAIM_PATTERN = re.compile(r"^[^.\s][^\s]*\.[A-Za-z][A-Za-z0-9]{0,7}$")
 
+# Gate-MVP.3 follow-up (ADR 0042): a Markdown-style backtick span inside an
+# otherwise prose entry -- "Código modificado en `textkit/slug.py`". The
+# planner writes the file it is going to touch this way at least as often as
+# it writes it bare, and which spelling it picks is not stable across runs.
+_BACKTICK_SEGMENT_PATTERN = re.compile(r"`([^`\n]+)`")
+
+# Suffixes that make a separator-less token recognizable as a file rather than
+# a dotted identifier. Only consulted for tokens found *inside* backticks
+# (see `implicit_path_claims`), where "re.sub", "str.strip" and "os.path" are
+# common and would otherwise pass `_PATH_CLAIM_PATTERN` -- verified against
+# the real pattern, not assumed. Conservative on purpose: an unlisted suffix
+# means "no claim detected", which is the pre-existing permissive behavior,
+# never a false claim.
+_FILE_SUFFIXES = frozenset(
+    {
+        "cfg", "cjs", "css", "csv", "htm", "html", "ini", "js", "json", "jsx",
+        "md", "mjs", "ps1", "py", "rst", "sh", "sql", "toml", "ts", "tsx",
+        "txt", "xml", "yaml", "yml",
+    }
+)
+
+
+def _safe_relative_path(value: str) -> str | None:
+    """`value` normalized as a safe relative path, or None.
+
+    Same rules the whole-entry check has always applied, factored out so the
+    backtick scan below cannot drift from them.
+    """
+    candidate = value.strip().replace("\\", "/")
+    if not _PATH_CLAIM_PATTERN.match(candidate):
+        return None
+    if candidate.startswith("/") or ":" in candidate:
+        return None
+    parts = candidate.split("/")
+    if ".." in parts or any(not part for part in parts):
+        return None
+    return candidate
+
+
+def _looks_like_a_file(candidate: str) -> bool:
+    """Extra signal demanded of a token embedded in prose, never of a whole
+    entry: a directory separator, or a suffix that is actually a file type."""
+    if "/" in candidate:
+        return True
+    return candidate.rpartition(".")[2].casefold() in _FILE_SUFFIXES
+
 
 def implicit_path_claims(expected_outputs: list[str]) -> list[str]:
     """Paths a task effectively claims through `expected_outputs`.
@@ -26,23 +72,35 @@ def implicit_path_claims(expected_outputs: list[str]) -> list[str]:
     ownership check has to read the field they actually use. Entries that are
     not safe relative paths are ignored rather than rejected: this is a
     detection helper, not a contract gate.
+
+    Two ways an entry can name a path, with deliberately different bars
+    (ADR 0042). The whole entry being a path is an unambiguous declaration of
+    intent and keeps the original, looser rule -- unchanged. A token merely
+    *embedded* in prose is weaker evidence, so it additionally has to look
+    like a file (`_looks_like_a_file`): without that, "Usar `re.sub` para
+    limpiar" would claim `re.sub`, arming an ownership boundary with a bogus
+    path and rejecting the task's own legitimate delivery -- strictly worse
+    than detecting nothing.
     """
     claims: list[str] = []
     seen: set[str] = set()
-    for value in expected_outputs:
-        candidate = value.strip().replace("\\", "/")
-        if not _PATH_CLAIM_PATTERN.match(candidate):
-            continue
-        if candidate.startswith("/") or ":" in candidate:
-            continue
-        parts = candidate.split("/")
-        if ".." in parts or any(not part for part in parts):
-            continue
+
+    def add(candidate: str) -> None:
         key = candidate.casefold()
         if key in seen:
-            continue
+            return
         seen.add(key)
         claims.append(candidate)
+
+    for value in expected_outputs:
+        whole = _safe_relative_path(value)
+        if whole is not None:
+            add(whole)
+            continue
+        for segment in _BACKTICK_SEGMENT_PATTERN.findall(value):
+            inner = _safe_relative_path(segment)
+            if inner is not None and _looks_like_a_file(inner):
+                add(inner)
     return claims
 
 

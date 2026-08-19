@@ -427,6 +427,9 @@ class Orchestrator:
         try:
             work_proposal = self._validate_work(work_response.content)
             self._reject_out_of_scope_write(item, work_proposal, correlation_id)
+            self._reject_sibling_claimed_write(
+                item, work_proposal, correlation_id
+            )
             prior_artifacts = [
                 artifact
                 for artifact in self.repository.list_artifacts(item.project_id)
@@ -558,6 +561,9 @@ class Orchestrator:
         session: WorktreeSession | None = None
         try:
             self._reject_out_of_scope_write(item, work_proposal, correlation_id)
+            self._reject_sibling_claimed_write(
+                item, work_proposal, correlation_id
+            )
             session = await self.isolation.prepare(
                 item.project_id,
                 item.id,
@@ -637,6 +643,9 @@ class Orchestrator:
         session: WorktreeSession | None = None
         try:
             self._reject_out_of_scope_write(item, work_proposal, correlation_id)
+            self._reject_sibling_claimed_write(
+                item, work_proposal, correlation_id
+            )
             session = await self.isolation.prepare(
                 item.project_id,
                 item.id,
@@ -2360,6 +2369,77 @@ class Orchestrator:
             if Orchestrator._normalize_scope_path(file.path) not in normalized_claims
         }
 
+    def _transitive_dependent_ids(self, item: WorkItem) -> set[str]:
+        """Tasks that depend on `item`, directly or transitively -- the
+        reverse edge of `_transitive_dependency_ids`.
+
+        Exists only for `_sibling_claimed_paths` (ADR 0042), and only because
+        that check reads *declared* claims instead of materialized artifacts.
+        A descendant that has not run yet has no artifact to collide with, so
+        `_colliding_dependency_paths` never needed this; it does have
+        `expected_outputs`, so without this exclusion a BLOCKED closing task
+        would reserve its own prerequisite's files in advance and deadlock the
+        task it is waiting for.
+        """
+        dependents: dict[str, list[str]] = {}
+        for candidate in self.repository.list_work_items(item.project_id):
+            for dependency_id in candidate.dependency_ids:
+                dependents.setdefault(dependency_id, []).append(candidate.id)
+        seen: set[str] = set()
+        pending = list(dependents.get(item.id, []))
+        while pending:
+            dependent_id = pending.pop()
+            if dependent_id in seen:
+                continue
+            seen.add(dependent_id)
+            pending.extend(dependents.get(dependent_id, []))
+        return seen
+
+    def _sibling_claimed_paths(self, item: WorkItem) -> dict[str, list[str]]:
+        """Normalized path -> ids of *genuinely unrelated* tasks claiming it.
+
+        The fallback for the case ADR 0040 left permissive on purpose: when a
+        task declares nothing parseable of its own, `_out_of_scope_paths` has
+        nothing to compare against. `_colliding_dependency_paths` does not
+        cover it either -- it reads artifacts already materialized, so the
+        task that runs *first* collides with nothing and its siblings pay for
+        it afterwards (exactly the ordering hole Gate-MVP.3 measured).
+
+        Reading declarations instead of artifacts closes that hole but widens
+        who counts as "related": both directions of the dependency graph have
+        to be excluded, not just ancestors. Returns the owning ids, not a bare
+        set of paths, so the rejection event can name who claimed what without
+        anyone re-reading the database to adjudicate.
+        """
+        related = {
+            item.id,
+            *self._transitive_dependency_ids(item),
+            *self._transitive_dependent_ids(item),
+        }
+        claimed: dict[str, list[str]] = {}
+        for candidate in self.repository.list_work_items(item.project_id):
+            if candidate.id in related:
+                continue
+            if candidate.status is WorkItemStatus.CANCELLED:
+                # Same reasoning as _colliding_dependency_paths: a cancelled
+                # task's claim is moot (e.g. a parent superseded by a split).
+                continue
+            if (
+                item.shared_component is not None
+                and item.shared_component == candidate.shared_component
+                and item.output_strategy is not OutputStrategy.EXCLUSIVE
+            ):
+                # Intentional sharing, same exemption the artifact-based check
+                # already grants: a fragment contributing to a grouped file.
+                continue
+            for path in merge_path_claims(
+                candidate.owned_paths, candidate.expected_outputs
+            ):
+                claimed.setdefault(
+                    self._normalize_scope_path(path), []
+                ).append(candidate.id)
+        return claimed
+
     def _reject_out_of_scope_write(
         self,
         item: WorkItem,
@@ -2397,6 +2477,60 @@ class Orchestrator:
         raise InvalidPlan(
             "Workspace file paths fall outside this task's own declared "
             "scope: " + ", ".join(sorted(offending))
+        )
+
+    def _reject_sibling_claimed_write(
+        self,
+        item: WorkItem,
+        proposal: WorkArtifactProposal,
+        correlation_id: str,
+    ) -> None:
+        """Fallback for a task with no parseable scope of its own (ADR 0042).
+
+        Only runs in that case: with real claims, `_out_of_scope_paths` is
+        both stricter and cheaper, and this would add nothing. Deliberately
+        narrow -- it blocks writing a path an unrelated task declared, not
+        every path a task without claims might touch, which would punish the
+        prose-described deliverable ADR 0040 chose to keep permitting.
+        """
+        if merge_path_claims(item.owned_paths, item.expected_outputs):
+            return
+        sibling_claims = self._sibling_claimed_paths(item)
+        if not sibling_claims:
+            return
+        claimed_by = {
+            file.path: sorted(set(owners))
+            for file in proposal.files
+            if (owners := sibling_claims.get(self._normalize_scope_path(file.path)))
+        }
+        if not claimed_by:
+            return
+        offending = sorted(claimed_by)
+        self._event(
+            item.project_id,
+            "workspace_sibling_claim_rejected",
+            (
+                "La tarea no declara alcance propio y la entrega escribe "
+                "archivos reclamados por tareas no relacionadas: "
+                + ", ".join(offending)
+            ),
+            work_item_id=item.id,
+            attempt=item.attempt_count,
+            error=", ".join(offending),
+            metadata={
+                "paths": offending,
+                # Who claimed what, so the cause is adjudicable straight from
+                # the event instead of re-deriving it from the database.
+                "claimed_by": claimed_by,
+                "candidate_paths": sorted(file.path for file in proposal.files),
+                "owned_paths": list(item.owned_paths),
+                "expected_outputs": list(item.expected_outputs),
+            },
+            correlation_id=correlation_id,
+        )
+        raise InvalidPlan(
+            "Workspace file paths are claimed by unrelated tasks and this "
+            "task declares no scope of its own: " + ", ".join(offending)
         )
 
     def _transitive_dependency_ids(self, item: WorkItem) -> set[str]:
