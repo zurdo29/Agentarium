@@ -17,12 +17,12 @@ se mide), una sola corrida, cero intervención manual.
 | # | Criterio | Resultado |
 |---|---|---|
 | 1 | proyecto `completed` | ❌ `failed` (11.11%) |
-| 2 | frontera de escritura respetada | ❌ ver §1 |
-| 3 | evidencia estática etiquetada honestamente | ✅ ver §3 |
+| 2 | frontera de escritura respetada | ❌ ver sección 1 |
+| 3 | evidencia estática etiquetada honestamente | ✅ ver sección 4 |
 | 4 | ningún F821 integrado | ✅ el perfil corrió y pasó |
 | 5 | patch aplicable | ✅ `git am` EXIT 0 |
 | 6 | árbol post-patch == integrado | ✅ `4448c3ab…` en ambos |
-| 7 | 2 tests anteriores + el nuevo en verde post-fix | ❌ ver §2 |
+| 7 | 2 tests anteriores + el nuevo en verde post-fix | ❌ ver sección 2 |
 | 8 | test nuevo rojo pre-fix | ✅ `'-example-' != 'example'` |
 | 9 | origen intacto | ✅ HEAD y hashes idénticos |
 | 10 | `consistency.matches_git_history` | ✅ `true` |
@@ -153,9 +153,9 @@ entrega que borraba los tests que la habrían delatado.**
 
 Las dos mitades son independientes y ambas necesarias:
 
-1. Sin el hueco de §1, el candidato fuera de scope no se habría
+1. Sin el hueco de la sección 1, el candidato fuera de scope no se habría
    materializado y la hermana no se habría bloqueado.
-2. Sin el hueco de §3, la eliminación de tests habría sido motivo de
+2. Sin el hueco de la sección 3, la eliminación de tests habría sido motivo de
    rechazo aunque el archivo se hubiera escrito.
 
 ## 6. Qué NO se hizo
@@ -163,4 +163,4 @@ Las dos mitades son independientes y ambas necesarias:
 No se corrigió nada. No se repitió la corrida. No se ajustó el goal, el
 fixture, el modelo ni la configuración. No se abrió ADR: esto es una
 medición, no una decisión arquitectónica. La decisión sobre qué hacer con
-§1 y §3 queda para la revisión conjunta, sobre esta evidencia.
+las secciones 1 y 3 queda para la revisión conjunta, sobre esta evidencia.
