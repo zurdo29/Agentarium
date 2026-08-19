@@ -23,7 +23,8 @@ Este documento es la guía operativa del proyecto: qué garantías ya existen, q
 - **Candidato MVP medido (15 de agosto de 2026): `measurement_valid=true` / `candidate_passed=false`.** Flujo candidato `textkit-slugify` (import → run → export → verificar en clon limpio) corrido una sola vez contra `ollama:qwen2.5-coder:7b`, sin repetir la corrida ni realizar reintentos manuales ni ajustar el goal (los reintentos automáticos normales del orquestador sí ocurrieron). 5/9 del checklist de aprobación; el proyecto terminó `failed`. Evidencia completa, incluida la adjudicación read-only de la causa real (releyendo `Orchestrator._colliding_dependency_paths` contra la tabla `artifacts`, no inferida del mensaje de evento), en `benchmarks/results/mvp-candidate-textkit-slugify-2026-08/`. Detalle en "Gate pre-MVP — medición realizada, candidato no aprobado" más abajo. No se corrigió nada del código como parte de esta medición.
 - `Gate-MVP.1` — **CERRADO (17 de agosto de 2026, PR #28 / `afbc538`).** La frontera efectiva de escritura rechaza un candidato que excede los claims de su propio work item antes de tocar disco, en los tres caminos reales.
 - `Gate-MVP.2` — **CERRADO (18 de agosto de 2026).** `TestReport.verification_mode` (`static_only`/`executed`, requerido, calculado desde `CommandResult.started` -- nunca de `passed`) distingue evidencia ejecutada de sólo estática en `delivery_report`/export/UI; perfil no-ejecutante nuevo `PYTHON_UNDEFINED_NAMES` (`ruff --isolated --select F821`) cierra la clase de bug exacta del incidente sin ejecutar nada; `_removed_top_level_definitions` persiste y envía al reviewer qué funciones/clases/métodos de nivel superior desaparecieron entre base y candidato. P3.4/ADR 0034 sin cambios. Un bug real de la propia política de seguridad (`--output-format=concise` chocaba con el deny-token `format`) se encontró y corrigió durante la verificación, no por inspección de código. `test_honest_verification.py` reconstruye el incidente `textkit-slugify` byte a byte contra un proyecto importado real. ADR 0041.
-- Próximo paso: **Gate-MVP.3 — repetición única de `textkit-slugify`**, mismo modelo y condiciones, sin pesca. La matriz 3×3×3 deja de ser un requisito automático del MVP; P5 sigue bloqueado hasta tener un candidato aprobado y señal de usuarios reales.
+- `Gate-MVP.3` — **MEDIDO (18 de agosto de 2026): `measurement_valid=true` / `candidate_passed=false`.** Repetición única de `textkit-slugify` sobre `6c50d58`, identidad idéntica salvo el commit de Agentarium. Gate-MVP.2 cumplió por completo (static_only honesto, F821 armado, eliminaciones capturadas y exportadas). Gate-MVP.1 **no se armó**: el planificador emitió `expected_outputs` en prosa, `merge_path_claims` devolvió `[]` y la frontera quedó permisiva por su límite ya documentado en ADR 0040 -- el candidato escribió el archivo de su tarea hermana y la bloqueó. Además borró los 2 tests originales, ocultando una regresión real, y el revisor negó las eliminaciones que tenía en su propio payload. Evidencia en `benchmarks/results/gate-mvp3-textkit-slugify-2026-08/`.
+- Próximo paso: **decisión explícita sobre los dos huecos que Gate-MVP.3 encontró** (frontera que depende del formato del planificador; revisor que ignora y contradice la evidencia de eliminación). No es automático: se decide sobre la evidencia. La matriz 3×3×3 sigue sin ser requisito del MVP; P5 sigue bloqueado.
 
 > Regla de interpretación: una fase puede estar cerrada aunque su medición haya mostrado problemas. “Cerrar P1” significa que el baseline y las remediaciones previstas terminaron; no que el sistema haya alcanzado mágicamente cero errores.
 
@@ -657,6 +658,46 @@ suite completa verde post-fix y contraprueba roja pre-fix. Además exige que
 Gate-MVP.1 impida la escritura fuera de scope, que F821 no llegue a integrar
 y que cualquier eliminación de tests quede registrada.
 
+**Resultado (18 de agosto de 2026): `measurement_valid=true`,
+`candidate_passed=false`.** Corrida única sobre `6c50d58`, con modelo,
+digest, proveedor, versión de Ollama y concurrencia idénticos a la
+medición original (la única variable cambiada a propósito es el commit de
+Agentarium). Fixture preservado y verificado antes de medir en 5
+condiciones (HEAD, árbol limpio, hashes, suite original verde, bug
+reproducido). Proyecto terminó `failed` (11.11%); 7 de 10 puntos del
+criterio se cumplen. Evidencia completa en
+`benchmarks/results/gate-mvp3-textkit-slugify-2026-08/`.
+
+Lo que funcionó: **Gate-MVP.2 cumplió por completo** -- los 3 TestReports
+quedaron `static_only`, el único ítem `completed` figura en
+`unverified_completed_items` con `reason="static_only_verification"`,
+`PYTHON_UNDEFINED_NAMES` corrió armado sobre ambos `.py` y
+`removed_top_level_names` capturó los 3 nombres borrados y viajó hasta el
+export. P3.4 intacto (cero `SCRIPT_EXECUTION`). Patch aplicable, árbol
+post-patch idéntico al integrado, test nuevo rojo pre-fix, origen intacto,
+`matches_git_history=true`.
+
+Lo que falló, y es el hallazgo central: **Gate-MVP.1 no se armó.** El ítem
+que integró declaró `expected_outputs=["Código modificado en
+\`textkit/slug.py\`"]` -- prosa, no un path pelado -- así que
+`merge_path_claims` devolvió `[]` y `_out_of_scope_paths` quedó permisivo
+por el límite que ADR 0040 ya documentaba. Escribió `tests/test_slug.py`,
+fuera de su scope, y bloqueó a su hermana. La corrida original había
+producido `expected_outputs=["textkit/slug.py"]`, contra el que el gate
+**sí** habría disparado: **el formato que emite el planificador no es
+estable entre corridas, y de él depende por completo que la frontera se
+arme.** Un gate que protege sólo cuando el LLM eligió el formato
+conveniente es una probabilidad, no una garantía. Segundo hallazgo: el
+candidato borró los 2 tests originales -- ocultando una regresión real
+(perdió `.lower()` y la normalización de acentos) -- y el
+`critical_reviewer`, con la lista de eliminaciones no vacía en su payload,
+afirmó literalmente lo contrario ("No se han eliminado nombres de nivel
+superior"). `removed_top_level_names` no es auto-rechazo por diseño
+(ADR 0041), así que se integró igual.
+
+No se corrigió nada ni se repitió la corrida. Qué hacer con estos dos
+huecos queda para decisión explícita sobre esta evidencia, no automática.
+
 ---
 
 ## Decisión posterior a Gate-MVP.3 — no otra matriz automática
@@ -734,30 +775,40 @@ Sólo promover uno de estos puntos cuando una limitación observada del MVP lo j
 ## Qué sigue
 
 P0, P1, P2, P3 (P3.0-P3.4), P4 (P4.1-P4.5), Gate-MVP.1 y Gate-MVP.2 están
-cerrados. El flujo candidato a MVP ya se eligió y se midió una vez (15 de
-agosto de 2026, ver "Gate pre-MVP — medición realizada, candidato no
-aprobado" arriba): no fue aprobado. Lo que sigue es una decisión explícita,
-en este orden -- ninguno de estos pasos se dispara solo:
+cerrados. Gate-MVP.3 ya se midió (18 de agosto de 2026):
+`measurement_valid=true`, `candidate_passed=false`. El candidato sigue sin
+aprobarse, ahora por dos causas distintas y bien localizadas. Lo que sigue
+es una decisión explícita -- ninguno de estos pasos se dispara solo:
 
-1. **Gate-MVP.3**: una sola repetición del mismo caso (`textkit-slugify`),
-   sin cambiar goal, modelo ni condiciones y sin exigir que la evidencia
-   estática finja ser ejecución -- `unverified_completed_items` no vacío ya
-   no es por sí solo un fallo, mientras esté honestamente marcado
-   `static_only` (ver "Gate-MVP.3 — repetición única" arriba para el
-   criterio completo).
-2. Si Gate-MVP.3 pasa, completar dos flujos importados adicionales con el
-   perfil inicial soportado y decidir si Agentarium entra en alpha.
+1. **Decidir qué hacer con los dos huecos que Gate-MVP.3 encontró**, sobre
+   la evidencia y no por reflejo:
+   - *Frontera que depende del formato del planificador*: Gate-MVP.1 sólo
+     se arma si `expected_outputs` trae un path parseable, y el
+     planificador alterna entre path pelado y prosa para el mismo goal.
+     Opciones a evaluar (ninguna elegida todavía): exigir `owned_paths`
+     mecánicamente en el contrato de planificación; extraer paths de
+     dentro de la prosa; o aceptar el límite y documentarlo como riesgo
+     conocido del perfil inicial.
+   - *Revisor que ignora y contradice `removed_top_level_names`*: el dato
+     llega correcto y el LLM afirmó lo contrario. Endurecer sólo el prompt
+     ya está descartado por ADR 0020; la alternativa real es una compuerta
+     mecánica, con el costo de falsos positivos que ADR 0041 evitó a
+     propósito.
+2. Recién después, y sólo si esas decisiones dejan el flujo en un estado
+   defendible, completar dos flujos importados adicionales con el perfil
+   inicial soportado y decidir si Agentarium entra en alpha.
 3. Recoger señal de 1--3 usuarios antes de promover P5. La matriz 3×3×3 es
    opcional y posterior, no el siguiente paso automático.
 
 **P5 (extensibilidad) sigue bloqueado.** Sólo entra por una limitación real
 observada del MVP, nunca por curiosidad técnica (regla 10 de "Reglas para
-no volver a iterar de más"). Los hallazgos observados pertenecen al Gate
-pre-MVP y no justifican promover ningún elemento de extensibilidad de P5.
+no volver a iterar de más"). Los dos huecos que encontró Gate-MVP.3
+pertenecen al núcleo/Gate-MVP y no justifican promover ningún elemento de
+extensibilidad de P5.
 
-No ejecutar Gate-MVP.3 (implica correr Ollama), ampliar a otros modelos ni
-abrir P5 sin autorización explícita de la próxima sesión -- ninguno de
-estos pasos se dispara solo por haber cerrado Gate-MVP.2.
+No repetir la corrida de Gate-MVP.3 buscando otro veredicto, no ampliar a
+otros modelos y no abrir P5 sin autorización explícita -- ninguno de estos
+pasos se dispara solo por haber medido.
 
 ---
 
@@ -767,13 +818,19 @@ Usar este texto literalmente como punto de partida:
 
 > Lee `CLAUDE.md` y `PLANS.md` completos. Verifica `main` actualizado y
 > limpio. P0--P4, Gate-MVP.1 y Gate-MVP.2 están cerrados; no los reabras
-> sin una regresión demostrable. El candidato `textkit-slugify` fue una
-> medición válida pero no aprobada; evidencia en
-> `benchmarks/results/mvp-candidate-textkit-slugify-2026-08/`. El siguiente
-> paso es Gate-MVP.3: una sola repetición del mismo caso, mismo modelo,
-> mismas condiciones, sin pesca -- pero no lo ejecutes todavía sin
-> confirmación explícita, porque implica correr Ollama de verdad. No
-> amplíes a otros modelos ni abras P5 sin esa misma confirmación.
+> sin una regresión demostrable. `textkit-slugify` ya se midió **dos
+> veces**, ambas válidas y ninguna aprobada: la original en
+> `benchmarks/results/mvp-candidate-textkit-slugify-2026-08/` y Gate-MVP.3
+> en `benchmarks/results/gate-mvp3-textkit-slugify-2026-08/`. **No la
+> corras una tercera vez buscando otro veredicto.** Gate-MVP.3 dejó dos
+> huecos localizados y sustentados con evidencia: (1) Gate-MVP.1 sólo se
+> arma si `expected_outputs` trae un path parseable, y el planificador
+> alterna entre path pelado y prosa para el mismo goal; (2) el
+> `critical_reviewer` recibió `removed_top_level_names` no vacío y afirmó
+> lo contrario. El siguiente paso es **decidir** qué hacer con esos dos
+> huecos leyendo `findings.md` de Gate-MVP.3 -- no implementar por
+> reflejo, y sin abrir P5, otros modelos ni la matriz 3×3×3 sin
+> confirmación explícita.
 
 ---
 
