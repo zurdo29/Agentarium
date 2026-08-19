@@ -24,7 +24,8 @@ Este documento es la guía operativa del proyecto: qué garantías ya existen, q
 - `Gate-MVP.1` — **CERRADO (17 de agosto de 2026, PR #28 / `afbc538`).** La frontera efectiva de escritura rechaza un candidato que excede los claims de su propio work item antes de tocar disco, en los tres caminos reales.
 - `Gate-MVP.2` — **CERRADO (18 de agosto de 2026).** `TestReport.verification_mode` (`static_only`/`executed`, requerido, calculado desde `CommandResult.started` -- nunca de `passed`) distingue evidencia ejecutada de sólo estática en `delivery_report`/export/UI; perfil no-ejecutante nuevo `PYTHON_UNDEFINED_NAMES` (`ruff --isolated --select F821`) cierra la clase de bug exacta del incidente sin ejecutar nada; `_removed_top_level_definitions` persiste y envía al reviewer qué funciones/clases/métodos de nivel superior desaparecieron entre base y candidato. P3.4/ADR 0034 sin cambios. Un bug real de la propia política de seguridad (`--output-format=concise` chocaba con el deny-token `format`) se encontró y corrigió durante la verificación, no por inspección de código. `test_honest_verification.py` reconstruye el incidente `textkit-slugify` byte a byte contra un proyecto importado real. ADR 0041.
 - `Gate-MVP.3` — **MEDIDO (18 de agosto de 2026): `measurement_valid=true` / `candidate_passed=false`.** Repetición única de `textkit-slugify` sobre `6c50d58`, identidad idéntica salvo el commit de Agentarium. Gate-MVP.2 cumplió por completo (static_only honesto, F821 armado, eliminaciones capturadas y exportadas). Gate-MVP.1 **no se armó**: el planificador emitió `expected_outputs` en prosa, `merge_path_claims` devolvió `[]` y la frontera quedó permisiva por su límite ya documentado en ADR 0040 -- el candidato escribió el archivo de su tarea hermana y la bloqueó. Además borró los 2 tests originales, ocultando una regresión real, y el revisor negó las eliminaciones que tenía en su propio payload. Evidencia en `benchmarks/results/gate-mvp3-textkit-slugify-2026-08/`.
-- Próximo paso: **decisión explícita sobre los dos huecos que Gate-MVP.3 encontró** (frontera que depende del formato del planificador; revisor que ignora y contradice la evidencia de eliminación). No es automático: se decide sobre la evidencia. La matriz 3×3×3 sigue sin ser requisito del MVP; P5 sigue bloqueado.
+- `Post-Gate-MVP.3 (1 de 2)` — **Claims efectivos confiables.** `implicit_path_claims` extrae paths desde segmentos entre backticks (`"Código modificado en \`textkit/slug.py\`"`), con un filtro que exige `/` o una extensión real para que `re.sub`/`str.strip`/`os.path` -- que matchean el patrón, verificado -- no se conviertan en claims falsos que rechazarían la propia entrega. Un solo cambio cubre preflight de planificación, frontera de escritura y herencia de `owned_paths` en splits. Más `_sibling_claimed_paths`, respaldo que sólo actúa cuando la tarea no declara nada propio y que lee claims declarados (no artifacts, que llegan tarde), excluyendo ancestros **y descendientes** transitivos, `CANCELLED` y `shared_component` no-exclusivo. ADR 0042.
+- Próximo paso: **corrección 2 de 2** — preservación en proyectos importados: `removed_top_level_names` no vacío debe impedir la integración automática de un candidato importado, como rechazo técnico determinista y antes de consultar al reviewer. En otro PR. La matriz 3×3×3 sigue sin ser requisito del MVP; P5 sigue bloqueado.
 
 > Regla de interpretación: una fase puede estar cerrada aunque su medición haya mostrado problemas. “Cerrar P1” significa que el baseline y las remediaciones previstas terminaron; no que el sistema haya alcanzado mágicamente cero errores.
 
@@ -780,24 +781,28 @@ cerrados. Gate-MVP.3 ya se midió (18 de agosto de 2026):
 aprobarse, ahora por dos causas distintas y bien localizadas. Lo que sigue
 es una decisión explícita -- ninguno de estos pasos se dispara solo:
 
-1. **Decidir qué hacer con los dos huecos que Gate-MVP.3 encontró**, sobre
-   la evidencia y no por reflejo:
-   - *Frontera que depende del formato del planificador*: Gate-MVP.1 sólo
-     se arma si `expected_outputs` trae un path parseable, y el
-     planificador alterna entre path pelado y prosa para el mismo goal.
-     Opciones a evaluar (ninguna elegida todavía): exigir `owned_paths`
-     mecánicamente en el contrato de planificación; extraer paths de
-     dentro de la prosa; o aceptar el límite y documentarlo como riesgo
-     conocido del perfil inicial.
-   - *Revisor que ignora y contradice `removed_top_level_names`*: el dato
-     llega correcto y el LLM afirmó lo contrario. Endurecer sólo el prompt
-     ya está descartado por ADR 0020; la alternativa real es una compuerta
-     mecánica, con el costo de falsos positivos que ADR 0041 evitó a
-     propósito.
-2. Recién después, y sólo si esas decisiones dejan el flujo en un estado
-   defendible, completar dos flujos importados adicionales con el perfil
-   inicial soportado y decidir si Agentarium entra en alpha.
-3. Recoger señal de 1--3 usuarios antes de promover P5. La matriz 3×3×3 es
+1. **Corrección 1 de 2 — claims efectivos confiables: HECHA** (ADR 0042).
+   `implicit_path_claims` ya no depende de que el planificador escriba el
+   path pelado: lo extrae también de segmentos entre backticks, con un
+   filtro que evita convertir `re.sub`/`str.strip`/`os.path` en claims
+   falsos. Más un respaldo por claims de hermanas no relacionadas para el
+   caso residual sin claims propios.
+2. **Corrección 2 de 2 — preservación en proyectos importados**, en un PR
+   aparte: si `removed_top_level_names` no está vacío, un candidato
+   importado no puede integrarse automáticamente. Rechazo técnico
+   determinista con evidencia, **antes** de aceptar lo que diga el
+   reviewer -- no reforzando el prompt, que ADR 0020 ya descartó. No
+   prohibir cambios de cuerpo ni archivos nuevos. Declarar que el perfil
+   MVP inicial no soporta eliminar ni renombrar funciones, clases o tests
+   existentes sin autorización humana explícita.
+3. Después de ambos PR, **no** se corre `textkit-slugify` una tercera vez.
+   Se usa un caso de código importado distinto y, si pasa, un flujo
+   documental. Si el caso nuevo vuelve a fallar por calidad semántica del
+   modelo, se detiene el camino a alpha en lugar de seguir agregando
+   compuertas.
+4. Recién si eso queda en un estado defendible, decidir si Agentarium entra
+   en alpha.
+5. Recoger señal de 1--3 usuarios antes de promover P5. La matriz 3×3×3 es
    opcional y posterior, no el siguiente paso automático.
 
 **P5 (extensibilidad) sigue bloqueado.** Sólo entra por una limitación real
@@ -823,14 +828,16 @@ Usar este texto literalmente como punto de partida:
 > `benchmarks/results/mvp-candidate-textkit-slugify-2026-08/` y Gate-MVP.3
 > en `benchmarks/results/gate-mvp3-textkit-slugify-2026-08/`. **No la
 > corras una tercera vez buscando otro veredicto.** Gate-MVP.3 dejó dos
-> huecos localizados y sustentados con evidencia: (1) Gate-MVP.1 sólo se
-> arma si `expected_outputs` trae un path parseable, y el planificador
-> alterna entre path pelado y prosa para el mismo goal; (2) el
-> `critical_reviewer` recibió `removed_top_level_names` no vacío y afirmó
-> lo contrario. El siguiente paso es **decidir** qué hacer con esos dos
-> huecos leyendo `findings.md` de Gate-MVP.3 -- no implementar por
-> reflejo, y sin abrir P5, otros modelos ni la matriz 3×3×3 sin
-> confirmación explícita.
+> huecos localizados y sustentados con evidencia. El primero -- Gate-MVP.1
+> sólo se armaba si `expected_outputs` traía un path parseable -- **ya está
+> corregido** (ADR 0042). El siguiente paso es la **corrección 2 de 2**:
+> si `removed_top_level_names` no está vacío, un candidato importado no
+> puede integrarse automáticamente; rechazo técnico determinista con
+> evidencia, antes de consultar al reviewer, sin reforzar prompts. Después
+> de ese PR **no se repite `textkit-slugify`**: se usa un caso importado
+> distinto y, si vuelve a fallar por calidad semántica del modelo, se
+> detiene el camino a alpha en vez de seguir agregando compuertas. Nada de
+> P5, otros modelos ni matriz 3×3×3 sin confirmación explícita.
 
 ---
 
